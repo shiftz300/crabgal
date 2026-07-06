@@ -21,6 +21,8 @@ struct Ctx {
     font: Font,
     watcher_rx: mpsc::Receiver<PathBuf>,
     tw: f64,
+    auto: bool,
+    auto_timer: f64,
 }
 
 fn main() {
@@ -100,7 +102,7 @@ fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
         }
         log::info!("Loaded {} textures", textures.len());
         let font = gfx.create_font(&font_data).expect("Font parse failed");
-        Ctx { scripts_dir: sd, state, textures, font, watcher_rx: wrx, tw: 0.0 }
+        Ctx { scripts_dir: sd, state, textures, font, watcher_rx: wrx, tw: 0.0, auto: false, auto_timer: 0.0 }
     })
     .add_config(win)
     .add_config(DrawConfig)
@@ -140,39 +142,122 @@ fn update(app: &mut App, ctx: &mut Ctx) {
         }
     };
 
-    if app.keyboard.was_pressed(KeyCode::Space) || app.keyboard.was_pressed(KeyCode::Enter)
-        || app.mouse.left_was_pressed()
-    {
+    // Mouse click → advance or select menu choice
+    if app.mouse.left_was_pressed() {
+        let s = ctx.state.read().unwrap();
+        let has_menu = s.menu.is_some();
+        drop(s); // release lock
+
+        if has_menu {
+            // Convert screen mouse coords to design coords
+            let (mx, my) = (app.mouse.x, app.mouse.y);
+            let (ww, wh) = app.window().size();
+            let dsc = (ww as f32 / 1600.0).min(wh as f32 / 900.0);
+            let dox = (ww as f32 - 1600.0 * dsc) / 2.0;
+            let doy = (wh as f32 - 900.0 * dsc) / 2.0;
+            let dx = (mx - dox) / dsc;
+            let dy = (my - doy) / dsc;
+            // Check if click hits a menu choice (WebGAL layout: centered, 800px wide, 72px tall + 12px gap)
+            let item_w = 800.0;
+            let item_h = 72.0;
+            let item_gap = 12.0;
+            if dx >= 400.0 && dx <= 400.0 + item_w {
+                let s = ctx.state.read().unwrap();
+                if let Some(ref chs) = s.menu {
+                    let start_y = 450.0 - chs.len() as f32 * (item_h + item_gap) / 2.0;
+                    for (i, _) in chs.iter().enumerate() {
+                        let cy = start_y + i as f32 * (item_h + item_gap);
+                        if dy >= cy && dy <= cy + item_h {
+                            drop(s);
+                            let mut s = ctx.state.write().unwrap();
+                            step::select_choice(&mut s, i);
+                            step::step(&mut s);
+                            ctx.tw = 0.0;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            advance(ctx);
+        }
+    }
+    // Keyboard → advance
+    if app.keyboard.was_pressed(KeyCode::Space) || app.keyboard.was_pressed(KeyCode::Enter) {
         advance(ctx);
     }
     if app.keyboard.was_pressed(KeyCode::Escape) { app.exit(); }
+    if app.keyboard.was_pressed(KeyCode::KeyA) {
+        ctx.auto = !ctx.auto;
+        ctx.auto_timer = 0.0;
+        log::info!("Auto mode: {}", if ctx.auto { "ON" } else { "OFF" });
+    }
     if app.keyboard.was_pressed(KeyCode::F5) {
+        let s = ctx.state.read().unwrap();
+        let path = ctx.scripts_dir.parent().unwrap().join("saves").join("quicksave.bin");
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        if let Ok(data) = bincode::serialize(&*s) {
+            if std::fs::write(&path, data).is_ok() {
+                log::info!("Quick saved");
+            }
+        }
+    }
+    if app.keyboard.was_pressed(KeyCode::F6) {
+        let path = ctx.scripts_dir.parent().unwrap().join("saves").join("quicksave.bin");
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(loaded) = bincode::deserialize::<State>(&data) {
+                let mut s = ctx.state.write().unwrap();
+                *s = loaded;
+                step::index_labels(&mut s);
+                ctx.tw = 0.0;
+                log::info!("Quick loaded");
+            }
+        }
+    }
+    if app.keyboard.was_pressed(KeyCode::F7) {
         let mut s = ctx.state.write().unwrap();
         load_scenes(&mut s, &ctx.scripts_dir);
         step::index_labels(&mut s);
+        ctx.tw = 0.0;
     }
 
     // Animations (frame-rate independent)
     let dt = app.timer.delta().as_secs_f64();
+    let skip = app.keyboard.is_down(KeyCode::ControlLeft)
+        || app.keyboard.is_down(KeyCode::ControlRight);
     {
         let mut s = ctx.state.write().unwrap();
-        // Text fade-in: tw accumulates from 0 to 1 over ~0.5s
+        // Text fade-in: tw accumulates from 0 to 1 over ~0.5s (instant in skip mode)
         if let Some(ref mut d) = s.dialogue {
-            if ctx.tw < 1.0 {
+            if skip {
+                ctx.tw = 1.0; // instant text, then auto-advance
+            } else if ctx.tw < 1.0 {
                 ctx.tw = (ctx.tw + dt as f64 * 2.0).min(1.0);
             }
             d.visible_chars = d.text.chars().count();
         } else {
             ctx.tw = 0.0;
         }
+        // Skip/auto mode: auto-advance after text is fully shown
+        if (skip || ctx.auto) && ctx.tw >= 1.0 {
+            if skip || ctx.auto {
+                ctx.auto_timer += dt;
+            }
+            if skip || ctx.auto_timer > 2.0 {
+                step::advance(&mut s);
+                step::step(&mut s);
+                ctx.tw = 0.0;
+                ctx.auto_timer = 0.0;
+            }
+        }
         for sp in s.sprites.values_mut() {
-            if sp.transition_progress < 1.0 {
-                sp.transition_progress = (sp.transition_progress + dt as f32 * 3.0).min(1.0);
+            if sp.transition_progress < 1.0 || skip {
+                sp.transition_progress = (sp.transition_progress + dt as f32 * 5.0).min(1.0);
             }
         }
         if let Some(ref mut t) = s.bg_transition {
-            if t.progress < 1.0 {
-                t.progress = (t.progress + dt as f32 * 2.0).min(1.0);
+            if t.progress < 1.0 || skip {
+                t.progress = (t.progress + dt as f32 * 4.0).min(1.0);
             }
         }
     }
@@ -220,27 +305,45 @@ fn draw(gfx: &mut Graphics, ctx: &mut Ctx) {
         }
     }
 
-    // ── Text box with fade-in ──
+    // ── WebGAL-style text box ──
     if let Some(di) = &sg.dialogue {
         let alpha = ctx.tw as f32;
-        d.rect((dx(0.0), dy(700.0)), (ds(1600.0), ds(200.0)))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.7 * alpha));
+        let box_h = ds(250.0);
+        let box_y = dy(900.0 - 250.0);
+        // Text box background: #00000090 (WebGAL: black 56% alpha)
+        d.rect((dx(0.0), box_y), (ds(1600.0), box_h))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.56 * alpha));
+        // Speaker name plate: floating above text box (WebGAL style)
+        let name_h = ds(80.0);
+        let name_y = box_y - name_h;
+        d.rect((dx(50.0), name_y), (ds(300.0), name_h))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.67 * alpha));
         d.text(&ctx.font, &di.speaker)
-            .position(dx(80.0), dy(720.0)).size(ds(32.0))
+            .position(dx(80.0), name_y + ds(10.0)).size(ds(32.0))
             .color(Color::new(1.0, 1.0, 1.0, alpha));
+        // Dialogue text: left-padded, white
         d.text(&ctx.font, &di.text)
-            .position(dx(80.0), dy(780.0)).size(ds(28.0))
+            .position(dx(80.0), box_y + ds(40.0)).size(ds(30.0))
             .color(Color::new(1.0, 1.0, 1.0, alpha));
     }
 
-    // ── Menu ──
+    // ── WebGAL-style choices ──
     if let Some(chs) = &sg.menu {
+        // Dim overlay
+        d.rect((dx(0.0), dy(0.0)), (ds(1600.0), ds(900.0)))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.05));
+        let item_w = ds(800.0);
+        let item_h = ds(72.0);
+        let start_y = dy(450.0) - chs.len() as f32 * item_h / 2.0;
         for (i, ch) in chs.iter().enumerate() {
-            let y = 500.0 + i as f32 * 50.0;
-            d.rect((dx(500.0), dy(y)), (ds(600.0), ds(40.0)))
-                .fill().color(Color::new(0.0, 0.0, 0.2, 0.8));
+            let y = start_y + i as f32 * (item_h + ds(12.0));
+            // WebGAL: bg #00000030, white text #ffffffaa, centered
+            d.rect((dx(400.0), y), (item_w, item_h))
+                .fill().color(Color::new(0.0, 0.0, 0.0, 0.19));
             d.text(&ctx.font, &ch.text)
-                .position(dx(520.0), dy(y + 5.0)).size(ds(24.0)).color(Color::WHITE);
+                .position(dx(400.0) + item_w / 2.0, y + ds(16.0))
+                .size(ds(36.0)).color(Color::new(1.0, 1.0, 1.0, 0.67))
+                .h_align_center();
         }
     }
 
