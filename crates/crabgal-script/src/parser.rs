@@ -20,7 +20,7 @@
 // Labels are standalone "label name" lines.
 
 use crabgal_core::action::{Action, Choice};
-use crabgal_core::types::{Anchor, Position, Transition};
+use crabgal_core::types::{Position, Transition};
 
 /// Parse a .crab script string into a Vec of Actions.
 pub fn parse_script(input: &str) -> Vec<Action> {

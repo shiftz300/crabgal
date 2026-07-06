@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Anchor, Position, Transition, Value};
+use crate::types::{Position, Transition, Value};
 
 /// A single script action — the entire script language compiles to this.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

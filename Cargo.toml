@@ -10,13 +10,9 @@ crabgal-core = { path = "crates/crabgal-core" }
 crabgal-script = { path = "crates/crabgal-script" }
 
 log = "0.4"
-env_logger = "0.11"
 anyhow = "1"
-thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-bincode = "1"
 notify = "7"
 nom = "7"
 image = "0.25"
-winit = "0.30"
-pixels = "0.15"
+notan = { version = "0.14", features = ["draw"] }

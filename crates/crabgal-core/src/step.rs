@@ -6,7 +6,7 @@
 
 use log::debug;
 
-use crate::action::{Action, Choice};
+use crate::action::Action;
 use crate::state::{BgTransition, Dialogue, Sprite, State};
 use crate::types::{Anchor, Transition};
 

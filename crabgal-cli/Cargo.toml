@@ -13,7 +13,5 @@ crabgal-core = { workspace = true }
 crabgal-script = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
-winit = { workspace = true }
 image = { workspace = true }
-pixels = { workspace = true }
+notan = { workspace = true }
