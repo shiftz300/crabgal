@@ -1,0 +1,19 @@
+[package]
+name = "crabgal-cli"
+version = "0.1.0"
+edition = "2024"
+description = "crabgal CLI: dev / check / build"
+
+[[bin]]
+name = "crabgal"
+path = "src/main.rs"
+
+[dependencies]
+crabgal-core = { workspace = true }
+crabgal-script = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+winit = { workspace = true }
+image = { workspace = true }
+pixels = { workspace = true }
