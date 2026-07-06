@@ -16,3 +16,6 @@ log = { workspace = true }
 image = { workspace = true }
 bincode = { workspace = true }
 notan = { workspace = true }
+woofwoof = "1.0.2"
+fontdue = "0.9.3"
+oxifont-webfont = { version = "0.2.0", features = ["woff2"] }

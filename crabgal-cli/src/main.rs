@@ -1,5 +1,5 @@
 // crabgal CLI — dev / check
-// GPU 2D rendering via notan (Metal backend). Zero hand-rolled pixel loops.
+// GPU 2D rendering via notan (Metal backend). fontdue glyph rasterization.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock, mpsc};
 use crabgal_core::state::State;
 use crabgal_core::step;
 use crabgal_core::Action;
+use crabgal_core::types::Transition;
 use crabgal_script::parser::parse_script;
 
 use notan::draw::*;
@@ -18,11 +19,15 @@ struct Ctx {
     scripts_dir: PathBuf,
     state: Arc<RwLock<State>>,
     textures: HashMap<String, Texture>,
-    font: Font,
+    font: fontdue::Font,
+    fallback_font: fontdue::Font,
+    text_cache: HashMap<(String, u32, u32), (Texture, u32, u32)>,
     watcher_rx: mpsc::Receiver<PathBuf>,
     tw: f64,
     auto: bool,
     auto_timer: f64,
+    last_size: (u32, u32),
+    config_path: PathBuf,
 }
 
 fn main() {
@@ -83,11 +88,13 @@ fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
         }
     }
 
-    // ── Load font ──
-    let font_data = load_font(ar.join("fonts"))?;
+    // ── Load font + window config ──
+    let (primary_font, fallback_font) = load_fonts(ar.join("fonts"))?;
+    let cfg_path = dir.join("crabgal.cfg");
+    let (win_w, win_h) = load_window_size(&cfg_path);
 
     let win = WindowConfig::new()
-        .set_size(1600, 900)
+        .set_size(win_w, win_h)
         .set_title("crabgal")
         .set_resizable(true)
         .set_vsync(true);
@@ -101,8 +108,7 @@ fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
             }
         }
         log::info!("Loaded {} textures", textures.len());
-        let font = gfx.create_font(&font_data).expect("Font parse failed");
-        Ctx { scripts_dir: sd, state, textures, font, watcher_rx: wrx, tw: 0.0, auto: false, auto_timer: 0.0 }
+        Ctx { scripts_dir: sd, config_path: cfg_path, state, textures, font: primary_font, fallback_font, text_cache: HashMap::new(), watcher_rx: wrx, tw: 0.0, auto: false, auto_timer: 0.0, last_size: (win_w, win_h) }
     })
     .add_config(win)
     .add_config(DrawConfig)
@@ -115,6 +121,14 @@ fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
 
 // ── Update: input + animations ──
 fn update(app: &mut App, ctx: &mut Ctx) {
+    // Save window size on change
+    let (cw, ch) = app.window().size();
+    let cs = (cw as u32, ch as u32);
+    if cs != ctx.last_size && cs.0 > 0 && cs.1 > 0 {
+        ctx.last_size = cs;
+        save_window_size(&ctx.config_path, cs.0, cs.1);
+    }
+
     // Hot reload
     while let Ok(_) = ctx.watcher_rx.try_recv() {
         let mut s = ctx.state.write().unwrap();
@@ -152,19 +166,19 @@ fn update(app: &mut App, ctx: &mut Ctx) {
             // Convert screen mouse coords to design coords
             let (mx, my) = (app.mouse.x, app.mouse.y);
             let (ww, wh) = app.window().size();
-            let dsc = (ww as f32 / 1600.0).min(wh as f32 / 900.0);
-            let dox = (ww as f32 - 1600.0 * dsc) / 2.0;
-            let doy = (wh as f32 - 900.0 * dsc) / 2.0;
+            let dsc = (ww as f32 / 2560.0).min(wh as f32 / 1440.0);
+            let dox = (ww as f32 - 2560.0 * dsc) / 2.0;
+            let doy = (wh as f32 - 1440.0 * dsc) / 2.0;
             let dx = (mx - dox) / dsc;
             let dy = (my - doy) / dsc;
-            // Check if click hits a menu choice (WebGAL layout: centered, 800px wide, 72px tall + 12px gap)
-            let item_w = 800.0;
-            let item_h = 72.0;
-            let item_gap = 12.0;
-            if dx >= 400.0 && dx <= 400.0 + item_w {
+            // Check if click hits a menu choice (centered 1280px wide, 80px tall)
+            let item_w = 1280.0;
+            let item_h = 80.0;
+            let item_gap = 14.0;
+            if dx >= 640.0 && dx <= 640.0 + item_w {
                 let s = ctx.state.read().unwrap();
                 if let Some(ref chs) = s.menu {
-                    let start_y = 450.0 - chs.len() as f32 * (item_h + item_gap) / 2.0;
+                    let start_y = 720.0 - (chs.len() as f32 * (item_h + item_gap) - item_gap) / 2.0;
                     for (i, _) in chs.iter().enumerate() {
                         let cy = start_y + i as f32 * (item_h + item_gap);
                         if dy >= cy && dy <= cy + item_h {
@@ -252,9 +266,12 @@ fn update(app: &mut App, ctx: &mut Ctx) {
         }
         for sp in s.sprites.values_mut() {
             if sp.transition_progress < 1.0 || skip {
-                sp.transition_progress = (sp.transition_progress + dt as f32 * 5.0).min(1.0);
+                let speed = if sp.transition == Transition::Instant { 999.0 } else { 3.0 };
+                sp.transition_progress = (sp.transition_progress + dt as f32 * speed).min(1.0);
             }
         }
+        // Remove fully hidden sprites
+        s.sprites.retain(|_, sp| sp.entering || sp.transition_progress < 1.0);
         if let Some(ref mut t) = s.bg_transition {
             if t.progress < 1.0 || skip {
                 t.progress = (t.progress + dt as f32 * 4.0).min(1.0);
@@ -270,9 +287,9 @@ fn draw(gfx: &mut Graphics, ctx: &mut Ctx) {
     d.clear(Color::BLACK);
 
     let (ww, wh) = (gfx.size().0 as f32, gfx.size().1 as f32);
-    let sc = (ww / 1600.0).min(wh / 900.0);
-    let ox = (ww - 1600.0 * sc) / 2.0;
-    let oy = (wh - 900.0 * sc) / 2.0;
+    let sc = (ww / 2560.0).min(wh / 1440.0);
+    let ox = (ww - 2560.0 * sc) / 2.0;
+    let oy = (wh - 1440.0 * sc) / 2.0;
     let ds = |v: f32| v * sc;
     let dx = |v: f32| ox + v * sc;
     let dy = |v: f32| oy + v * sc;
@@ -281,7 +298,7 @@ fn draw(gfx: &mut Graphics, ctx: &mut Ctx) {
     if let Some(bg) = &sg.bg {
         let fname = std::path::Path::new(bg).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         if let Some(tex) = ctx.textures.get(&format!("bg/{}", fname)) {
-            d.image(tex).position(ox, oy).size(ds(1600.0), ds(900.0));
+            d.image(tex).position(ox, oy).size(ds(2560.0), ds(1440.0));
         }
     }
 
@@ -293,61 +310,148 @@ fn draw(gfx: &mut Graphics, ctx: &mut Ctx) {
         if let Some(tex) = ctx.textures.get(&format!("figure/{}", fname)) {
             let p = spr.transition_progress;
             let alpha = if spr.entering { p } else { 1.0 - p };
-            // Design-space sprite dimensions (600px target height, maintain aspect ratio)
-            let sh_design = 600.0;
+            let sh_design = 960.0;
             let sw_design = sh_design * tex.width() as f32 / tex.height() as f32;
-            // Resolve anchor to design-space left edge
             let x_design = spr.position.x.resolve(sw_design) + spr.y_offset * (1.0 - p);
             d.image(tex)
-                .position(dx(x_design), dy(300.0))
+                .position(dx(x_design), dy(480.0))
                 .size(ds(sw_design), ds(sh_design))
                 .alpha(alpha);
         }
     }
 
-    // ── WebGAL-style text box ──
+    // ── WebGAL text box (fontdue rasterized) ──
     if let Some(di) = &sg.dialogue {
-        let alpha = ctx.tw as f32;
-        let box_h = ds(250.0);
-        let box_y = dy(900.0 - 250.0);
-        // Text box background: #00000090 (WebGAL: black 56% alpha)
-        d.rect((dx(0.0), box_y), (ds(1600.0), box_h))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.56 * alpha));
-        // Speaker name plate: floating above text box (WebGAL style)
+        let box_w = ds(2560.0 - 50.0);
+        let box_h = ds(350.0);
+        let box_y = dy(1440.0 - 350.0 - 20.0);
+        let name_y = box_y - ds(90.0);
         let name_h = ds(80.0);
-        let name_y = box_y - name_h;
-        d.rect((dx(50.0), name_y), (ds(300.0), name_h))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.67 * alpha));
-        d.text(&ctx.font, &di.speaker)
-            .position(dx(80.0), name_y + ds(10.0)).size(ds(32.0))
-            .color(Color::new(1.0, 1.0, 1.0, alpha));
-        // Dialogue text: left-padded, white
-        d.text(&ctx.font, &di.text)
-            .position(dx(80.0), box_y + ds(40.0)).size(ds(30.0))
-            .color(Color::new(1.0, 1.0, 1.0, alpha));
+        // Name plate bg
+        d.rect((dx(25.0), name_y), (box_w, name_h))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.667));
+        let (name_tex, nw, nh) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &di.speaker, 44.0, 0.0);
+        d.image(&name_tex)
+            .position(dx(225.0), name_y + ds(14.0))
+            .size(nw as f32 * sc, nh as f32 * sc);
+        // Text box bg
+        d.rect((dx(25.0), box_y), (box_w, box_h))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.565));
+        let (text_tex, tw, th) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &di.text, 52.0, 2200.0);
+        d.image(&text_tex)
+            .position(dx(225.0), box_y + ds(40.0))
+            .size(tw as f32 * sc, th as f32 * sc);
     }
 
-    // ── WebGAL-style choices ──
+    // ── WebGAL choices (fontdue rasterized) ──
     if let Some(chs) = &sg.menu {
-        // Dim overlay
-        d.rect((dx(0.0), dy(0.0)), (ds(1600.0), ds(900.0)))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.05));
-        let item_w = ds(800.0);
-        let item_h = ds(72.0);
-        let start_y = dy(450.0) - chs.len() as f32 * item_h / 2.0;
+        d.rect((dx(0.0), dy(0.0)), (ds(2560.0), ds(1440.0)))
+            .fill().color(Color::new(0.0, 0.0, 0.0, 0.051));
+        let item_w = ds(1280.0);
+        let item_h = ds(80.0);
+        let gap = ds(14.0);
+        let start_y = dy(720.0) - (chs.len() as f32 * (item_h + gap) - gap) / 2.0;
         for (i, ch) in chs.iter().enumerate() {
-            let y = start_y + i as f32 * (item_h + ds(12.0));
-            // WebGAL: bg #00000030, white text #ffffffaa, centered
-            d.rect((dx(400.0), y), (item_w, item_h))
-                .fill().color(Color::new(0.0, 0.0, 0.0, 0.19));
-            d.text(&ctx.font, &ch.text)
-                .position(dx(400.0) + item_w / 2.0, y + ds(16.0))
-                .size(ds(36.0)).color(Color::new(1.0, 1.0, 1.0, 0.67))
-                .h_align_center();
+            let y = start_y + i as f32 * (item_h + gap);
+            d.rect((dx(640.0), y), (item_w, item_h))
+                .fill().color(Color::new(0.0, 0.0, 0.0, 0.188));
+            let (ch_tex, cw, ch_h) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &ch.text, 42.0, 0.0);
+            let ctw = cw as f32 * sc;
+            let cth = ch_h as f32 * sc;
+            d.image(&ch_tex)
+                .position(dx(640.0) + (item_w - ctw) / 2.0, y + (item_h - cth) / 2.0)
+                .size(ctw, cth);
         }
     }
 
     gfx.render(&d);
+}
+
+// ── fontdue text helpers ──
+
+fn get_text_tex(
+    gfx: &mut Graphics,
+    cache: &mut HashMap<(String, u32, u32), (Texture, u32, u32)>,
+    font: &fontdue::Font,
+    fallback: &fontdue::Font,
+    text: &str,
+    px: f32,
+    max_width: f32,
+) -> (Texture, u32, u32) {
+    let key = (text.to_string(), px as u32, max_width as u32);
+    if let Some((tex, w, h)) = cache.get(&key) {
+        return (tex.clone(), *w, *h);
+    }
+    let (rgba, w, h) = rasterize_text(font, fallback, text, px, max_width);
+    if let Ok(tex) = gfx.create_texture().from_bytes(&rgba, w, h).build() {
+        cache.insert(key, (tex.clone(), w, h));
+        return (tex, w, h);
+    }
+    (gfx.create_texture().from_bytes(&[0u8;4], 1, 1).build().unwrap(), 1, 1)
+}
+
+fn rasterize_text(font: &fontdue::Font, fallback: &fontdue::Font, text: &str, px: f32, max_width: f32) -> (Vec<u8>, u32, u32) {
+    use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+    let same_font = std::ptr::eq(font as *const _, fallback as *const _);
+
+    // Split text into script runs: Latin (MavenPro, font_index=1) vs CJK (HanaMinA, font_index=0)
+    let fonts: [&fontdue::Font; 2] = [font, fallback];
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    let mw = if max_width > 0.0 { Some(max_width) } else { None };
+    let settings = LayoutSettings { x: 0.0, y: 0.0, max_width: mw, ..Default::default() };
+    layout.reset(&settings);
+
+    if same_font {
+        layout.append(&[font], &TextStyle::new(text, px, 0));
+    } else {
+        // Segment text by script: each contiguous run uses one font
+        let mut seg_start = 0;
+        let chars: Vec<char> = text.chars().collect();
+        let mut current_is_latin = !chars.is_empty() && fallback.lookup_glyph_index(chars[0]) != 0;
+        for (i, &ch) in chars.iter().enumerate().skip(1) {
+            let is_latin = fallback.lookup_glyph_index(ch) != 0;
+            if is_latin != current_is_latin {
+                // End current segment
+                let seg_text: String = chars[seg_start..i].iter().collect();
+                let fi = if current_is_latin { 1 } else { 0 };
+                layout.append(&fonts, &TextStyle::new(&seg_text, px, fi));
+                seg_start = i;
+                current_is_latin = is_latin;
+            }
+        }
+        // Final segment
+        if seg_start < chars.len() {
+            let seg_text: String = chars[seg_start..].iter().collect();
+            let fi = if current_is_latin { 1 } else { 0 };
+            layout.append(&fonts, &TextStyle::new(&seg_text, px, fi));
+        }
+    }
+
+    let glyphs = layout.glyphs();
+    if glyphs.is_empty() { return (vec![0u8; 4], 1, 1); }
+    let w = (glyphs.iter().map(|g| g.x + g.width as f32).max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap_or(1.0)).ceil() as u32;
+    let h = (glyphs.iter().map(|g| g.y + g.height as f32).max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap_or(1.0)).ceil() as u32;
+    let w = w.max(1); let h = h.max(1);
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+
+    for g in glyphs {
+        let raster_font = &fonts[g.font_index];
+        let (metrics, bitmap) = raster_font.rasterize_config(g.key);
+        for row in 0..metrics.height {
+            for col in 0..metrics.width {
+                let sx = g.x as u32 + col as u32;
+                let sy = g.y as u32 + row as u32;
+                if sx < w && sy < h {
+                    let si = ((sy * w + sx) * 4) as usize;
+                    let bi = (row * metrics.width + col) as usize;
+                    if bi < bitmap.len() {
+                        buf[si] = 255; buf[si+1] = 255; buf[si+2] = 255; buf[si+3] = bitmap[bi];
+                    }
+                }
+            }
+        }
+    }
+    (buf, w, h)
 }
 
 // ── Helpers ──
@@ -357,10 +461,16 @@ fn load_scenes(s: &mut State, d: &std::path::Path) {
     if let Ok(e) = std::fs::read_dir(d) {
         for entry in e.flatten() {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "crab") {
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if ext == "crab" || ext == "txt" {
                 let n = p.file_stem().unwrap().to_string_lossy().to_string();
                 if let Ok(c) = std::fs::read_to_string(&p) {
-                    s.scenes.insert(n.clone(), parse_script(&c));
+                    let actions = if ext == "txt" {
+                        crabgal_script::parse_webgal(&c)
+                    } else {
+                        parse_script(&c)
+                    };
+                    s.scenes.insert(n.clone(), actions);
                     if s.current_scene.is_empty() { s.current_scene = n; }
                 }
             }
@@ -370,26 +480,62 @@ fn load_scenes(s: &mut State, d: &std::path::Path) {
 
 fn run_check(p: &std::path::Path) -> anyhow::Result<()> {
     let c = std::fs::read_to_string(p)?;
-    for (i, a) in parse_script(&c).iter().enumerate() { println!("{:3}: {:?}", i + 1, a); }
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let actions = if ext == "txt" { crabgal_script::parse_webgal(&c) } else { parse_script(&c) };
+    for (i, a) in actions.iter().enumerate() { println!("{:3}: {:?}", i + 1, a); }
     Ok(())
 }
 
-fn load_font(fonts_dir: std::path::PathBuf) -> anyhow::Result<Vec<u8>> {
-    // 1. System font first (known-good TTF, always works)
-    let sys = std::path::Path::new("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
-    if sys.exists() { log::info!("Using system font"); return Ok(std::fs::read(sys)?); }
-    // 2. Project fonts — TTF/OTF only (WOFF2/TTC not supported by glyph-brush)
+fn load_fonts(fonts_dir: std::path::PathBuf) -> anyhow::Result<(fontdue::Font, fontdue::Font)> {
+    // Load HanaMinA (primary, for layout + CJK) + MavenPro (fallback, for Latin style)
+    let mut primary: Option<fontdue::Font> = None;  // HanaMinA
+    let mut fallback: Option<fontdue::Font> = None; // MavenPro
     if let Ok(e) = std::fs::read_dir(&fonts_dir) {
         for entry in e.flatten() {
             let p = entry.path();
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext == "ttf" || ext == "otf" {
-                if let Ok(data) = std::fs::read(&p) {
-                    log::info!("Loaded font: {}", p.display());
-                    return Ok(data);
+            let name = p.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+            if let Ok(data) = std::fs::read(&p) {
+                let ttf = if p.extension().and_then(|s| s.to_str()) == Some("woff2") {
+                    match woofwoof::decompress(&data) {
+                        Some(d) => d,
+                        None => { log::warn!("WOFF2 decode failed: {}", p.display()); continue; }
+                    }
+                } else { data };
+                if let Ok(font) = fontdue::Font::from_bytes(ttf, fontdue::FontSettings::default()) {
+                    log::info!("Loaded font: {} ({} chars)", p.display(), font.chars().len());
+                    if name.contains("maven") && fallback.is_none() { fallback = Some(font); }
+                    else if primary.is_none() { primary = Some(font); }
                 }
             }
         }
     }
-    anyhow::bail!("No TTF/OTF font found")
+    match (primary, fallback) {
+        (Some(p), Some(f)) => Ok((p, f)),
+        (Some(p), None) => { let f = p.clone(); Ok((p, f)) },
+        (None, Some(f)) => { let p = f.clone(); Ok((p, f)) },
+        (None, None) => {
+            let sys = std::path::Path::new("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
+            if sys.exists() {
+                log::info!("Using system font");
+                let data = std::fs::read(sys)?;
+                let font = fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
+                    .map_err(|e| anyhow::anyhow!("System font parse: {e}"))?;
+                let f2 = font.clone();
+                return Ok((font, f2));
+            }
+            anyhow::bail!("No font found")
+        }
+    }
+}
+
+fn load_window_size(path: &std::path::Path) -> (u32, u32) {
+    if let Ok(data) = std::fs::read_to_string(path) {
+        let parts: Vec<u32> = data.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        if parts.len() == 2 { return (parts[0], parts[1]); }
+    }
+    (2560, 1440) // default
+}
+
+fn save_window_size(path: &std::path::Path, w: u32, h: u32) {
+    let _ = std::fs::write(path, format!("{} {}", w, h));
 }

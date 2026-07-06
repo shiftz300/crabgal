@@ -23,4 +23,5 @@ target/
 
 # Local dev data
 test-project/
-dev/
+dev/test-project/
+dev/target/

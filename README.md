@@ -1,11 +1,11 @@
 # crabgal
 
-A visual novel engine built with Rust, pixels, and winit.
+A visual novel engine built with Rust + notan GPU rendering. WOFF2 native, WebGAL-compatible.
 
 ## Quick Start
 
 ```bash
-# Check script syntax
+# Check script syntax (.crab or WebGAL .txt)
 cargo run -- check path/to/scene.crab
 
 # Run in dev mode (hot reload, windowed preview)
@@ -14,20 +14,36 @@ cargo run -- dev path/to/project/
 
 ## Script Format
 
-`.crab` files use a simple command-based DSL:
+### .crab DSL
 
 ```
 label start
 
-bg alley_day fade
-show eileen chr/happy.png at left slide
-say Eileen: Welcome to the world.
-say Eileen: This is a visual novel engine.
+bg bg.webp fade
+show girl stand.webp at left slide
+say WebGAL: 欢迎使用 crabgal！中英文混排显示。
+say WebGAL: GPU 渲染，动画系统，分支选择——应有尽有。
 
-menu "What next?": "Continue" -> next, "Exit" -> quit
+menu "请选择": "了解更多" -> more, "结束演示" -> end
 
-label next
-bg night fade
+label more
+jump goodbye
+
+label end
+jump goodbye
+
+label goodbye
+say WebGAL: 感谢体验！Have a nice day!
+```
+
+### WebGAL .txt (compatible)
+
+```
+changeBg:bg.webp -next;
+WebGAL:text;
+choose:option1:target1|option2:target2;
+label:name;
+jumpLabel:target;
 ```
 
 ## Architecture
@@ -35,54 +51,49 @@ bg night fade
 ```
 crabgal/
 ├── crates/
-│   ├── crabgal-core     State machine, Action system, step execution
-│   └── crabgal-script   .crab parser, hot-reload file watcher
-└── crabgal-cli          CLI: dev / check commands, rendering
-```
-
-```mermaid
-flowchart TD
-    Script[".crab files"] --> Parser["DSL Parser"]
-    Parser --> Actions["Vec&lt;Action&gt;"]
-    Actions --> Step["step() engine"]
-    Step --> State["State\nbg, sprites, text, menu"]
-    State --> Render["pixels renderer\nbilinear scaling + alpha blend"]
-    Render --> Window["winit window\n1600x900 + letterbox"]
-    Watcher["notify watcher"] -.->|"file change"| Parser
+│   ├── crabgal-core      State machine, Action system, step engine
+│   └── crabgal-script    .crab + WebGAL .txt parsers, hot-reload watcher
+├── crabgal-cli           CLI: dev / check commands, notan GPU rendering
+└── dev/docs/             Architecture docs + TODO tracking
 ```
 
 ## Features
 
-- **Hot reload** — edit `.crab` files, changes apply instantly (F5 to force)
-- **Design resolution** — 1600x900 virtual canvas, automatic letterbox scaling
-- **Anti-aliased** — bilinear interpolation for all image scaling
-- **Vector text** — ab_glyph font rendering, CJK support
-- **Typewriter effect** — configurable text reveal speed
-- **Sprite transitions** — slide, fade, instant enter/exit animations
-- **Menu system** — clickable choices with jump targets
+- **GPU rendering** — notan + Metal, 2560x1440 design resolution, letterbox scaling
+- **Multi-font** — fontdue Layout with script-segmented MavenPro (Latin) + HanaMinA (CJK)
+- **WOFF2 native** — woofwoof brotli decoder, no TTF conversion needed
+- **WebGAL compatible** — parse `.txt` scripts from WebGAL projects
+- **Hot reload** — edit scripts, changes apply instantly (F7)
+- **Quick save/load** — F5/F6, bincode serialization
+- **Sprite animations** — fade, slide, instant transitions
+- **Choice menus** — clickable, keyboard navigable
+- **Auto / Skip modes** — A for auto-advance, Ctrl for skip
 
 ## Tech Stack
 
-Rust | pixels (wgpu) | winit | ab_glyph | image | notify
+Rust | notan (Metal) | fontdue | woofwoof | image | notify | bincode
 
 ## Project Structure
 
-Each VN project is a directory:
-
 ```
 my-game/
-├── scripts/
-│   ├── main.crab
-│   └── scene01.crab
-└── assets/
-    ├── background/
-    └── figure/
+├── scripts/        .crab or .txt files
+├── assets/
+│   ├── background/
+│   ├── figure/
+│   └── fonts/      .woff2 files (MavenPro + HanaMinA)
+└── crabgal.cfg     window size memory
 ```
 
-## Goals
+## Implementation Phases
 
-- Binary &lt; 8MB
-- Save files &lt; 2KB
-- 60fps rendering
-- Cold start &lt; 500ms
-- Script hot reload &lt; 50ms
+See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking.
+
+| Phase | Status | Focus |
+|-------|--------|-------|
+| 0 — Rendering & Script | Done | GPU, fonts, parser, input, save/load |
+| 1 — Usability | Next | Multi-slot save, rollback, system menu, settings |
+| 2 — Audio | Planned | BGM, voice, SFX |
+| 3 — Script Enhance | Planned | Variables, conditions, Lua, text effects |
+| 4 — Visual Polish | Planned | Transitions, Live2D, particles, video |
+| 5 — Production | Planned | ECS refactor, packaging, distribution |

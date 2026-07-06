@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Design resolution (fixed, everything is drawn in this space).
-pub const DESIGN_WIDTH: f32 = 1600.0;
-pub const DESIGN_HEIGHT: f32 = 900.0;
+pub const DESIGN_WIDTH: f32 = 2560.0;
+pub const DESIGN_HEIGHT: f32 = 1440.0;
 
 /// Position anchors, inspired by WebGAL's -left/-right/-center system.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
