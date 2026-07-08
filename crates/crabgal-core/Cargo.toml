@@ -6,5 +6,6 @@ description = "crabgal VN engine core: State, Action, game loop"
 
 [dependencies]
 serde = { workspace = true }
+serde_yaml = "0.9"
 bincode = { workspace = true }
 log = { workspace = true }

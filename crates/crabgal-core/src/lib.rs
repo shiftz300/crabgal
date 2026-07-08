@@ -12,10 +12,23 @@
 //   3. All state is bincode-serializable (for save/rollback later)
 //   4. Design resolution 1600×900, viewport scaling
 
+// crabgal-core: state, action types, step engine, UI panel state.
+
 pub mod action;
+pub mod config;
+pub mod dissolve;
 pub mod state;
 pub mod step;
 pub mod types;
+
+/// Tracks which UI panel is currently visible (shared across crates).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MenuPanel {
+    Save,
+    Load,
+    Options,
+    Backlog,
+}
 
 pub use action::Action;
 pub use state::State;

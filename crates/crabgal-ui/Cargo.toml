@@ -1,0 +1,10 @@
+[package]
+name = "crabgal-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crabgal-core = { path = "../crabgal-core" }
+crabgal-render = { path = "../crabgal-render" }
+ggez = "0.10"
+fontdue = "0.9.3"

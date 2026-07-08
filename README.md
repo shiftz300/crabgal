@@ -97,3 +97,7 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking.
 | 3 — Script Enhance | Planned | Variables, conditions, Lua, text effects |
 | 4 — Visual Polish | Planned | Transitions, Live2D, particles, video |
 | 5 — Production | Planned | ECS refactor, packaging, distribution |
+
+## Credits
+
+- [bevy_blur_regions](https://github.com/atbentley/bevy_blur_regions) by atbentley (forked as [bevy_blur_regions_fork](https://github.com/yaasin-raki2/bevy_blur_regions_fork) for Bevy 0.15 support) — GPU Gaussian blur post-processing for textbox background blur

@@ -59,7 +59,11 @@ pub enum Action {
     /// Stop background music.
     StopBgm,
 
-    // ── Variables ──
+    // ── UI ──
+    /// Show mini avatar beside the text box.
+    MiniAvatar { image: String },
+    /// Hide the mini avatar.
+    HideMiniAvatar,
     /// Set a variable.
     Set {
         name: String,

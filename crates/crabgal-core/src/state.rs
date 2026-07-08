@@ -29,6 +29,10 @@ pub struct State {
     pub sprites: HashMap<String, Sprite>,
     /// Current dialogue text (if any).
     pub dialogue: Option<Dialogue>,
+    /// Mini avatar image path (displayed beside text box).
+    pub mini_avatar: Option<String>,
+    /// Mini avatar enter/exit transition progress (0→1).
+    pub mini_avatar_progress: f32,
 
     // ── Choice state ──
     /// Active choice menu (if any).
@@ -94,6 +98,8 @@ impl State {
             bg_transition: None,
             sprites: HashMap::new(),
             dialogue: None,
+            mini_avatar: None,
+            mini_avatar_progress: 0.0,
             menu: None,
             vars: HashMap::new(),
             labels: HashMap::new(),

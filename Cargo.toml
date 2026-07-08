@@ -5,9 +5,14 @@ members = [
     "crabgal-cli",
 ]
 
+[patch.crates-io]
+ggez = { path = "../ggez" }
+
 [workspace.dependencies]
 crabgal-core = { path = "crates/crabgal-core" }
 crabgal-script = { path = "crates/crabgal-script" }
+crabgal-render = { path = "crates/crabgal-render" }
+crabgal-ui = { path = "crates/crabgal-ui" }
 
 log = "0.4"
 anyhow = "1"
@@ -15,5 +20,5 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 notify = "7"
 nom = "7"
-image = "0.25"
-notan = { version = "0.14", features = ["draw"] }
+image = { version = "0.25", features = ["webp"] }
+bevy = { version = "0.15", default-features = false }

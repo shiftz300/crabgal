@@ -1,23 +1,21 @@
 [package]
-name = "crabgal-cli"
+name = "crabgal-bevy"
 version = "0.1.0"
-edition = "2024"
-description = "crabgal CLI: dev / check / build"
+edition = "2021"
 
 [[bin]]
-name = "crabgal-ggez"
+name = "crabgal"
 path = "src/main.rs"
 
 [dependencies]
 crabgal-core = { workspace = true }
 crabgal-script = { workspace = true }
-crabgal-render = { workspace = true }
-crabgal-ui = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 bincode = { workspace = true }
-ggez = "0.10"
 env_logger = "0.11"
-woofwoof = "1.0.2"
 fontdue = "0.9.3"
+woofwoof = "1.0.2"
+bevy = { version = "0.15", default-features = false, features = ["bevy_winit", "bevy_render", "bevy_sprite", "bevy_ui", "png", "webp", "jpeg"] }
+bevy_blur_regions_fork = "0.6.0"

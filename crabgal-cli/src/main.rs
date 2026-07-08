@@ -1,5 +1,5 @@
 // crabgal CLI — dev / check
-// GPU 2D rendering via notan (Metal backend). fontdue glyph rasterization.
+// GPU 2D rendering via ggez (wgpu backend). fontdue glyph rasterization.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,23 +11,41 @@ use crabgal_core::Action;
 use crabgal_core::types::Transition;
 use crabgal_script::parser::parse_script;
 
-use notan::draw::*;
-use notan::prelude::*;
+use crabgal_render::text::TexCache;
+use crabgal_core::MenuPanel;
 
-#[derive(AppState)]
-struct Ctx {
-    scripts_dir: PathBuf,
-    state: Arc<RwLock<State>>,
-    textures: HashMap<String, Texture>,
-    font: fontdue::Font,
-    fallback_font: fontdue::Font,
-    text_cache: HashMap<(String, u32, u32), (Texture, u32, u32)>,
+use ggez::conf::{WindowMode, WindowSetup};
+use ggez::event::{self, EventHandler};
+use ggez::graphics::{self, Canvas, Color, DrawParam, Image, ImageFormat, Mesh, Rect};
+use ggez::input::keyboard::{Key, KeyCode};
+use ggez::input::mouse::MouseButton;
+use ggez::winit::keyboard::{NamedKey, PhysicalKey};
+use ggez::{Context, ContextBuilder, GameResult};
+
+pub(crate) struct GameState {
+    pub scripts_dir: PathBuf,
+    pub state: Arc<RwLock<State>>,
+    pub textures: HashMap<String, Image>,
+    pub font: fontdue::Font,
+    pub fallback_font: fontdue::Font,
+    pub icon_font: fontdue::Font,
+    pub text_cache: TexCache,
     watcher_rx: mpsc::Receiver<PathBuf>,
-    tw: f64,
-    auto: bool,
-    auto_timer: f64,
+    pub tw: f64,
+    pub auto: bool,
+    pub auto_timer: f64,
     last_size: (u32, u32),
     config_path: PathBuf,
+    pub menu_open: bool,
+    pub menu_panel: Option<MenuPanel>,
+    pub menu_page: u32,
+    pub controls_visible: bool,
+    pub textbox_visible: bool,
+    pub history: Vec<State>,
+    pub menu_fade: f32,
+    pub skip_mode: bool,
+    pub hover_btn: Option<usize>,
+    pub dialogue_log: Vec<(String, String)>,
 }
 
 fn main() {
@@ -42,7 +60,9 @@ fn main() {
             if let Err(e) = run_dev(dir) { eprintln!("Error: {e}"); std::process::exit(1); }
         }
         "check" => {
-            let p = a.get(2).map(PathBuf::from).unwrap_or_else(|| { eprintln!("missing file"); std::process::exit(1); });
+            let p = a.get(2).map(PathBuf::from).unwrap_or_else(|| {
+                eprintln!("missing file"); std::process::exit(1);
+            });
             if let Err(e) = run_check(&p) { eprintln!("Error: {e}"); std::process::exit(1); }
         }
         _ => std::process::exit(1),
@@ -50,12 +70,12 @@ fn main() {
 }
 
 fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
+    env_logger::init();
     let sd = dir.join("scripts");
     let ar = dir.join("assets");
     if !sd.exists() { std::fs::create_dir_all(&sd)?; }
     let _ = std::fs::create_dir_all(ar.join("fonts"));
 
-    // ── Scripts ──
     let mut s = State::new();
     load_scenes(&mut s, &sd);
     if s.scenes.is_empty() {
@@ -70,391 +90,448 @@ fn run_dev(dir: PathBuf) -> anyhow::Result<()> {
     let state = Arc::new(RwLock::new(s));
     let wrx = crabgal_script::watcher::start_watcher(&sd)?;
 
-    // ── Pre-load images: decode to RGBA via image crate ──
-    let mut raw_images: HashMap<String, (Vec<u8>, u32, u32)> = HashMap::new();
-    for (d, prefix) in &[("background","bg"),("figure","figure")] {
+    let (primary_font, fallback_font) = load_fonts(ar.join("fonts"))?;
+
+    // Embedded Bootstrap Icons font (woff2)
+    let icon_font = {
+        let icon_woff2 = include_bytes!("../assets/bootstrap-icons.woff2");
+        let ttf = woofwoof::decompress(icon_woff2)
+            .ok_or_else(|| anyhow::anyhow!("Failed to decompress Bootstrap Icons woff2"))?;
+        fontdue::Font::from_bytes(ttf, fontdue::FontSettings::default())
+            .map_err(|e| anyhow::anyhow!("Bootstrap Icons font parse: {e}"))?
+    };
+    log::info!("Loaded Bootstrap Icons font");
+    let cfg_path = dir.join("crabgal.cfg");
+    let (win_w, win_h) = load_window_size(&cfg_path);
+
+    let cb = ContextBuilder::new("crabgal", "crabgal")
+        .window_setup(WindowSetup::default().title("crabgal"))
+        .window_mode(WindowMode::default()
+            .dimensions(win_w as f32, win_h as f32)
+            .resizable(true));
+    let (ctx, event_loop) = cb.build()?;
+
+    let mut textures = HashMap::new();
+    for (d, prefix) in &[("background", "bg"), ("figure", "figure")] {
         if let Ok(e) = std::fs::read_dir(ar.join(d)) {
             for entry in e.flatten() {
                 let p = entry.path();
                 if p.extension().map_or(false, |e| e == "png" || e == "webp" || e == "jpg") {
-                    if let Ok(img) = image::load_from_memory(&std::fs::read(&p)?) {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        let key = format!("{}/{}", prefix, p.file_name().unwrap().to_string_lossy());
-                        raw_images.insert(key, (rgba.into_raw(), w, h));
+                    let key = format!("{}/{}", prefix, p.file_name().unwrap().to_string_lossy());
+                    match std::fs::read(&p) {
+                        Ok(data) => match image::load_from_memory(&data) {
+                            Ok(img) => {
+                                let rgba = img.to_rgba8();
+                                let (w, h) = rgba.dimensions();
+                                log::info!("Loaded image {} ({}x{})", key, w, h);
+                                let gfx_img = Image::from_pixels(
+                                    &ctx, &rgba, ImageFormat::Rgba8UnormSrgb, w, h,
+                                );
+                                textures.insert(key, gfx_img);
+                            }
+                            Err(e) => log::warn!("Image decode failed {}: {}", key, e),
+                        },
+                        Err(e) => log::warn!("Read failed {}: {}", key, e),
                     }
                 }
             }
         }
     }
 
-    // ── Load font + window config ──
-    let (primary_font, fallback_font) = load_fonts(ar.join("fonts"))?;
-    let cfg_path = dir.join("crabgal.cfg");
-    let (win_w, win_h) = load_window_size(&cfg_path);
+    let gs = GameState {
+        scripts_dir: sd, config_path: cfg_path, state, textures,
+        font: primary_font, fallback_font, icon_font, text_cache: HashMap::new(),
+        watcher_rx: wrx, tw: 0.0, auto: false, auto_timer: 0.0,
+        last_size: (win_w, win_h), menu_open: false, menu_panel: None,
+        menu_page: 1, controls_visible: true, textbox_visible: true,
+        history: Vec::new(), menu_fade: 0.0,
+        skip_mode: false, hover_btn: None,
+        dialogue_log: Vec::new(),
+    };
 
-    let win = WindowConfig::new()
-        .set_size(win_w, win_h)
-        .set_title("crabgal")
-        .set_resizable(true)
-        .set_vsync(true);
-
-    notan::init_with(move |gfx: &mut Graphics| -> Ctx {
-        let mut textures = HashMap::new();
-        for (key, (rgba, w, h)) in &raw_images {
-            match gfx.create_texture().from_bytes(rgba, *w, *h).build() {
-                Ok(tex) => { textures.insert(key.clone(), tex); }
-                Err(e) => { log::error!("Texture failed [{}]: {e:?}", key); }
-            }
-        }
-        log::info!("Loaded {} textures", textures.len());
-        Ctx { scripts_dir: sd, config_path: cfg_path, state, textures, font: primary_font, fallback_font, text_cache: HashMap::new(), watcher_rx: wrx, tw: 0.0, auto: false, auto_timer: 0.0, last_size: (win_w, win_h) }
-    })
-    .add_config(win)
-    .add_config(DrawConfig)
-    .update(update)
-    .draw(draw)
-    .build()
-    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let _ = event::run(ctx, event_loop, gs);
     Ok(())
 }
 
-// ── Update: input + animations ──
-fn update(app: &mut App, ctx: &mut Ctx) {
-    // Save window size on change
-    let (cw, ch) = app.window().size();
-    let cs = (cw as u32, ch as u32);
-    if cs != ctx.last_size && cs.0 > 0 && cs.1 > 0 {
-        ctx.last_size = cs;
-        save_window_size(&ctx.config_path, cs.0, cs.1);
+// ── EventHandler ──
+
+impl EventHandler for GameState {
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        let (cw, ch) = ctx.gfx.drawable_size();
+        let cs = (cw as u32, ch as u32);
+        if cs != self.last_size && cs.0 > 0 && cs.1 > 0 {
+            self.last_size = cs;
+            save_window_size(&self.config_path, cs.0, cs.1);
+        }
+
+        while let Ok(_) = self.watcher_rx.try_recv() {
+            let mut s = self.state.write().unwrap();
+            load_scenes(&mut s, &self.scripts_dir);
+            step::index_labels(&mut s);
+        }
+
+        let dt = ctx.time.delta().as_secs_f64();
+        let skip = ctx.keyboard.is_physical_key_pressed(&PhysicalKey::Code(KeyCode::ControlLeft))
+            || ctx.keyboard.is_physical_key_pressed(&PhysicalKey::Code(KeyCode::ControlRight))
+            || self.skip_mode;
+        let ma = self.menu_open || self.menu_panel.is_some();
+
+        let target: f32 = if ma { 1.0 } else { 0.0 };
+        let speed: f32 = 6.67;
+        let dt_f32 = dt as f32;
+        if (self.menu_fade - target).abs() < 0.01 {
+            self.menu_fade = target;
+        } else if self.menu_fade < target {
+            self.menu_fade = (self.menu_fade + dt_f32 * speed).min(target);
+        } else {
+            self.menu_fade = (self.menu_fade - dt_f32 * speed).max(target);
+        }
+
+        if ctx.keyboard.is_physical_key_just_pressed(&PhysicalKey::Code(KeyCode::PageUp)) && !ma {
+            if let Some(prev) = self.history.pop() {
+                let mut s = self.state.write().unwrap();
+                *s = prev; step::index_labels(&mut s); self.tw = 0.0;
+            }
+        }
+
+        if ctx.mouse.button_just_pressed(MouseButton::Left) {
+            self.handle_click(ctx);
+        }
+
+        if ctx.keyboard.is_logical_key_just_pressed(&Key::Named(NamedKey::Space))
+            || ctx.keyboard.is_logical_key_just_pressed(&Key::Named(NamedKey::Enter))
+        { if !ma { self.advance_action(); } }
+
+        if ctx.keyboard.is_logical_key_just_pressed(&Key::Named(NamedKey::Escape)) {
+            if self.menu_panel.is_some() { self.menu_panel = None; }
+            else if self.menu_open { self.menu_open = false; }
+            else { self.controls_visible = !self.controls_visible; }
+        }
+
+        if ctx.keyboard.is_logical_key_just_pressed(&Key::Named(NamedKey::Tab)) {
+            self.menu_open = !self.menu_open;
+        }
+
+        for (i, ch) in ["1","2","3","4","5","6","7","8","9"].iter().enumerate() {
+            if ctx.keyboard.is_logical_key_just_pressed(&Key::Character((*ch).into())) {
+                let sh = ctx.keyboard.is_physical_key_pressed(&PhysicalKey::Code(KeyCode::ShiftLeft))
+                    || ctx.keyboard.is_physical_key_pressed(&PhysicalKey::Code(KeyCode::ShiftRight));
+                let save_dir = self.scripts_dir.parent().unwrap().join("saves");
+                let slot = (i + 1) as u32;
+                if sh {
+                    if let Some(l) = load_from_slot(&save_dir, slot) {
+                        let mut s = self.state.write().unwrap();
+                        *s = l; step::index_labels(&mut s);
+                        self.tw = 0.0; self.history.clear();
+                    }
+                } else {
+                    save_to_slot(&self.state, &save_dir, slot);
+                }
+            }
+        }
+
+        {
+            let mut s = self.state.write().unwrap();
+            if let Some(ref mut d) = s.dialogue {
+                if skip { self.tw = 1.0; }
+                else if self.tw < 1.0 { self.tw = (self.tw + dt * 2.0).min(1.0); }
+                d.visible_chars = d.text.chars().count();
+            } else { self.tw = 0.0; }
+
+            if (skip || self.auto) && self.tw >= 1.0 {
+                if skip || self.auto { self.auto_timer += dt; }
+                if skip || self.auto_timer > 2.0 {
+                    step::advance(&mut s); step::step(&mut s);
+                    self.tw = 0.0; self.auto_timer = 0.0;
+                }
+            }
+
+            for sp in s.sprites.values_mut() {
+                if sp.transition_progress < 1.0 || skip {
+                    let speed = if sp.transition == Transition::Instant { 999.0 } else { 3.0 };
+                    sp.transition_progress = (sp.transition_progress + dt as f32 * speed).min(1.0);
+                }
+            }
+            s.sprites.retain(|_, sp| sp.entering || sp.transition_progress < 1.0);
+            if let Some(ref mut t) = s.bg_transition {
+                if t.progress < 1.0 || skip {
+                    t.progress = (t.progress + dt as f32 * 4.0).min(1.0);
+                }
+            }
+            // Mini avatar enter/exit animation (0.33s, like WebGAL CSS)
+            if s.mini_avatar.is_some() && s.mini_avatar_progress < 1.0 {
+                s.mini_avatar_progress = (s.mini_avatar_progress + dt as f32 * 3.0).min(1.0);
+            }
+            if s.mini_avatar.is_none() && s.mini_avatar_progress > 0.0 {
+                s.mini_avatar_progress = (s.mini_avatar_progress - dt as f32 * 3.0).max(0.0);
+            }
+        }
+        Ok(())
     }
 
-    // Hot reload
-    while let Ok(_) = ctx.watcher_rx.try_recv() {
-        let mut s = ctx.state.write().unwrap();
-        load_scenes(&mut s, &ctx.scripts_dir);
-        step::index_labels(&mut s);
-    }
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        let (ww, wh) = ctx.gfx.drawable_size();
+        if ww < 1.0 || wh < 1.0 { return Ok(()); }
+        let sg = self.state.read().unwrap();
+        let sc = (ww / 2560.0).min(wh / 1440.0);
+        let ox = (ww - 2560.0 * sc) / 2.0;
+        let oy = (wh - 1440.0 * sc) / 2.0;
+        let ds = |v: f32| v * sc;
+        let dx = |v: f32| ox + v * sc;
+        let dy = |v: f32| oy + v * sc;
 
-    // Keyboard + mouse → advance
-    let advance = |ctx: &mut Ctx| {
-        let mut s = ctx.state.write().unwrap();
+        let mut c = Canvas::from_frame(ctx, Color::BLACK);
+
+        if let Some(bg) = &sg.bg {
+            let n = std::path::Path::new(bg).file_name()
+                .map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            if let Some(img) = self.textures.get(&format!("bg/{}", n)) {
+                let iw = img.width() as f32; let ih = img.height() as f32;
+                c.draw(img, DrawParam::new()
+                    .dest([ox, oy])
+                    .scale([ds(2560.0) / iw, ds(1440.0) / ih]));
+            } else {
+                let fb = Mesh::new_rectangle(ctx, graphics::DrawMode::fill(),
+                    Rect::new(ox, oy, ds(2560.0), ds(1440.0)),
+                    Color::new(1.0, 0.0, 0.0, 1.0))?;
+                c.draw(&fb, DrawParam::default());
+            }
+        }
+
+        let mut sp: Vec<_> = sg.sprites.iter().collect();
+        sp.sort_by(|a, b| a.1.position.y.partial_cmp(&b.1.position.y)
+            .unwrap_or(std::cmp::Ordering::Equal));
+        for (_, spr) in &sp {
+            let n = std::path::Path::new(&spr.image).file_name()
+                .map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            if let Some(img) = self.textures.get(&format!("figure/{}", n)) {
+                let p = spr.transition_progress;
+                let alpha = if spr.entering { p } else { 1.0 - p };
+                let sh = 960.0; let sw = sh * img.width() as f32 / img.height() as f32;
+                let xd = spr.position.x.resolve(sw) + spr.y_offset * (1.0 - p);
+                let iw = img.width() as f32; let ih = img.height() as f32;
+                let mut dp = DrawParam::new()
+                    .dest([dx(xd), dy(480.0)])
+                    .scale([ds(sw) / iw, ds(sh) / ih]);
+                dp.color.a = alpha;
+                c.draw(img, dp);
+            }
+        }
+
+        let dialogue_text = sg.dialogue.clone();
+        let menu_choices = sg.menu.clone();
+        let bg_ref = sg.bg.clone();
+        let sprites_clone: Vec<_> = sg.sprites.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mini_avatar = sg.mini_avatar.clone();
+        let mini_avatar_progress = sg.mini_avatar_progress;
+        let menu_fade = self.menu_fade;
+        drop(sg);
+
+        if dialogue_text.is_some() {
+            crabgal_ui::textbox::draw_textbox(
+                ctx, &mut c, &self.textures, &mut self.text_cache,
+                &self.font, &self.fallback_font,
+                &dialogue_text, &bg_ref, &sprites_clone,
+                &mini_avatar, mini_avatar_progress,
+                self.tw, self.textbox_visible,
+                sc, ox, oy, &ds, &dx, &dy,
+            )?;
+            crabgal_ui::control_bar::draw_control_bar(
+                ctx, &mut c, &mut self.text_cache,
+                &self.font, &self.fallback_font, &self.icon_font,
+                self.controls_visible, self.textbox_visible,
+                self.menu_open, self.menu_panel.is_some(),
+                &mut self.hover_btn,
+                sc, &ds, &dx, &dy,
+            )?;
+        }
+
+        crabgal_ui::choices::draw_choices(
+            ctx, &mut c, &mut self.text_cache,
+            &self.font, &self.fallback_font,
+            &menu_choices,
+            sc, &ds, &dx, &dy,
+        )?;
+
+        if menu_fade > 0.001 {
+            crabgal_ui::menu::draw_menu_overlay(
+                ctx, &mut c, &self.textures, &mut self.text_cache,
+                &self.font, &self.fallback_font,
+                &bg_ref, &sprites_clone,
+                menu_fade, self.menu_panel, self.menu_page,
+                &self.dialogue_log,
+                sc, ox, oy, &ds, &dx, &dy,
+            )?;
+        }
+        if let Err(e) = c.finish(ctx) {
+            log::warn!("Canvas finish failed (window occluded?): {e}");
+        }
+        Ok(())
+    }
+}
+
+// ── GameState methods ──
+
+impl GameState {
+    fn advance_action(&mut self) {
+        let mut s = self.state.write().unwrap();
         if let Some(ref d) = s.dialogue {
             let total = d.text.chars().count();
             if d.visible_chars < total {
-                // Skip fade: show all text instantly
                 s.dialogue.as_mut().unwrap().visible_chars = total;
-                ctx.tw = 1.0;
+                self.tw = 1.0;
             } else {
-                step::advance(&mut s);
-                step::step(&mut s);
-                ctx.tw = 0.0; // Start fade for new dialogue
+                self.dialogue_log.push((d.speaker.clone(), d.text.clone()));
+                self.history.push(s.clone());
+                step::advance(&mut s); step::step(&mut s); self.tw = 0.0;
             }
         } else {
-            step::step(&mut s);
-            ctx.tw = 0.0;
+            self.history.push(s.clone());
+            step::step(&mut s); self.tw = 0.0;
         }
-    };
+    }
 
-    // Mouse click → advance or select menu choice
-    if app.mouse.left_was_pressed() {
-        let s = ctx.state.read().unwrap();
-        let has_menu = s.menu.is_some();
-        drop(s); // release lock
+    fn handle_click(&mut self, ctx: &mut Context) {
+        let (ww, wh) = ctx.gfx.drawable_size();
+        if ww < 1.0 || wh < 1.0 { return; }
+        let mpos = ctx.mouse.position();
+        let dsc = (ww / 2560.0).min(wh / 1440.0);
+        let dox = (ww - 2560.0 * dsc) / 2.0;
+        let doy = (wh - 1440.0 * dsc) / 2.0;
+        let dxc = (mpos.x - dox) / dsc;
+        let dyc = (mpos.y - doy) / dsc;
 
-        if has_menu {
-            // Convert screen mouse coords to design coords
-            let (mx, my) = (app.mouse.x, app.mouse.y);
-            let (ww, wh) = app.window().size();
-            let dsc = (ww as f32 / 2560.0).min(wh as f32 / 1440.0);
-            let dox = (ww as f32 - 2560.0 * dsc) / 2.0;
-            let doy = (wh as f32 - 1440.0 * dsc) / 2.0;
-            let dx = (mx - dox) / dsc;
-            let dy = (my - doy) / dsc;
-            // Check if click hits a menu choice (centered 1280px wide, 80px tall)
-            let item_w = 1280.0;
-            let item_h = 80.0;
-            let item_gap = 14.0;
-            if dx >= 640.0 && dx <= 640.0 + item_w {
-                let s = ctx.state.read().unwrap();
+        if self.menu_open || self.menu_panel.is_some() {
+            let bar_y = 1440.0 * 0.9;
+            if dyc >= bar_y {
+                if dxc < 650.0 { self.menu_panel = Some(MenuPanel::Save); self.menu_page = 1; }
+                else if dxc < 1000.0 { self.menu_panel = Some(MenuPanel::Load); self.menu_page = 1; }
+                else if dxc < 1400.0 { self.menu_panel = Some(MenuPanel::Options); }
+                else { self.menu_panel = None; self.menu_open = false; }
+                return;
+            }
+            if let Some(panel) = self.menu_panel {
+                if panel == MenuPanel::Save || panel == MenuPanel::Load {
+                    if dyc < 100.0 {
+                        let page = ((dxc - 150.0) / 80.0) as u32 + 1;
+                        if page >= 1 && page <= 20 { self.menu_page = page; }
+                        return;
+                    }
+                    let cw = 448.0; let ch = 648.0;
+                    for i in 0..10 {
+                        let col = i % 5; let row = i / 5;
+                        let sx = 120.0 + col as f32 * 500.0;
+                        let sy = 130.0 + row as f32 * 678.0;
+                        if dxc >= sx && dxc <= sx + cw && dyc >= sy && dyc <= sy + ch {
+                            let slot = ((self.menu_page - 1) * 10 + i + 1) as u32;
+                            let save_dir = self.scripts_dir.parent().unwrap().join("saves");
+                            if panel == MenuPanel::Save {
+                                save_to_slot(&self.state, &save_dir, slot);
+                            } else if let Some(loaded) = load_from_slot(&save_dir, slot) {
+                                let mut s = self.state.write().unwrap();
+                                *s = loaded; step::index_labels(&mut s);
+                                self.tw = 0.0; self.history.clear();
+                            }
+                            self.menu_panel = None; self.menu_open = false;
+                            return;
+                        }
+                    }
+                }
+                self.menu_panel = None;
+                return;
+            }
+            self.menu_open = false;
+            return;
+        }
+
+        if let Some(idx) = self.hover_btn {
+            let sd = self.scripts_dir.parent().unwrap().join("saves");
+            match idx {
+                0 => { self.menu_panel = Some(MenuPanel::Backlog); self.menu_open = true; }
+                1 => { /* Replay */ }
+                2 => { self.auto = !self.auto; self.auto_timer = 0.0; }
+                3 => { self.skip_mode = !self.skip_mode; }
+                4 => { self.textbox_visible = !self.textbox_visible; }
+                5 => { self.controls_visible = !self.controls_visible; }
+                6 => save_to_slot(&self.state, &sd, 0),
+                7 => {
+                    if let Some(l) = load_from_slot(&sd, 0) {
+                        let mut s = self.state.write().unwrap();
+                        *s = l; step::index_labels(&mut s);
+                        self.tw = 0.0; self.history.clear();
+                    }
+                }
+                8 => { self.menu_panel = Some(MenuPanel::Save); self.menu_page = 1; self.menu_open = true; }
+                9 => { self.menu_panel = Some(MenuPanel::Load); self.menu_page = 1; self.menu_open = true; }
+                10 => { self.menu_panel = Some(MenuPanel::Options); self.menu_open = true; }
+                11 => { /* Title */ }
+                _ => {}
+            }
+            return;
+        }
+
+        let s = self.state.read().unwrap();
+        let hm = s.menu.is_some();
+        drop(s);
+        if hm {
+            let iw = 1280.0; let ih = 80.0; let ig = 14.0;
+            if dxc >= 640.0 && dxc <= 640.0 + iw {
+                let s = self.state.read().unwrap();
                 if let Some(ref chs) = s.menu {
-                    let start_y = 720.0 - (chs.len() as f32 * (item_h + item_gap) - item_gap) / 2.0;
+                    let sy = 720.0 - (chs.len() as f32 * (ih + ig) - ig) / 2.0;
                     for (i, _) in chs.iter().enumerate() {
-                        let cy = start_y + i as f32 * (item_h + item_gap);
-                        if dy >= cy && dy <= cy + item_h {
+                        let cy = sy + i as f32 * (ih + ig);
+                        if dyc >= cy && dyc <= cy + ih {
                             drop(s);
-                            let mut s = ctx.state.write().unwrap();
+                            let mut s = self.state.write().unwrap();
                             step::select_choice(&mut s, i);
-                            step::step(&mut s);
-                            ctx.tw = 0.0;
-                            break;
+                            step::step(&mut s); self.tw = 0.0;
+                            return;
                         }
                     }
                 }
             }
+            return;
+        }
+
+        {
+            let s = self.state.read().unwrap();
+            let hd = s.dialogue.is_some();
+            drop(s);
+            if hd && self.controls_visible {
+                self.advance_action();
+            }
+        }
+    }
+}
+
+// ── save/load ──
+
+fn save_to_slot(state: &Arc<RwLock<State>>, save_dir: &std::path::Path, slot: u32) {
+    let s = state.read().unwrap();
+    let _ = std::fs::create_dir_all(save_dir);
+    let path = save_dir.join(format!("slot_{}.bin", slot));
+    if let Ok(data) = bincode::serialize(&*s) {
+        if let Err(e) = std::fs::write(&path, data) {
+            log::error!("Save failed slot {}: {}", slot, e);
         } else {
-            advance(ctx);
-        }
-    }
-    // Keyboard → advance
-    if app.keyboard.was_pressed(KeyCode::Space) || app.keyboard.was_pressed(KeyCode::Enter) {
-        advance(ctx);
-    }
-    if app.keyboard.was_pressed(KeyCode::Escape) { app.exit(); }
-    if app.keyboard.was_pressed(KeyCode::KeyA) {
-        ctx.auto = !ctx.auto;
-        ctx.auto_timer = 0.0;
-        log::info!("Auto mode: {}", if ctx.auto { "ON" } else { "OFF" });
-    }
-    if app.keyboard.was_pressed(KeyCode::F5) {
-        let s = ctx.state.read().unwrap();
-        let path = ctx.scripts_dir.parent().unwrap().join("saves").join("quicksave.bin");
-        let _ = std::fs::create_dir_all(path.parent().unwrap());
-        if let Ok(data) = bincode::serialize(&*s) {
-            if std::fs::write(&path, data).is_ok() {
-                log::info!("Quick saved");
-            }
-        }
-    }
-    if app.keyboard.was_pressed(KeyCode::F6) {
-        let path = ctx.scripts_dir.parent().unwrap().join("saves").join("quicksave.bin");
-        if let Ok(data) = std::fs::read(&path) {
-            if let Ok(loaded) = bincode::deserialize::<State>(&data) {
-                let mut s = ctx.state.write().unwrap();
-                *s = loaded;
-                step::index_labels(&mut s);
-                ctx.tw = 0.0;
-                log::info!("Quick loaded");
-            }
-        }
-    }
-    if app.keyboard.was_pressed(KeyCode::F7) {
-        let mut s = ctx.state.write().unwrap();
-        load_scenes(&mut s, &ctx.scripts_dir);
-        step::index_labels(&mut s);
-        ctx.tw = 0.0;
-    }
-
-    // Animations (frame-rate independent)
-    let dt = app.timer.delta().as_secs_f64();
-    let skip = app.keyboard.is_down(KeyCode::ControlLeft)
-        || app.keyboard.is_down(KeyCode::ControlRight);
-    {
-        let mut s = ctx.state.write().unwrap();
-        // Text fade-in: tw accumulates from 0 to 1 over ~0.5s (instant in skip mode)
-        if let Some(ref mut d) = s.dialogue {
-            if skip {
-                ctx.tw = 1.0; // instant text, then auto-advance
-            } else if ctx.tw < 1.0 {
-                ctx.tw = (ctx.tw + dt as f64 * 2.0).min(1.0);
-            }
-            d.visible_chars = d.text.chars().count();
-        } else {
-            ctx.tw = 0.0;
-        }
-        // Skip/auto mode: auto-advance after text is fully shown
-        if (skip || ctx.auto) && ctx.tw >= 1.0 {
-            if skip || ctx.auto {
-                ctx.auto_timer += dt;
-            }
-            if skip || ctx.auto_timer > 2.0 {
-                step::advance(&mut s);
-                step::step(&mut s);
-                ctx.tw = 0.0;
-                ctx.auto_timer = 0.0;
-            }
-        }
-        for sp in s.sprites.values_mut() {
-            if sp.transition_progress < 1.0 || skip {
-                let speed = if sp.transition == Transition::Instant { 999.0 } else { 3.0 };
-                sp.transition_progress = (sp.transition_progress + dt as f32 * speed).min(1.0);
-            }
-        }
-        // Remove fully hidden sprites
-        s.sprites.retain(|_, sp| sp.entering || sp.transition_progress < 1.0);
-        if let Some(ref mut t) = s.bg_transition {
-            if t.progress < 1.0 || skip {
-                t.progress = (t.progress + dt as f32 * 4.0).min(1.0);
-            }
+            log::info!("Saved slot {}", slot);
         }
     }
 }
 
-// ── GPU draw ──
-fn draw(gfx: &mut Graphics, ctx: &mut Ctx) {
-    let sg = ctx.state.read().unwrap();
-    let mut d = gfx.create_draw();
-    d.clear(Color::BLACK);
-
-    let (ww, wh) = (gfx.size().0 as f32, gfx.size().1 as f32);
-    let sc = (ww / 2560.0).min(wh / 1440.0);
-    let ox = (ww - 2560.0 * sc) / 2.0;
-    let oy = (wh - 1440.0 * sc) / 2.0;
-    let ds = |v: f32| v * sc;
-    let dx = |v: f32| ox + v * sc;
-    let dy = |v: f32| oy + v * sc;
-
-    // ── Background ──
-    if let Some(bg) = &sg.bg {
-        let fname = std::path::Path::new(bg).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        if let Some(tex) = ctx.textures.get(&format!("bg/{}", fname)) {
-            d.image(tex).position(ox, oy).size(ds(2560.0), ds(1440.0));
+fn load_from_slot(save_dir: &std::path::Path, slot: u32) -> Option<State> {
+    let path = save_dir.join(format!("slot_{}.bin", slot));
+    if let Ok(data) = std::fs::read(&path) {
+        if let Ok(loaded) = bincode::deserialize::<State>(&data) {
+            log::info!("Loaded slot {}", slot);
+            return Some(loaded);
         }
     }
-
-    // ── Sprites ──
-    let mut sp: Vec<_> = sg.sprites.iter().collect();
-    sp.sort_by(|a,b| a.1.position.y.partial_cmp(&b.1.position.y).unwrap_or(std::cmp::Ordering::Equal));
-    for (_, spr) in &sp {
-        let fname = std::path::Path::new(&spr.image).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        if let Some(tex) = ctx.textures.get(&format!("figure/{}", fname)) {
-            let p = spr.transition_progress;
-            let alpha = if spr.entering { p } else { 1.0 - p };
-            let sh_design = 960.0;
-            let sw_design = sh_design * tex.width() as f32 / tex.height() as f32;
-            let x_design = spr.position.x.resolve(sw_design) + spr.y_offset * (1.0 - p);
-            d.image(tex)
-                .position(dx(x_design), dy(480.0))
-                .size(ds(sw_design), ds(sh_design))
-                .alpha(alpha);
-        }
-    }
-
-    // ── WebGAL text box (fontdue rasterized) ──
-    if let Some(di) = &sg.dialogue {
-        let box_w = ds(2560.0 - 50.0);
-        let box_h = ds(350.0);
-        let box_y = dy(1440.0 - 350.0 - 20.0);
-        let name_y = box_y - ds(90.0);
-        let name_h = ds(80.0);
-        // Name plate bg
-        d.rect((dx(25.0), name_y), (box_w, name_h))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.667));
-        let (name_tex, nw, nh) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &di.speaker, 44.0, 0.0);
-        d.image(&name_tex)
-            .position(dx(225.0), name_y + ds(14.0))
-            .size(nw as f32 * sc, nh as f32 * sc);
-        // Text box bg
-        d.rect((dx(25.0), box_y), (box_w, box_h))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.565));
-        let (text_tex, tw, th) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &di.text, 52.0, 2200.0);
-        d.image(&text_tex)
-            .position(dx(225.0), box_y + ds(40.0))
-            .size(tw as f32 * sc, th as f32 * sc);
-    }
-
-    // ── WebGAL choices (fontdue rasterized) ──
-    if let Some(chs) = &sg.menu {
-        d.rect((dx(0.0), dy(0.0)), (ds(2560.0), ds(1440.0)))
-            .fill().color(Color::new(0.0, 0.0, 0.0, 0.051));
-        let item_w = ds(1280.0);
-        let item_h = ds(80.0);
-        let gap = ds(14.0);
-        let start_y = dy(720.0) - (chs.len() as f32 * (item_h + gap) - gap) / 2.0;
-        for (i, ch) in chs.iter().enumerate() {
-            let y = start_y + i as f32 * (item_h + gap);
-            d.rect((dx(640.0), y), (item_w, item_h))
-                .fill().color(Color::new(0.0, 0.0, 0.0, 0.188));
-            let (ch_tex, cw, ch_h) = get_text_tex(gfx, &mut ctx.text_cache, &ctx.font, &ctx.fallback_font, &ch.text, 42.0, 0.0);
-            let ctw = cw as f32 * sc;
-            let cth = ch_h as f32 * sc;
-            d.image(&ch_tex)
-                .position(dx(640.0) + (item_w - ctw) / 2.0, y + (item_h - cth) / 2.0)
-                .size(ctw, cth);
-        }
-    }
-
-    gfx.render(&d);
+    None
 }
 
-// ── fontdue text helpers ──
-
-fn get_text_tex(
-    gfx: &mut Graphics,
-    cache: &mut HashMap<(String, u32, u32), (Texture, u32, u32)>,
-    font: &fontdue::Font,
-    fallback: &fontdue::Font,
-    text: &str,
-    px: f32,
-    max_width: f32,
-) -> (Texture, u32, u32) {
-    let key = (text.to_string(), px as u32, max_width as u32);
-    if let Some((tex, w, h)) = cache.get(&key) {
-        return (tex.clone(), *w, *h);
-    }
-    let (rgba, w, h) = rasterize_text(font, fallback, text, px, max_width);
-    if let Ok(tex) = gfx.create_texture().from_bytes(&rgba, w, h).build() {
-        cache.insert(key, (tex.clone(), w, h));
-        return (tex, w, h);
-    }
-    (gfx.create_texture().from_bytes(&[0u8;4], 1, 1).build().unwrap(), 1, 1)
-}
-
-fn rasterize_text(font: &fontdue::Font, fallback: &fontdue::Font, text: &str, px: f32, max_width: f32) -> (Vec<u8>, u32, u32) {
-    use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
-    let same_font = std::ptr::eq(font as *const _, fallback as *const _);
-
-    // Split text into script runs: Latin (MavenPro, font_index=1) vs CJK (HanaMinA, font_index=0)
-    let fonts: [&fontdue::Font; 2] = [font, fallback];
-    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-    let mw = if max_width > 0.0 { Some(max_width) } else { None };
-    let settings = LayoutSettings { x: 0.0, y: 0.0, max_width: mw, ..Default::default() };
-    layout.reset(&settings);
-
-    if same_font {
-        layout.append(&[font], &TextStyle::new(text, px, 0));
-    } else {
-        // Segment text by script: each contiguous run uses one font
-        let mut seg_start = 0;
-        let chars: Vec<char> = text.chars().collect();
-        let mut current_is_latin = !chars.is_empty() && fallback.lookup_glyph_index(chars[0]) != 0;
-        for (i, &ch) in chars.iter().enumerate().skip(1) {
-            let is_latin = fallback.lookup_glyph_index(ch) != 0;
-            if is_latin != current_is_latin {
-                // End current segment
-                let seg_text: String = chars[seg_start..i].iter().collect();
-                let fi = if current_is_latin { 1 } else { 0 };
-                layout.append(&fonts, &TextStyle::new(&seg_text, px, fi));
-                seg_start = i;
-                current_is_latin = is_latin;
-            }
-        }
-        // Final segment
-        if seg_start < chars.len() {
-            let seg_text: String = chars[seg_start..].iter().collect();
-            let fi = if current_is_latin { 1 } else { 0 };
-            layout.append(&fonts, &TextStyle::new(&seg_text, px, fi));
-        }
-    }
-
-    let glyphs = layout.glyphs();
-    if glyphs.is_empty() { return (vec![0u8; 4], 1, 1); }
-    let w = (glyphs.iter().map(|g| g.x + g.width as f32).max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap_or(1.0)).ceil() as u32;
-    let h = (glyphs.iter().map(|g| g.y + g.height as f32).max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap_or(1.0)).ceil() as u32;
-    let w = w.max(1); let h = h.max(1);
-    let mut buf = vec![0u8; (w * h * 4) as usize];
-
-    for g in glyphs {
-        let raster_font = &fonts[g.font_index];
-        let (metrics, bitmap) = raster_font.rasterize_config(g.key);
-        for row in 0..metrics.height {
-            for col in 0..metrics.width {
-                let sx = g.x as u32 + col as u32;
-                let sy = g.y as u32 + row as u32;
-                if sx < w && sy < h {
-                    let si = ((sy * w + sx) * 4) as usize;
-                    let bi = (row * metrics.width + col) as usize;
-                    if bi < bitmap.len() {
-                        buf[si] = 255; buf[si+1] = 255; buf[si+2] = 255; buf[si+3] = bitmap[bi];
-                    }
-                }
-            }
-        }
-    }
-    (buf, w, h)
-}
-
-// ── Helpers ──
+// ── helpers ──
 
 fn load_scenes(s: &mut State, d: &std::path::Path) {
     s.scenes.clear();
@@ -487,9 +564,8 @@ fn run_check(p: &std::path::Path) -> anyhow::Result<()> {
 }
 
 fn load_fonts(fonts_dir: std::path::PathBuf) -> anyhow::Result<(fontdue::Font, fontdue::Font)> {
-    // Load HanaMinA (primary, for layout + CJK) + MavenPro (fallback, for Latin style)
-    let mut primary: Option<fontdue::Font> = None;  // HanaMinA
-    let mut fallback: Option<fontdue::Font> = None; // MavenPro
+    let mut primary: Option<fontdue::Font> = None;
+    let mut fallback: Option<fontdue::Font> = None;
     if let Ok(e) = std::fs::read_dir(&fonts_dir) {
         for entry in e.flatten() {
             let p = entry.path();
@@ -528,14 +604,15 @@ fn load_fonts(fonts_dir: std::path::PathBuf) -> anyhow::Result<(fontdue::Font, f
     }
 }
 
-fn load_window_size(path: &std::path::Path) -> (u32, u32) {
-    if let Ok(data) = std::fs::read_to_string(path) {
+fn load_window_size(cfg_path: &std::path::Path) -> (u32, u32) {
+    if let Ok(data) = std::fs::read_to_string(cfg_path) {
         let parts: Vec<u32> = data.split_whitespace().filter_map(|s| s.parse().ok()).collect();
         if parts.len() == 2 { return (parts[0], parts[1]); }
     }
-    (2560, 1440) // default
+    (2560, 1440)
 }
 
-fn save_window_size(path: &std::path::Path, w: u32, h: u32) {
-    let _ = std::fs::write(path, format!("{} {}", w, h));
+fn save_window_size(cfg_path: &std::path::Path, w: u32, h: u32) {
+    let s = format!("{w} {h}");
+    let _ = std::fs::write(cfg_path, s);
 }

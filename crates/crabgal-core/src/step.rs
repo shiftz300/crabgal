@@ -115,6 +115,16 @@ pub fn step(state: &mut State) -> StepResult {
                 debug!("Set: {} = {:?}", name, value);
                 state.vars.insert(name.clone(), value.clone());
             }
+            Action::MiniAvatar { image } => {
+                debug!("MiniAvatar: {}", image);
+                state.mini_avatar = Some(image.clone());
+                state.mini_avatar_progress = 0.0;
+            }
+            Action::HideMiniAvatar => {
+                debug!("HideMiniAvatar");
+                state.mini_avatar = None;
+                state.mini_avatar_progress = 0.0;
+            }
         }
     }
 }

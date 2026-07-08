@@ -42,7 +42,6 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
     // Skip non-action commands
     if cmd.starts_with("unlock") || cmd.starts_with("setTransition")
         || cmd.starts_with("setAnimation") || cmd.starts_with("setTransform")
-        || cmd.starts_with("pixi") || cmd.starts_with("miniAvatar")
         || cmd.starts_with("getUserInput") || cmd.starts_with("setTextbox")
         || cmd.starts_with("playVideo") || cmd.starts_with("setTempAnimation")
         || cmd.starts_with("intro:") || cmd.starts_with("changeFigure:none")
@@ -69,6 +68,15 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
         if !image.is_empty() {
             return Some(Action::ShowBg { image, transition: Transition::Instant });
         }
+    }
+
+    // miniAvatar:file — show; miniAvatar:none — hide
+    if let Some(rest) = cmd.strip_prefix("miniAvatar:") {
+        let file = rest.split_whitespace().next().unwrap_or("").to_string();
+        if file == "none" || file.is_empty() {
+            return Some(Action::HideMiniAvatar);
+        }
+        return Some(Action::MiniAvatar { image: file });
     }
 
     // changeFigure:file -left|-right [flags]
