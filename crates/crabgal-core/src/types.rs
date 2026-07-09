@@ -86,3 +86,30 @@ pub enum Value {
     Str(String),
     Bool(bool),
 }
+
+/// Per-sprite transform applied on top of the base anchor position.
+/// Mirrors WebGAL's setTransform JSON fields.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpriteTransform {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub alpha: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub rotation: f32,
+    pub blur: f32,
+}
+
+impl Default for SpriteTransform {
+    fn default() -> Self {
+        Self {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            alpha: 1.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            rotation: 0.0,
+            blur: 0.0,
+        }
+    }
+}

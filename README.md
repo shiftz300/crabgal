@@ -100,4 +100,4 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking.
 
 ## Credits
 
-- [bevy_blur_regions](https://github.com/atbentley/bevy_blur_regions) by atbentley (forked as [bevy_blur_regions_fork](https://github.com/yaasin-raki2/bevy_blur_regions_fork) for Bevy 0.15 support) — GPU Gaussian blur post-processing for textbox background blur
+- GPU blur post-processing inspired by [bevy_blur_regions](https://github.com/atbentley/bevy_blur_regions) (atbentley) — design reference for separable Gaussian blur with region masking

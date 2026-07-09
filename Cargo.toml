@@ -2,17 +2,18 @@
 resolver = "2"
 members = [
     "crates/*",
-    "crabgal-cli",
 ]
 
-[patch.crates-io]
-ggez = { path = "../ggez" }
+# Disable icu_provider's debug eprintln! fallback in dev builds.
+# Without this, icu_provider prints "ICU4X data error: ..." to stderr
+# every frame when debug_assertions is enabled (dev profile default),
+# even with the "logging" feature disabled.
+[profile.dev.package.icu_provider]
+debug-assertions = false
 
 [workspace.dependencies]
 crabgal-core = { path = "crates/crabgal-core" }
 crabgal-script = { path = "crates/crabgal-script" }
-crabgal-render = { path = "crates/crabgal-render" }
-crabgal-ui = { path = "crates/crabgal-ui" }
 
 log = "0.4"
 anyhow = "1"
@@ -20,5 +21,3 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 notify = "7"
 nom = "7"
-image = { version = "0.25", features = ["webp"] }
-bevy = { version = "0.15", default-features = false }

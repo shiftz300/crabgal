@@ -1,0 +1,42 @@
+# crabgal game configuration
+title: "crabgal Demo"
+
+resolution:
+  width: 2560
+  height: 1440
+
+fonts:
+  cjk: "fonts/HanaMinA.ttf"
+  latin: "fonts/MavenPro.ttf"
+  icon: "fonts/MavenPro.ttf"
+  size: 44
+  speaker_size: 52.0
+  dialogue_size: 60.0
+  icon_size: 26.0
+  label_size: 24.0
+
+styles:
+  textbox_alpha: 0.72
+  text_color: "#ffffff"
+  name_color: "#ffcc80"
+  typewriter_speed: 45.0
+  auto_delay: 2.0
+
+layout:
+  anchor_offset: 40
+  sprite_height: 1100
+  textbox_left: 7.0
+  textbox_dodge_left: 10.0
+  textbox_bottom: 1.0
+  textbox_height: 22.0
+  namebar_bottom: 24.0
+
+# Asset name aliases (optional — falls back to direct file path)
+assets:
+  backgrounds:
+    bg: "background/bg.webp"
+    bg2: "background/bg2.jpg"
+  figures:
+    girl: "figure/stand.webp"
+    girl2: "figure/stand2.webp"
+    thinking: "figure/thinking.webp"

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::types::{Position, Transition, Value};
+use crate::types::{Position, Transition, Value, SpriteTransform};
 use crate::Action;
 
 /// The complete game state at any point in time.
@@ -62,6 +62,9 @@ pub struct Sprite {
     pub entering: bool,
     /// Rendered y-offset for vertical positioning.
     pub y_offset: f32,
+    /// Transform applied on top of base position (offset, alpha, scale, etc).
+    #[serde(default)]
+    pub transform: SpriteTransform,
 }
 
 /// Background transition state.

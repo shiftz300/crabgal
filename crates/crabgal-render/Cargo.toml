@@ -1,9 +1,0 @@
-[package]
-name = "crabgal-render"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-crabgal-core = { path = "../crabgal-core" }
-ggez = "0.10"
-fontdue = "0.9.3"

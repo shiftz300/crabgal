@@ -1,4 +1,7 @@
-# crabgal ECS 架构
+# crabgal ECS 架构（历史参考）
+
+> **注意：本文件描述的是早期自研 ECS 方案，现已改为使用 Bevy 0.19 完整 ECS。**
+> 当前架构见 [05-bevy-architecture.md](05-bevy-architecture.md)。
 
 ## 核心原则
 

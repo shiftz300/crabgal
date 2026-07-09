@@ -69,6 +69,15 @@ pub enum Action {
         name: String,
         value: Value,
     },
+
+    // ── Transform ──
+    /// Modify an existing sprite's transform (position offset, alpha, scale, etc).
+    SetTransform {
+        /// Target sprite id (e.g. "fig-center", "fig-left", or custom id).
+        id: String,
+        /// Transform fields to apply (partial — only non-default fields have effect).
+        transform: crate::types::SpriteTransform,
+    },
 }
 
 /// A single choice in a menu.

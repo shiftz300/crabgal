@@ -1,28 +1,36 @@
 // crabgal-bevy — Bevy VN engine
 mod components;
+mod game;
+mod locale;
 mod plugin;
+mod render;
 mod resources;
-mod systems;
+mod save;
+mod scene;
+mod ui;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use bevy::prelude::*;
 use bevy::asset::AssetPlugin;
+use bevy::asset::AssetMode;
+use bevy::camera::visibility::RenderLayers;
+use bevy::log::LogPlugin;
+use bevy::window::WindowResolution;
 
 use crabgal_core::config::GameConfig;
 use crabgal_core::step;
 use crabgal_core::Action;
 use crabgal_core::state::State;
 use crabgal_script::parser::parse_script;
-use bevy::core_pipeline::tonemapping::DebandDither;
-use bevy_blur_regions_fork::prelude::*;
+
+use render::blur::{BlurCamera, BlurPlugin};
 use resources::*;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dir = args.get(2).map(PathBuf::from).unwrap_or_default();
-    // Resolve to absolute — AssetPlugin needs it
     let dir = std::env::current_dir().unwrap_or_default().join(&dir);
     let config = GameConfig::load(&dir.join("config.yaml"));
     let assets_path = dir.join("assets");
@@ -30,34 +38,52 @@ fn main() {
     App::new()
         .add_plugins(
             DefaultPlugins
+                .build()
                 .set(AssetPlugin {
                     file_path: assets_path.to_string_lossy().into(),
+                    processed_file_path: dir.join("imported_assets").to_string_lossy().into(),
+                    mode: AssetMode::Processed,
                     ..default()
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: config.title.clone().into(),
-                        resolution: (1280.0, 720.0).into(),
+                        resolution: WindowResolution::new(1280, 720),
                         resizable: true,
                         ..default()
                     }),
                     ..default()
                 })
-                .set(ImagePlugin::default()),
+                .set(ImagePlugin::default())
+                .set(LogPlugin {
+                    filter: "info".into(),
+                    ..default()
+                }),
         )
         .add_plugins(plugin::GamePlugin)
-        .add_plugins(BlurRegionsPlugin::default())
+        .add_plugins(BlurPlugin)
         .insert_resource(ProjectDir(dir.clone()))
         .insert_resource(Cfg(config))
-        .insert_resource(TextureMap::default())
-        .add_systems(Startup, (setup, load_textures).chain())
+        .add_systems(Startup, (setup).chain())
         .run();
 }
 
 // ── Startup ──
 
 fn setup(mut commands: Commands, dir: Res<ProjectDir>) {
-    commands.spawn((Camera2d, BlurRegionsCamera::default(), DebandDither::Enabled));
+    // Camera 0: background + sprites (layer 0), with blur post-processing
+    commands.spawn((
+        Camera2d,
+        Camera { order: 0, ..default() },
+        RenderLayers::layer(0),
+        BlurCamera::default(),
+    ));
+    // Camera 1: textbox + control bar UI (layer 1), renders after blur
+    commands.spawn((
+        Camera2d,
+        Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+        RenderLayers::layer(1),
+    ));
 
     let sd = dir.0.join("scripts");
     let _ = std::fs::create_dir_all(&sd);
@@ -93,42 +119,6 @@ fn setup(mut commands: Commands, dir: Res<ProjectDir>) {
 
     commands.insert_resource(WatcherRx(std::sync::Mutex::new(wrx)));
     commands.insert_resource(AppState(Arc::new(RwLock::new(s))));
-}
-
-fn load_textures(
-    dir: Res<ProjectDir>,
-    asset_server: Res<AssetServer>,
-    mut texture_map: ResMut<TextureMap>,
-) {
-    // Load backgrounds
-    load_dir(&dir.0, "background", &asset_server, &mut texture_map.bg);
-    // Load figures
-    load_dir(&dir.0, "figure", &asset_server, &mut texture_map.sprites);
-}
-
-fn load_dir(
-    dir: &std::path::Path,
-    subdir: &str,
-    asset_server: &AssetServer,
-    list: &mut Vec<(String, TexInfo)>,
-) {
-    let path = dir.join("assets").join(subdir);
-    let entries = match std::fs::read_dir(&path) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if !matches!(ext, "png" | "webp" | "jpg" | "jpeg") {
-            continue;
-        }
-        let name = p.file_name().unwrap().to_string_lossy().to_string();
-        let relative = format!("{}/{}", subdir, name);
-        let handle: Handle<Image> = asset_server.load(&relative);
-        info!("Queued texture: {}", relative);
-        list.push((name, TexInfo { handle, width: 0, height: 0 }));
-    }
 }
 
 // ── Helpers ──

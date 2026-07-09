@@ -27,6 +27,59 @@ pub struct GameConfig {
     /// UI style overrides.
     #[serde(default)]
     pub styles: StyleConfig,
+
+    /// Layout settings (anchor offsets, dodge, etc).
+    #[serde(default)]
+    pub layout: LayoutConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutConfig {
+    /// Default offset from left/right screen edge for sprites (design px).
+    #[serde(default = "default_anchor_offset")]
+    pub anchor_offset: f32,
+    /// Height of standing sprites in design pixels.
+    #[serde(default = "default_sprite_height")]
+    pub sprite_height: f32,
+
+    // ── Textbox positioning (percent of 2560x1440 design area) ──
+    /// Textbox left edge when no dodge (%).
+    #[serde(default = "default_textbox_left")]
+    pub textbox_left: f32,
+    /// Textbox left edge when dodged (%).
+    #[serde(default = "default_textbox_dodge_left")]
+    pub textbox_dodge_left: f32,
+    /// Textbox distance from bottom (%).
+    #[serde(default = "default_textbox_bottom")]
+    pub textbox_bottom: f32,
+    /// Textbox height (%).
+    #[serde(default = "default_textbox_height")]
+    pub textbox_height: f32,
+    /// Name bar distance from bottom (%).
+    #[serde(default = "default_namebar_bottom")]
+    pub namebar_bottom: f32,
+}
+
+fn default_anchor_offset() -> f32 { 40.0 }
+fn default_sprite_height() -> f32 { 1100.0 }
+fn default_textbox_left() -> f32 { 7.0 }
+fn default_textbox_dodge_left() -> f32 { 10.0 }
+fn default_textbox_bottom() -> f32 { 1.0 }
+fn default_textbox_height() -> f32 { 22.0 }
+fn default_namebar_bottom() -> f32 { 24.0 }
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            anchor_offset: default_anchor_offset(),
+            sprite_height: default_sprite_height(),
+            textbox_left: default_textbox_left(),
+            textbox_dodge_left: default_textbox_dodge_left(),
+            textbox_bottom: default_textbox_bottom(),
+            textbox_height: default_textbox_height(),
+            namebar_bottom: default_namebar_bottom(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +111,24 @@ pub struct FontConfig {
     /// Default text size in design pixels.
     #[serde(default = "default_font_size")]
     pub size: f32,
+    /// Speaker name size (design px).
+    #[serde(default = "default_speaker_size")]
+    pub speaker_size: f32,
+    /// Dialogue text size (design px).
+    #[serde(default = "default_dialogue_size")]
+    pub dialogue_size: f32,
+    /// Control bar icon size (design px).
+    #[serde(default = "default_icon_size")]
+    pub icon_size: f32,
+    /// Control bar label size (design px).
+    #[serde(default = "default_label_size")]
+    pub label_size: f32,
 }
+
+fn default_speaker_size() -> f32 { 52.0 }
+fn default_dialogue_size() -> f32 { 60.0 }
+fn default_icon_size() -> f32 { 26.0 }
+fn default_label_size() -> f32 { 24.0 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StyleConfig {
@@ -123,6 +193,7 @@ impl Default for GameConfig {
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
             styles: StyleConfig::default(),
+            layout: LayoutConfig::default(),
         }
     }
 }
@@ -131,6 +202,10 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             size: default_font_size(),
+            speaker_size: default_speaker_size(),
+            dialogue_size: default_dialogue_size(),
+            icon_size: default_icon_size(),
+            label_size: default_label_size(),
         }
     }
 }

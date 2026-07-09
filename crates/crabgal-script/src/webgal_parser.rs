@@ -2,7 +2,7 @@
 // Convert WebGAL script format to crabgal Actions.
 
 use crabgal_core::action::{Action, Choice};
-use crabgal_core::types::{Position, Transition};
+use crabgal_core::types::{Position, Transition, SpriteTransform};
 
 pub fn parse_webgal(input: &str) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -41,13 +41,40 @@ pub fn parse_webgal(input: &str) -> Vec<Action> {
 fn parse_webgal_line(cmd: &str) -> Option<Action> {
     // Skip non-action commands
     if cmd.starts_with("unlock") || cmd.starts_with("setTransition")
-        || cmd.starts_with("setAnimation") || cmd.starts_with("setTransform")
+        || cmd.starts_with("setAnimation")
         || cmd.starts_with("getUserInput") || cmd.starts_with("setTextbox")
         || cmd.starts_with("playVideo") || cmd.starts_with("setTempAnimation")
         || cmd.starts_with("intro:") || cmd.starts_with("changeFigure:none")
         || cmd.starts_with("unlockBgm") || cmd.starts_with("unlockCg")
     {
         return None;
+    }
+
+    // setTransform:id x=100 y=0 alpha=0.5 ...
+    if let Some(rest) = cmd.strip_prefix("setTransform:") {
+        let mut id = String::new();
+        let mut t = SpriteTransform::default();
+        for part in rest.split_whitespace() {
+            if let Some((k, v)) = part.split_once('=') {
+                let val: f32 = v.parse().unwrap_or(0.0);
+                match k {
+                    "x" => t.offset_x = val,
+                    "y" => t.offset_y = val,
+                    "alpha" => t.alpha = val,
+                    "scale_x" => t.scale_x = val,
+                    "scale_y" => t.scale_y = val,
+                    "rotation" => t.rotation = val,
+                    "blur" => t.blur = val,
+                    "-target" | "target" => id = v.to_string(),
+                    _ => {}
+                }
+            } else if !part.starts_with('-') && id.is_empty() {
+                id = part.to_string();
+            }
+        }
+        if !id.is_empty() {
+            return Some(Action::SetTransform { id, transform: t });
+        }
     }
 
     // label:name

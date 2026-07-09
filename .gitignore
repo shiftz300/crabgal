@@ -2,6 +2,13 @@
 target/
 *.rs.bk
 
+# Bevy asset processor (generated)
+**/imported_assets/
+*.meta
+
+# Save files (runtime user data)
+saves/
+
 # IDE
 .idea/
 .vscode/
@@ -20,8 +27,3 @@ target/
 # Environment
 .env
 .env.local
-
-# Local dev data
-test-project/
-dev/test-project/
-dev/target/

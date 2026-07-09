@@ -8,7 +8,7 @@ use log::debug;
 
 use crate::action::Action;
 use crate::state::{BgTransition, Dialogue, Sprite, State};
-use crate::types::{Anchor, Transition};
+use crate::types::{Anchor, SpriteTransform, Transition};
 
 /// Result of a step() call.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +52,12 @@ pub fn step(state: &mut State) -> StepResult {
                     kind: *transition,
                 });
             }
+            Action::SetTransform { id, transform: t } => {
+                debug!("SetTransform: {} -> {:?}", id, t);
+                if let Some(sprite) = state.sprites.get_mut(id) {
+                    sprite.transform = *t;
+                }
+            }
             Action::ShowSprite { id, image, position, transition } => {
                 debug!("ShowSprite: {} {} at {:?}", id, image, position);
                 let x_offset = match (position.x, transition) {
@@ -66,6 +72,7 @@ pub fn step(state: &mut State) -> StepResult {
                     transition: *transition,
                     entering: true,
                     y_offset: x_offset,
+                    transform: SpriteTransform::default(),
                 });
             }
             Action::HideSprite { id, transition } => {
