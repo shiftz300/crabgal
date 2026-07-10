@@ -7,7 +7,7 @@
 
 ## 当前优先级
 
-1. **Choice UI** — `choose` 已能解析并让核心进入等待状态，但前端还没有选项面板，脚本会停住
+1. **Choice UI** — `choose` 已能解析并让核心进入等待状态；补齐响应式选项面板与鼠标/触控/键盘输入
 2. **SceneManager** — `changeScene/callScene/end`、场景栈和返回位置
 3. **WebGAL 公共语义** — typed args、`-when/-next/-notend`、变量插值和 parser 诊断
 4. **Backlog / 已读 / 回滚快照** — 先补核心状态，再实现 Backlog UI
@@ -32,7 +32,7 @@
 - [x] changeFigure — 基础立绘入场/退场（left/center/right）
 - [ ] changeFigure — 自定义 id/free figure/zIndex/blend/动画参数
 - [x] choose — 脚本解析、核心等待状态与分支跳转
-- [ ] choose — Bevy 选项面板、鼠标/键盘选择与恢复推进 **← NEXT**
+- [ ] choose — 响应式 Bevy 选项面板、鼠标/触控/键盘选择与恢复推进 **← NEXT**
 - [ ] choose — 场景/callScene 目标与条件显示/启用
 - [x] label / jumpLabel — 跳转
 - [ ] changeScene / callScene — 场景切换/调用
@@ -114,6 +114,9 @@
 - [ ] 资源预取、加载进度与按场景资源清单
 - [ ] 主题/自定义 UI/完整本地化
 - [ ] 编辑器预览同步 / Steam 集成
+- [ ] 统一 InputAction 层（鼠标、触控、键盘、手柄）
+- [ ] SafeArea、横竖屏和响应式 UI 断点
+- [ ] 桌面、Android、iOS、Web 编译矩阵与设备验收
 - [ ] .hxz 打包
 - [ ] macOS .app bundle
 - [ ] CI/CD
