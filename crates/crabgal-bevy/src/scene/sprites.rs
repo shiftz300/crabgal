@@ -1,131 +1,99 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
+use bevy::prelude::*;
+use crabgal_core::Anchor;
 
-use crate::components::*;
-use crate::resources::*;
+use crate::components::SpriteNode;
+use crate::resources::{GameConfigResource, GameState};
+use crate::viewport::DesignViewport;
 
-const DESIGN_W: f32 = 2560.0;
-const DESIGN_H: f32 = 1440.0;
-
-/// Sync character sprites with State.sprites via diff (no flicker).
+/// Synchronizes character sprites with the engine state via stable sprite IDs.
 pub fn sync_sprites(
-    state: Res<AppState>,
-    cfg: Res<Cfg>,
+    state: Res<GameState>,
+    config: Res<GameConfigResource>,
     asset_server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     mut commands: Commands,
     sprite_query: Query<(Entity, &SpriteNode)>,
     window_query: Query<&Window>,
 ) {
-    let s = state.0.read().unwrap();
-
-    let window = match window_query.single() {
-        Ok(w) => w,
-        Err(_) => return,
+    let Ok(window) = window_query.single() else {
+        return;
     };
-    let ww = window.width();
-    let wh = window.height();
-    let sc = (ww / DESIGN_W).min(wh / DESIGN_H);
-    let ox = (ww - DESIGN_W * sc) * 0.5;
-    let oy = (wh - DESIGN_H * sc) * 0.5;
+    let viewport = DesignViewport::from_window(window);
+    let desired_ids = state.sprites.keys().collect::<HashSet<_>>();
 
-    // Desired sprite IDs
-    let desired_ids: HashSet<&String> = s.sprites.keys().collect();
-
-    // Despawn sprites no longer in state
-    for (entity, node) in sprite_query.iter() {
+    for (entity, node) in &sprite_query {
         if !desired_ids.contains(&node.0) {
             commands.entity(entity).despawn();
         }
     }
 
-    // Existing sprite entities (id → entity)
-    let existing: std::collections::HashMap<&str, Entity> = sprite_query
+    let existing = sprite_query
         .iter()
-        .map(|(e, n)| (n.0.as_str(), e))
-        .collect();
+        .map(|(entity, node)| (node.0.as_str(), entity))
+        .collect::<HashMap<_, _>>();
+    let mut sprites = state.sprites.iter().collect::<Vec<_>>();
+    sprites.sort_by(|(_, left), (_, right)| left.position.y.total_cmp(&right.position.y));
 
-    // Collect and sort sprites by y (back to front)
-    let mut sorted: Vec<(&String, &crabgal_core::state::Sprite)> =
-        s.sprites.iter().collect();
-    sorted.sort_by(|(_, a), (_, b)| {
-        a.position
-            .y
-            .partial_cmp(&b.position.y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    for (i, (id, sprite_data)) in sorted.iter().enumerate() {
-        if sprite_data.transition_progress <= 0.0 && !sprite_data.entering {
-            continue;
-        }
-
-        let handle: Handle<Image> = asset_server.load(format!("figure/{}", sprite_data.image));
-
-        let y_offset = if sprite_data.entering {
-            (1.0 - sprite_data.transition_progress) * 50.0
-        } else {
-            sprite_data.transition_progress * 50.0
-        };
-
-        let alpha = (sprite_data.transition_progress * sprite_data.transform.alpha).clamp(0.0, 1.0);
-        let t = &sprite_data.transform;
-
-        // Design space → Bevy world.
-        // position.y = bottom of sprite (feet on ground).
-        // Sprite center = position.y + half height.
-        let sprite_h_ds = cfg.0.layout.sprite_height;
-        let edge_pad = cfg.0.layout.anchor_offset;
-
-        let aspect = images.get(&handle).map_or(0.7, |img| {
-            let s = img.size();
-            if s.y > 0 { s.x as f32 / s.y as f32 } else { 0.7 }
+    for (index, (id, data)) in sprites.into_iter().enumerate() {
+        let handle: Handle<Image> = asset_server.load(format!("figure/{}", data.image));
+        let texture_aspect = images.get(&handle).map_or(0.7, |image| {
+            let size = image.size();
+            if size.y == 0 {
+                0.7
+            } else {
+                size.x as f32 / size.y as f32
+            }
         });
-        let sprite_w_ds = sprite_h_ds * aspect * t.scale_x / t.scale_y;
 
-        // Anchor → design-space sprite CENTER.
-        // offset from script; edge_pad from config provides default breathing room.
-        use crabgal_core::Anchor;
-        let center_x_ds = match sprite_data.position.x {
-            Anchor::Left(o)   => o.max(edge_pad) + sprite_w_ds * 0.5,
-            Anchor::Center(o) => DESIGN_W * 0.5 + o,
-            Anchor::Right(o)  => DESIGN_W - o.max(edge_pad) - sprite_w_ds * 0.5,
+        let base_height = config.layout.sprite_height;
+        let base_width = base_height * texture_aspect;
+        let transform = data.transform;
+        let progress = data.transition_progress.clamp(0.0, 1.0);
+        let transition_x = (1.0 - progress) * data.transition_offset_x;
+        let alpha = (progress * transform.alpha).clamp(0.0, 1.0);
+        let width = base_width * transform.scale_x;
+
+        let center_x = match data.position.x {
+            Anchor::Left(offset) => offset.max(config.layout.anchor_offset) + width * 0.5,
+            Anchor::Center(offset) => crabgal_core::DESIGN_WIDTH * 0.5 + offset,
+            Anchor::Right(offset) => {
+                crabgal_core::DESIGN_WIDTH - offset.max(config.layout.anchor_offset) - width * 0.5
+            }
         };
-        let design_center_y = sprite_data.position.y + sprite_h_ds * 0.5 + y_offset;
-        let world_x = ox + (center_x_ds + t.offset_x) * sc - ww * 0.5;
-        let world_y = oy + (design_center_y + t.offset_y) * sc - wh * 0.5;
-        let z = 0.1 + (i as f32) * 0.01;
+        let center_y = data.position.y + base_height * 0.5;
+        let world_position = viewport.world_from_design(Vec2::new(
+            center_x + transform.offset_x + transition_x,
+            center_y + transform.offset_y,
+        ));
+        let z = 0.1 + index as f32 * 0.01;
 
-        let sprite_h = sprite_h_ds * sc * t.scale_y;
-        let sprite_w = sprite_w_ds * sc;
-        let rotation = t.rotation;
+        let sprite = Sprite {
+            image: handle,
+            custom_size: Some(Vec2::new(
+                width * viewport.scale,
+                base_height * transform.scale_y * viewport.scale,
+            )),
+            color: Color::srgba(1.0, 1.0, 1.0, alpha),
+            ..default()
+        };
+        let entity_transform = Transform::from_translation(world_position.extend(z))
+            .with_rotation(Quat::from_rotation_z(transform.rotation));
 
         if let Some(&entity) = existing.get(id.as_str()) {
-            commands.entity(entity).insert((
-                Sprite {
-                    image: handle.clone(),
-                    custom_size: Some(Vec2::new(sprite_w, sprite_h)),
-                    color: Color::srgba(1.0, 1.0, 1.0, alpha),
-                    ..default()
-                },
-                Transform::from_xyz(world_x, world_y, z).with_rotation(Quat::from_rotation_z(rotation)),
-                RenderLayers::layer(0),
-            ));
+            commands
+                .entity(entity)
+                .insert((sprite, entity_transform, RenderLayers::layer(0)));
         } else {
             commands.spawn((
-                Sprite {
-                    image: handle,
-                    custom_size: Some(Vec2::new(sprite_w, sprite_h)),
-                    color: Color::srgba(1.0, 1.0, 1.0, alpha),
-                    ..default()
-                },
-                Transform::from_xyz(world_x, world_y, z).with_rotation(Quat::from_rotation_z(rotation)),
-                SpriteNode((*id).clone()),
+                Name::new(format!("sprite::{id}")),
+                SpriteNode(id.clone()),
+                sprite,
+                entity_transform,
                 RenderLayers::layer(0),
             ));
         }
     }
 }
-

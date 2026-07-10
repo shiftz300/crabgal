@@ -13,8 +13,6 @@ use crate::types::{Anchor, SpriteTransform, Transition};
 /// Result of a step() call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepResult {
-    /// More actions executed, keep going.
-    Continue,
     /// Engine is waiting for the user to click (dialogue shown).
     AwaitClick,
     /// Engine is waiting for the user to choose (menu shown).
@@ -26,18 +24,15 @@ pub enum StepResult {
 /// Execute actions from the current cursor position until we hit
 /// an interactive point (Say or Menu) or end of scene.
 pub fn step(state: &mut State) -> StepResult {
-    let scene = state
-        .scenes
-        .get(&state.current_scene)
-        .cloned()
-        .unwrap_or_default();
-
     loop {
-        if state.cursor >= scene.len() {
+        let Some(action) = state
+            .scenes
+            .get(&state.current_scene)
+            .and_then(|scene| scene.get(state.cursor))
+            .cloned()
+        else {
             return StepResult::EndOfScene;
-        }
-
-        let action = &scene[state.cursor];
+        };
         state.cursor += 1;
 
         match action {
@@ -45,49 +40,68 @@ pub fn step(state: &mut State) -> StepResult {
                 debug!("ShowBg: {} ({:?})", image, transition);
                 let from = state.bg.take();
                 state.bg = Some(image.clone());
-                state.bg_transition = Some(BgTransition {
+                state.bg_transition = (transition != Transition::Instant).then_some(BgTransition {
                     from,
-                    to: image.clone(),
+                    to: image,
                     progress: 0.0,
-                    kind: *transition,
+                    kind: transition,
                 });
             }
             Action::SetTransform { id, transform: t } => {
                 debug!("SetTransform: {} -> {:?}", id, t);
-                if let Some(sprite) = state.sprites.get_mut(id) {
-                    sprite.transform = *t;
+                if let Some(sprite) = state.sprites.get_mut(&id) {
+                    sprite.transform = t;
                 }
             }
-            Action::ShowSprite { id, image, position, transition } => {
+            Action::ShowSprite {
+                id,
+                image,
+                position,
+                transition,
+            } => {
                 debug!("ShowSprite: {} {} at {:?}", id, image, position);
-                let x_offset = match (position.x, transition) {
+                let transition_offset_x = match (position.x, transition) {
                     (Anchor::Left(_), Transition::SlideFromLeft(_)) => -400.0,
                     (Anchor::Right(_), Transition::SlideFromRight(_)) => 400.0,
                     _ => 0.0,
                 };
-                state.sprites.insert(id.clone(), Sprite {
-                    image: image.clone(),
-                    position: *position,
-                    transition_progress: 0.0,
-                    transition: *transition,
-                    entering: true,
-                    y_offset: x_offset,
-                    transform: SpriteTransform::default(),
-                });
+                let transition_progress = if transition == Transition::Instant {
+                    1.0
+                } else {
+                    0.0
+                };
+                state.sprites.insert(
+                    id,
+                    Sprite {
+                        image,
+                        position,
+                        transition_progress,
+                        transition,
+                        entering: true,
+                        transition_offset_x,
+                        transform: SpriteTransform::default(),
+                    },
+                );
             }
             Action::HideSprite { id, transition } => {
                 debug!("HideSprite: {}", id);
-                if let Some(sprite) = state.sprites.get_mut(id) {
-                    sprite.transition = *transition;
+                if transition == Transition::Instant {
+                    state.sprites.remove(&id);
+                } else if let Some(sprite) = state.sprites.get_mut(&id) {
+                    sprite.transition = transition;
                     sprite.entering = false;
-                    sprite.transition_progress = 0.0;
+                    sprite.transition_offset_x = match transition {
+                        Transition::SlideFromLeft(_) => -400.0,
+                        Transition::SlideFromRight(_) => 400.0,
+                        _ => 0.0,
+                    };
                 }
             }
             Action::Say { speaker, text } => {
                 debug!("Say: {}: {}", speaker, text);
                 state.dialogue = Some(Dialogue {
-                    speaker: speaker.clone(),
-                    text: text.clone(),
+                    speaker,
+                    text,
                     visible_chars: 0,
                 });
                 state.menu = None;
@@ -95,12 +109,12 @@ pub fn step(state: &mut State) -> StepResult {
             }
             Action::Menu { prompt: _, choices } => {
                 debug!("Menu: {} choices", choices.len());
-                state.menu = Some(choices.clone());
+                state.menu = Some(choices);
                 state.dialogue = None;
                 return StepResult::AwaitChoice;
             }
             Action::Jump(label) => {
-                if let Some(&idx) = state.labels.get(label) {
+                if let Some(&idx) = state.labels.get(&label) {
                     debug!("Jump: {} -> {}", label, idx);
                     state.cursor = idx;
                 } else {
@@ -120,11 +134,11 @@ pub fn step(state: &mut State) -> StepResult {
             }
             Action::Set { name, value } => {
                 debug!("Set: {} = {:?}", name, value);
-                state.vars.insert(name.clone(), value.clone());
+                state.vars.insert(name, value);
             }
             Action::MiniAvatar { image } => {
                 debug!("MiniAvatar: {}", image);
-                state.mini_avatar = Some(image.clone());
+                state.mini_avatar = Some(image);
                 state.mini_avatar_progress = 0.0;
             }
             Action::HideMiniAvatar => {
@@ -143,29 +157,126 @@ pub fn advance(state: &mut State) {
 
 /// Handle user selecting a menu choice.
 pub fn select_choice(state: &mut State, index: usize) {
-    if let Some(choices) = &state.menu {
-        if let Some(choice) = choices.get(index) {
-            let target = choice.target.clone();
-            state.menu = None;
-            // Jump to the chosen label
-            if let Some(&idx) = state.labels.get(&target) {
-                state.cursor = idx;
-            }
-        }
+    let Some(target) = state
+        .menu
+        .as_ref()
+        .and_then(|choices| choices.get(index))
+        .map(|choice| choice.target.clone())
+    else {
+        return;
+    };
+
+    state.menu = None;
+    if let Some(&cursor) = state.labels.get(&target) {
+        state.cursor = cursor;
     }
 }
 
 /// Re-index labels for the current scene (called after script changes).
 pub fn index_labels(state: &mut State) {
     state.labels.clear();
-    let scene = state
-        .scenes
-        .get(&state.current_scene)
-        .cloned()
-        .unwrap_or_default();
+    let Some(scene) = state.scenes.get(&state.current_scene) else {
+        return;
+    };
     for (i, action) in scene.iter().enumerate() {
         if let Action::Label(name) = action {
             state.labels.insert(name.clone(), i);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::Choice;
+    use crate::types::Position;
+
+    fn state_with(actions: Vec<Action>) -> State {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.scenes.insert("main".into(), actions);
+        index_labels(&mut state);
+        state
+    }
+
+    #[test]
+    fn executes_until_dialogue() {
+        let mut state = state_with(vec![
+            Action::ShowBg {
+                image: "room.webp".into(),
+                transition: Transition::Instant,
+            },
+            Action::Say {
+                speaker: "A".into(),
+                text: "Hello".into(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.bg.as_deref(), Some("room.webp"));
+        assert_eq!(
+            state.dialogue.as_ref().map(|d| d.text.as_str()),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn jump_uses_precomputed_label_index() {
+        let mut state = state_with(vec![
+            Action::Jump("end".into()),
+            Action::Say {
+                speaker: "".into(),
+                text: "skip".into(),
+            },
+            Action::Label("end".into()),
+            Action::Say {
+                speaker: "".into(),
+                text: "done".into(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(
+            state.dialogue.as_ref().map(|d| d.text.as_str()),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn selecting_choice_moves_cursor_and_clears_menu() {
+        let mut state = state_with(vec![
+            Action::Menu {
+                prompt: String::new(),
+                choices: vec![Choice {
+                    text: "Go".into(),
+                    target: "next".into(),
+                }],
+            },
+            Action::Label("next".into()),
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitChoice);
+        select_choice(&mut state, 0);
+        assert!(state.menu.is_none());
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn instant_sprite_is_immediately_visible_and_removable() {
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "hero.webp".into(),
+                position: Position::center(0.0),
+                transition: Transition::Instant,
+            },
+            Action::HideSprite {
+                id: "hero".into(),
+                transition: Transition::Instant,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.sprites.contains_key("hero"));
     }
 }

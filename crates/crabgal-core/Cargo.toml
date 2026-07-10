@@ -1,11 +1,10 @@
 [package]
 name = "crabgal-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "crabgal VN engine core: State, Action, game loop"
 
 [dependencies]
 serde = { workspace = true }
 serde_yaml = "0.9"
-bincode = { workspace = true }
 log = { workspace = true }

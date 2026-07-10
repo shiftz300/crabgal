@@ -4,8 +4,10 @@ use bevy::prelude::*;
 
 use crate::ui::dialog::{DialogAction, DialogRequest};
 
-#[derive(Component)] pub(crate) struct ControlBarTop;
-#[derive(Component)] pub(crate) struct ControlBarBot;
+#[derive(Component)]
+pub(crate) struct ControlBarTop;
+#[derive(Component)]
+pub(crate) struct ControlBarBot;
 
 /// Identifies which button was clicked, attached to each Button entity at spawn.
 #[derive(Component, Clone, Copy, Debug)]
@@ -37,7 +39,11 @@ pub(crate) struct HoverAlpha {
 
 impl Default for HoverAlpha {
     fn default() -> Self {
-        Self { target: 0.0, current: 0.0, active: false }
+        Self {
+            target: 0.0,
+            current: 0.0,
+            active: false,
+        }
     }
 }
 
@@ -53,32 +59,86 @@ pub(crate) struct ToggleStates {
 
 impl Default for ToggleStates {
     fn default() -> Self {
-        Self { auto: false, skip: false, hide: false, lock: true }
+        Self {
+            auto: false,
+            skip: false,
+            hide: false,
+            lock: true,
+        }
     }
 }
 
-const fn icon(codepoint: u32) -> char {
-    char::from_u32(codepoint).expect("invalid icon codepoint")
+#[derive(Clone, Copy)]
+pub(crate) struct ControlItem {
+    pub icon: char,
+    pub label: &'static str,
+    pub action: ButtonAction,
 }
 
-// Top-right icon row
-pub(crate) const TOP_ICONS: &[(char, &str)] = &[
-    (icon(0xf3b9), "file-text"),
-    (icon(0xf116), "arrow-clockwise"),
-    (icon(0xf4f5), "play"),
-    (icon(0xf7f4), "fast-forward"),
-    (icon(0xf340), "eye-slash"),
-    (icon(0xf47b), "lock"),
+pub(crate) const TOP_ITEMS: &[ControlItem] = &[
+    ControlItem {
+        icon: '\u{f3b9}',
+        label: "file-text",
+        action: ButtonAction::Backlog,
+    },
+    ControlItem {
+        icon: '\u{f116}',
+        label: "arrow-clockwise",
+        action: ButtonAction::Replay,
+    },
+    ControlItem {
+        icon: '\u{f4f5}',
+        label: "play",
+        action: ButtonAction::Auto,
+    },
+    ControlItem {
+        icon: '\u{f7f4}',
+        label: "fast-forward",
+        action: ButtonAction::Skip,
+    },
+    ControlItem {
+        icon: '\u{f340}',
+        label: "eye-slash",
+        action: ButtonAction::Hide,
+    },
+    ControlItem {
+        icon: '\u{f47b}',
+        label: "lock",
+        action: ButtonAction::Lock,
+    },
 ];
 
-// Bottom quick menu
-pub(crate) const BOT_ITEMS: &[(char, &str)] = &[
-    (icon(0xf27e), crate::locale::menu::QSAVE),
-    (icon(0xf281), crate::locale::menu::QLOAD),
-    (icon(0xf7e4), crate::locale::menu::SAVE),
-    (icon(0xf3d8), crate::locale::menu::LOAD),
-    (icon(0xf789), crate::locale::menu::SYSTEM),
-    (icon(0xf425), crate::locale::menu::TITLE),
+pub(crate) const BOTTOM_ITEMS: &[ControlItem] = &[
+    ControlItem {
+        icon: '\u{f27e}',
+        label: crate::locale::menu::QSAVE,
+        action: ButtonAction::QuickSave,
+    },
+    ControlItem {
+        icon: '\u{f281}',
+        label: crate::locale::menu::QLOAD,
+        action: ButtonAction::QuickLoad,
+    },
+    ControlItem {
+        icon: '\u{f7e4}',
+        label: crate::locale::menu::SAVE,
+        action: ButtonAction::Save,
+    },
+    ControlItem {
+        icon: '\u{f3d8}',
+        label: crate::locale::menu::LOAD,
+        action: ButtonAction::Load,
+    },
+    ControlItem {
+        icon: '\u{f789}',
+        label: crate::locale::menu::SYSTEM,
+        action: ButtonAction::System,
+    },
+    ControlItem {
+        icon: '\u{f425}',
+        label: crate::locale::menu::TITLE,
+        action: ButtonAction::Title,
+    },
 ];
 
 // ── Interaction systems ──
@@ -101,10 +161,7 @@ pub fn set_hover_target(
 }
 
 /// Smoothly lerps hover alpha towards target, applying to BackgroundColor.
-pub fn animate_hover(
-    time: Res<Time>,
-    mut q: Query<(&mut HoverAlpha, &mut BackgroundColor)>,
-) {
+pub fn animate_hover(time: Res<Time>, mut q: Query<(&mut HoverAlpha, &mut BackgroundColor)>) {
     let speed = 12.0;
     for (mut ha, mut bg) in q.iter_mut() {
         ha.current += (ha.target - ha.current) * speed * time.delta_secs().min(1.0);
@@ -132,34 +189,40 @@ pub fn handle_button_click(
             continue;
         }
         match action {
-            ButtonAction::Auto => { toggles.auto = !toggles.auto; ha.active = toggles.auto; ha.target = if toggles.auto { 0.06 } else { 0.0 }; }
-            ButtonAction::Skip => { toggles.skip = !toggles.skip; ha.active = toggles.skip; ha.target = if toggles.skip { 0.06 } else { 0.0 }; }
-            ButtonAction::Hide => { toggles.hide = !toggles.hide; }
-            ButtonAction::Lock => { toggles.lock = !toggles.lock; }
+            ButtonAction::Auto => {
+                toggles.auto = !toggles.auto;
+                ha.active = toggles.auto;
+                ha.target = if toggles.auto { 0.06 } else { 0.0 };
+            }
+            ButtonAction::Skip => {
+                toggles.skip = !toggles.skip;
+                ha.active = toggles.skip;
+                ha.target = if toggles.skip { 0.06 } else { 0.0 };
+            }
+            ButtonAction::Hide => {
+                toggles.hide = !toggles.hide;
+            }
+            ButtonAction::Lock => {
+                toggles.lock = !toggles.lock;
+            }
 
             ButtonAction::QuickSave => {
-                commands.insert_resource(DialogRequest {
-                    title: crate::locale::dialog::QSAVE_TITLE.into(),
-                    left_text: crate::locale::dialog::CONFIRM.into(),
-                    right_text: crate::locale::dialog::CANCEL.into(),
-                    action: DialogAction::QuickSave,
-                });
+                commands.insert_resource(DialogRequest::confirmation(
+                    crate::locale::dialog::QSAVE_TITLE,
+                    DialogAction::QuickSave,
+                ));
             }
             ButtonAction::QuickLoad => {
-                commands.insert_resource(DialogRequest {
-                    title: crate::locale::dialog::QLOAD_TITLE.into(),
-                    left_text: crate::locale::dialog::CONFIRM.into(),
-                    right_text: crate::locale::dialog::CANCEL.into(),
-                    action: DialogAction::QuickLoad,
-                });
+                commands.insert_resource(DialogRequest::confirmation(
+                    crate::locale::dialog::QLOAD_TITLE,
+                    DialogAction::QuickLoad,
+                ));
             }
             ButtonAction::Title => {
-                commands.insert_resource(DialogRequest {
-                    title: crate::locale::dialog::TITLE_TITLE.into(),
-                    left_text: crate::locale::dialog::CONFIRM.into(),
-                    right_text: crate::locale::dialog::CANCEL.into(),
-                    action: DialogAction::BackToTitle,
-                });
+                commands.insert_resource(DialogRequest::confirmation(
+                    crate::locale::dialog::TITLE_TITLE,
+                    DialogAction::BackToTitle,
+                ));
             }
             _ => log::info!("[click] {:?}", action),
         }
@@ -192,7 +255,9 @@ pub(crate) struct HideContentText {
 }
 
 impl HideContentText {
-    pub fn new(base_alpha: f32) -> Self { Self { base_alpha } }
+    pub fn new(base_alpha: f32) -> Self {
+        Self { base_alpha }
+    }
 }
 
 /// Marks a background node whose alpha is modulated by the Hide toggle.
@@ -202,7 +267,9 @@ pub(crate) struct HideContentBg {
 }
 
 impl HideContentBg {
-    pub fn new(base_alpha: f32) -> Self { Self { base_alpha } }
+    pub fn new(base_alpha: f32) -> Self {
+        Self { base_alpha }
+    }
 }
 
 /// Tracks cursor inactivity and smooth alpha for control bar auto-hide.
@@ -222,7 +289,13 @@ pub(crate) struct AutoHideTiming {
 
 impl Default for AutoHideTiming {
     fn default() -> Self {
-        Self { last_move: 0.0, last_cursor: None, alpha: 1.0, hide_alpha: 1.0, hide_btn_alpha: 1.0 }
+        Self {
+            last_move: 0.0,
+            last_cursor: None,
+            alpha: 1.0,
+            hide_alpha: 1.0,
+            hide_btn_alpha: 1.0,
+        }
     }
 }
 
@@ -238,16 +311,16 @@ pub fn auto_hide_tick(
     if timing.last_move < 0.01 {
         timing.last_move = now;
     }
-    if let Ok(w) = win.single() {
-        if let Some(pos) = w.cursor_position() {
-            let moved = match timing.last_cursor {
-                Some(prev) => (prev - pos).length_squared() > 1.0,
-                None => true,
-            };
-            timing.last_cursor = Some(pos);
-            if moved {
-                timing.last_move = now;
-            }
+    if let Ok(w) = win.single()
+        && let Some(pos) = w.cursor_position()
+    {
+        let moved = match timing.last_cursor {
+            Some(prev) => (prev - pos).length_squared() > 1.0,
+            None => true,
+        };
+        timing.last_cursor = Some(pos);
+        if moved {
+            timing.last_move = now;
         }
     }
     let idle = now - timing.last_move;
@@ -279,8 +352,8 @@ pub(crate) struct LockIcon;
 #[derive(Component)]
 pub(crate) struct BlurSource;
 
-const LOCK_ICON: char = icon(0xf47b);
-const UNLOCK_ICON: char = icon(0xf600);
+const LOCK_ICON: char = '\u{f47b}';
+const UNLOCK_ICON: char = '\u{f600}';
 
 /// Applies the lerped alpha to all AutoHideText nodes.
 /// When hide is on: other buttons vanish immediately, hide button follows the 2.5s timer.
@@ -297,7 +370,11 @@ pub fn auto_hide_apply(
         tc.0 = tc.0.with_alpha(ht.base_alpha * normal_a);
     }
     // Hide button: when hide is ON, follows idle timer ignoring lock. Otherwise normal.
-    let hide_a = if toggles.hide { timing.hide_btn_alpha } else { a };
+    let hide_a = if toggles.hide {
+        timing.hide_btn_alpha
+    } else {
+        a
+    };
     for (mut tc, ht) in hide_btn_q.iter_mut() {
         tc.0 = tc.0.with_alpha(ht.base_alpha * hide_a);
     }
@@ -323,10 +400,7 @@ pub fn sync_toggle_highlights(
 }
 
 /// Swaps the lock icon between locked/unlocked when toggle state changes.
-pub fn update_lock_icon(
-    toggles: Res<ToggleStates>,
-    mut q: Query<&mut Text, With<LockIcon>>,
-) {
+pub fn update_lock_icon(toggles: Res<ToggleStates>, mut q: Query<&mut Text, With<LockIcon>>) {
     if !toggles.is_changed() {
         return;
     }
@@ -336,4 +410,3 @@ pub fn update_lock_icon(
         **text = s.clone();
     }
 }
-

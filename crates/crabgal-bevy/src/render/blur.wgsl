@@ -19,7 +19,7 @@ fn inside(pos: vec4<f32>) -> bool {
 }
 
 fn gaussian_blur(frag_coord: vec4<f32>, coc: f32, frag_offset: vec2<f32>) -> vec4<f32> {
-    let sigma = coc * 0.25;
+    let sigma = max(coc * 0.25, 0.001);
     let support = i32(ceil(sigma * 1.5));
     let uv = frag_coord.xy / vec2<f32>(textureDimensions(src));
     let offset = frag_offset / vec2<f32>(textureDimensions(src));

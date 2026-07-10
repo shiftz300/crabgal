@@ -20,4 +20,3 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 notify = "7"
-nom = "7"

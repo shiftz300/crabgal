@@ -1,5 +1,7 @@
 # 渲染管线
 
+> 历史设计草案。当前实现以 [05-bevy-architecture.md](05-bevy-architecture.md) 为准。
+
 借鉴 YU-RIS 延迟命令队列 + Ren'Py Displayable trait。
 
 ## 帧循环

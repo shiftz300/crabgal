@@ -1,2 +1,2 @@
-pub mod tick;
 pub mod resize;
+pub mod tick;

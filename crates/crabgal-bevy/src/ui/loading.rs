@@ -1,10 +1,18 @@
 // Loading screen — shown while assets are being loaded.
+use crate::render::blur::UiBlurCamera;
 use bevy::prelude::*;
 
 #[derive(Component)]
 pub(crate) struct LoadingText;
 
-pub fn setup_loading(mut commands: Commands, asset_server: Res<AssetServer>) {
+pub fn setup_loading(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    ui_camera_q: Query<Entity, With<UiBlurCamera>>,
+) {
+    let Ok(ui_camera) = ui_camera_q.single() else {
+        return;
+    };
     let font: Handle<Font> = asset_server.load("fonts/MavenPro-CJK.ttf");
     commands.spawn((
         Name::new("loading"),
@@ -23,12 +31,11 @@ pub fn setup_loading(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         },
         ZIndex(200),
+        UiTargetCamera(ui_camera),
     ));
 }
 
-pub fn update_loading(
-    mut query: Query<(Entity, &mut Visibility), With<LoadingText>>,
-) {
+pub fn update_loading(mut query: Query<(Entity, &mut Visibility), With<LoadingText>>) {
     // With lazy loading, hide loading indicator immediately
     for (_entity, mut vis) in query.iter_mut() {
         *vis = Visibility::Hidden;

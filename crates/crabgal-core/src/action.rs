@@ -25,17 +25,11 @@ pub enum Action {
         transition: Transition,
     },
     /// Remove a sprite.
-    HideSprite {
-        id: String,
-        transition: Transition,
-    },
+    HideSprite { id: String, transition: Transition },
 
     // ── Dialogue ──
     /// Display dialogue text (triggers click-to-continue).
-    Say {
-        speaker: String,
-        text: String,
-    },
+    Say { speaker: String, text: String },
 
     // ── Choice ──
     /// Show a choice menu (triggers click-to-choose).
@@ -52,10 +46,7 @@ pub enum Action {
 
     // ── Audio (stub for now) ──
     /// Play background music.
-    Bgm {
-        file: String,
-        volume: f32,
-    },
+    Bgm { file: String, volume: f32 },
     /// Stop background music.
     StopBgm,
 
@@ -65,10 +56,7 @@ pub enum Action {
     /// Hide the mini avatar.
     HideMiniAvatar,
     /// Set a variable.
-    Set {
-        name: String,
-        value: Value,
-    },
+    Set { name: String, value: Value },
 
     // ── Transform ──
     /// Modify an existing sprite's transform (position offset, alpha, scale, etc).
@@ -84,5 +72,5 @@ pub enum Action {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Choice {
     pub text: String,
-    pub target: String,  // label name to jump to
+    pub target: String,
 }

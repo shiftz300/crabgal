@@ -2,8 +2,10 @@
 // Inspired by Raven's MainConfig pattern.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
+use std::{collections::HashMap, fs};
+
+use crate::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 /// Top-level game configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,13 +62,27 @@ pub struct LayoutConfig {
     pub namebar_bottom: f32,
 }
 
-fn default_anchor_offset() -> f32 { 40.0 }
-fn default_sprite_height() -> f32 { 1100.0 }
-fn default_textbox_left() -> f32 { 7.0 }
-fn default_textbox_dodge_left() -> f32 { 10.0 }
-fn default_textbox_bottom() -> f32 { 1.0 }
-fn default_textbox_height() -> f32 { 22.0 }
-fn default_namebar_bottom() -> f32 { 24.0 }
+fn default_anchor_offset() -> f32 {
+    40.0
+}
+fn default_sprite_height() -> f32 {
+    1100.0
+}
+fn default_textbox_left() -> f32 {
+    7.0
+}
+fn default_textbox_dodge_left() -> f32 {
+    10.0
+}
+fn default_textbox_bottom() -> f32 {
+    1.0
+}
+fn default_textbox_height() -> f32 {
+    22.0
+}
+fn default_namebar_bottom() -> f32 {
+    24.0
+}
 
 impl Default for LayoutConfig {
     fn default() -> Self {
@@ -125,10 +141,18 @@ pub struct FontConfig {
     pub label_size: f32,
 }
 
-fn default_speaker_size() -> f32 { 52.0 }
-fn default_dialogue_size() -> f32 { 60.0 }
-fn default_icon_size() -> f32 { 26.0 }
-fn default_label_size() -> f32 { 24.0 }
+fn default_speaker_size() -> f32 {
+    52.0
+}
+fn default_dialogue_size() -> f32 {
+    60.0
+}
+fn default_icon_size() -> f32 {
+    26.0
+}
+fn default_label_size() -> f32 {
+    24.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StyleConfig {
@@ -156,15 +180,15 @@ fn default_title() -> String {
 }
 fn default_resolution() -> Resolution {
     Resolution {
-        width: 2560.0,
-        height: 1440.0,
+        width: DESIGN_WIDTH,
+        height: DESIGN_HEIGHT,
     }
 }
 fn default_w() -> f32 {
-    2560.0
+    DESIGN_WIDTH
 }
 fn default_h() -> f32 {
-    1440.0
+    DESIGN_HEIGHT
 }
 fn default_font_size() -> f32 {
     44.0
@@ -225,10 +249,16 @@ impl Default for StyleConfig {
 impl GameConfig {
     /// Load from a YAML file, falling back to defaults.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(yaml) => serde_yaml::from_str(&yaml).unwrap_or_default(),
-            Err(_) => {
-                log::warn!("No config.yaml found at {:?}, using defaults", path);
+        match fs::read_to_string(path) {
+            Ok(yaml) => serde_yaml::from_str(&yaml).unwrap_or_else(|error| {
+                log::error!("invalid config {}: {error}; using defaults", path.display());
+                Self::default()
+            }),
+            Err(error) => {
+                log::warn!(
+                    "failed to read config {}: {error}; using defaults",
+                    path.display()
+                );
                 Self::default()
             }
         }

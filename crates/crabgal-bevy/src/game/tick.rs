@@ -1,31 +1,84 @@
-use bevy::prelude::*;
-use crabgal_core::step;
+use std::path::Path;
 
-use crate::resources::*;
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
+use crabgal_core::State;
+use crabgal_core::step;
+use crabgal_script::load_scenes;
+
+use crate::resources::{GameConfigResource, GameState, ProjectRoot, ScriptWatcherResource};
 use crate::ui::control_bar::{ButtonAction, ToggleStates};
 use crate::ui::dialog::DialogRequest;
 
-/// Main tick: input handling, step engine, animation updates.
-/// Reads ToggleStates for auto/skip/hide/lock; keyboard shortcuts sync back.
-pub fn tick(
-    time: Res<Time>,
-    state: Res<AppState>,
-    cfg: Res<Cfg>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    watcher_rx: Res<WatcherRx>,
-    mut toggles: ResMut<ToggleStates>,
-    button_q: Query<(&Interaction, Option<&ButtonAction>), With<Button>>,
-    dialog: Option<Res<DialogRequest>>,
-    mut last_dialogue_hash: Local<u64>,
-    mut auto_timer: Local<f64>,
+#[derive(Default)]
+struct TypewriterClock {
+    scene: String,
+    cursor: usize,
+    fractional_chars: f64,
+}
+
+#[derive(SystemParam)]
+pub struct TickContext<'w, 's> {
+    time: Res<'w, Time>,
+    state: ResMut<'w, GameState>,
+    config: Res<'w, GameConfigResource>,
+    project_root: Res<'w, ProjectRoot>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    mouse: Res<'w, ButtonInput<MouseButton>>,
+    watcher: Option<Res<'w, ScriptWatcherResource>>,
+    toggles: ResMut<'w, ToggleStates>,
+    buttons: Query<'w, 's, (&'static Interaction, Option<&'static ButtonAction>), With<Button>>,
+    dialog: Option<Res<'w, DialogRequest>>,
+    auto_timer: Local<'s, f64>,
+    typewriter_clock: Local<'s, TypewriterClock>,
+}
+
+/// Advances input, text timing, script hot reload, and transition state.
+pub fn tick(mut context: TickContext) {
+    let delta_seconds = context.time.delta_secs_f64();
+    update_toggle_shortcuts(&context.keys, &mut context.toggles, &mut context.auto_timer);
+    reload_scripts_if_changed(&context.watcher, &context.project_root, &mut context.state);
+
+    if context.toggles.skip {
+        skip_once(&mut context.state);
+        update_transitions(&mut context.state, delta_seconds as f32);
+        return;
+    }
+
+    update_typewriter(
+        &mut context.state,
+        delta_seconds,
+        context.config.styles.typewriter_speed,
+        &mut context.typewriter_clock,
+    );
+    update_auto_mode(
+        &mut context.state,
+        context.toggles.auto,
+        delta_seconds,
+        context.config.styles.auto_delay,
+        &mut context.auto_timer,
+    );
+
+    if context.dialog.is_none()
+        && advance_requested(
+            &context.keys,
+            &context.mouse,
+            &context.buttons,
+            context.toggles.hide,
+        )
+    {
+        advance_once(&mut context.state);
+        *context.auto_timer = 0.0;
+    }
+
+    update_transitions(&mut context.state, delta_seconds as f32);
+}
+
+fn update_toggle_shortcuts(
+    keys: &ButtonInput<KeyCode>,
+    toggles: &mut ToggleStates,
+    auto_timer: &mut f64,
 ) {
-    use std::hash::{Hash, Hasher};
-
-    let dt = time.delta_secs_f64();
-    let mut s = state.0.write().unwrap();
-
-    // Keyboard shortcuts — sync to ToggleStates (source of truth)
     if keys.just_pressed(KeyCode::ControlLeft) || keys.just_pressed(KeyCode::ControlRight) {
         toggles.skip = true;
     }
@@ -39,120 +92,204 @@ pub fn tick(
     if keys.just_pressed(KeyCode::KeyS) {
         toggles.skip = !toggles.skip;
     }
+}
 
-    // Hot reload via watcher try_recv
-    let rx = watcher_rx.0.lock().unwrap();
-    if let Ok(_path) = rx.try_recv() {
-        log::info!("Script changed, reloading...");
-    }
-    drop(rx);
-
-    // Skip mode: instant advance through text
-    if toggles.skip {
-        if let Some(ref d) = s.dialogue {
-            if d.visible_chars < d.text.chars().count() {
-                s.dialogue.as_mut().unwrap().visible_chars = d.text.chars().count();
-            } else {
-                step::advance(&mut s);
-            }
-        } else {
-            step::advance(&mut s);
-        }
-        step::step(&mut s);
+fn reload_scripts_if_changed(
+    watcher: &Option<Res<ScriptWatcherResource>>,
+    project_root: &Path,
+    state: &mut State,
+) {
+    let Some(watcher) = watcher else {
+        return;
+    };
+    let Ok(watcher) = watcher.0.lock() else {
+        log::error!("script watcher lock is poisoned");
+        return;
+    };
+    let changes = watcher.drain();
+    if changes.is_empty() {
         return;
     }
 
-    // Detect new dialogue (reset typewriter tracking)
-    let current_hash = s.dialogue.as_ref().map(|d| {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        d.speaker.hash(&mut h);
-        d.text.hash(&mut h);
-        h.finish()
-    }).unwrap_or(0);
+    let script_dir = project_root.join("scripts");
+    let Ok(scenes) = load_scenes(&script_dir) else {
+        log::error!("failed to reload scripts from {}", script_dir.display());
+        return;
+    };
+    state.scenes = scenes
+        .into_iter()
+        .map(|scene| (scene.name, scene.actions))
+        .collect();
 
-    if current_hash != *last_dialogue_hash {
-        *last_dialogue_hash = current_hash;
+    if !state.scenes.contains_key(&state.current_scene) {
+        state.current_scene = state.scenes.keys().min().cloned().unwrap_or_default();
+        state.cursor = 0;
+    } else if let Some(scene) = state.scenes.get(&state.current_scene) {
+        state.cursor = state.cursor.min(scene.len());
     }
+    step::index_labels(state);
+    log::info!("reloaded {} changed script file(s)", changes.len());
+}
 
-    // Typewriter: advance visible_chars
-    if let Some(ref d) = s.dialogue {
-        let target = d.text.chars().count();
-        if d.visible_chars < target {
-            let speed = cfg.0.styles.typewriter_speed;
-            let new = (d.visible_chars as f64 + dt * speed).ceil() as usize;
-            s.dialogue.as_mut().unwrap().visible_chars = new.min(target);
+fn skip_once(state: &mut State) {
+    if let Some(dialogue) = &mut state.dialogue {
+        let target = dialogue.text.chars().count();
+        if dialogue.visible_chars < target {
+            dialogue.visible_chars = target;
+            return;
         }
+        step::advance(state);
+    }
+    step::step(state);
+}
+
+fn update_typewriter(
+    state: &mut State,
+    delta_seconds: f64,
+    chars_per_second: f64,
+    clock: &mut TypewriterClock,
+) {
+    if clock.scene != state.current_scene || clock.cursor != state.cursor {
+        clock.scene.clone_from(&state.current_scene);
+        clock.cursor = state.cursor;
+        clock.fractional_chars = 0.0;
     }
 
-    // Auto mode timer
-    if toggles.auto {
-        if let Some(ref d) = s.dialogue {
-            let target = d.text.chars().count();
-            if d.visible_chars >= target {
-                *auto_timer += dt;
-                if *auto_timer > cfg.0.styles.auto_delay {
-                    *auto_timer = 0.0;
-                    step::advance(&mut s);
-                    step::step(&mut s);
-                }
-            }
-        } else {
-            *auto_timer += dt;
-            if *auto_timer > cfg.0.styles.auto_delay {
-                *auto_timer = 0.0;
-                step::step(&mut s);
-            }
-        }
-    } else {
-        *auto_timer = 0.0;
-    }
-
-    // Click handling: skip when dialog is open or UI button is pressed
-    if dialog.is_none() {
-        let click = keys.just_pressed(KeyCode::Space)
-            || keys.just_pressed(KeyCode::Enter)
-            || (mouse.just_pressed(MouseButton::Left)
-                && !button_q.iter().any(|(i, a)| {
-                    matches!(i, Interaction::Pressed)
-                        && !(toggles.hide && !matches!(a, Some(ButtonAction::Hide)))
-                }));
-
-        if click {
-            if let Some(ref d) = s.dialogue {
-                let target = d.text.chars().count();
-                if d.visible_chars < target {
-                    s.dialogue.as_mut().unwrap().visible_chars = target;
-                } else {
-                    step::advance(&mut s);
-                    step::step(&mut s);
-                }
-            } else {
-                step::step(&mut s);
-            }
-            *auto_timer = 0.0;
-        }
-    }
-
-    // Update sprite transition progress
-    for (_, sprite) in s.sprites.iter_mut() {
-        let speed = 3.0;
-        if sprite.entering {
-            sprite.transition_progress = (sprite.transition_progress + dt as f32 * speed).min(1.0);
-        } else {
-            sprite.transition_progress = (sprite.transition_progress - dt as f32 * speed).max(0.0);
-        }
-    }
-
-    // Update bg transition
-    if let Some(ref mut t) = s.bg_transition {
-        t.progress = (t.progress + dt as f32 * 4.0).min(1.0);
-    }
-
-    // Update mini avatar progress
-    if s.mini_avatar.is_some() {
-        s.mini_avatar_progress = (s.mini_avatar_progress + dt as f32 * 3.0).min(1.0);
-    } else {
-        s.mini_avatar_progress = (s.mini_avatar_progress - dt as f32 * 3.0).max(0.0);
+    let Some(dialogue) = &mut state.dialogue else {
+        clock.fractional_chars = 0.0;
+        return;
+    };
+    let target = dialogue.text.chars().count();
+    if dialogue.visible_chars < target {
+        let exact_chars = clock.fractional_chars + delta_seconds * chars_per_second.max(0.0);
+        let added = exact_chars.floor() as usize;
+        clock.fractional_chars = exact_chars.fract();
+        dialogue.visible_chars = (dialogue.visible_chars + added).min(target);
     }
 }
 
+fn update_auto_mode(
+    state: &mut State,
+    enabled: bool,
+    delta_seconds: f64,
+    delay: f64,
+    timer: &mut f64,
+) {
+    if !enabled {
+        *timer = 0.0;
+        return;
+    }
+
+    let ready = state
+        .dialogue
+        .as_ref()
+        .is_none_or(|dialogue| dialogue.visible_chars >= dialogue.text.chars().count());
+    if !ready {
+        *timer = 0.0;
+        return;
+    }
+
+    *timer += delta_seconds;
+    if *timer >= delay {
+        *timer = 0.0;
+        if state.dialogue.is_some() {
+            step::advance(state);
+        }
+        step::step(state);
+    }
+}
+
+fn advance_requested(
+    keys: &ButtonInput<KeyCode>,
+    mouse: &ButtonInput<MouseButton>,
+    buttons: &Query<(&Interaction, Option<&ButtonAction>), With<Button>>,
+    content_hidden: bool,
+) -> bool {
+    if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
+        return true;
+    }
+    if !mouse.just_pressed(MouseButton::Left) {
+        return false;
+    }
+
+    !buttons.iter().any(|(interaction, action)| {
+        matches!(interaction, Interaction::Pressed)
+            && (!content_hidden || matches!(action, Some(ButtonAction::Hide)))
+    })
+}
+
+fn advance_once(state: &mut State) {
+    if let Some(dialogue) = &mut state.dialogue {
+        let target = dialogue.text.chars().count();
+        if dialogue.visible_chars < target {
+            dialogue.visible_chars = target;
+            return;
+        }
+        step::advance(state);
+    }
+    step::step(state);
+}
+
+fn update_transitions(state: &mut State, delta_seconds: f32) {
+    for sprite in state.sprites.values_mut() {
+        let delta = sprite
+            .transition
+            .duration()
+            .map_or(1.0, |duration| delta_seconds / duration.max(f32::EPSILON));
+        if sprite.entering {
+            sprite.transition_progress = (sprite.transition_progress + delta).min(1.0);
+        } else {
+            sprite.transition_progress = (sprite.transition_progress - delta).max(0.0);
+        }
+    }
+    state
+        .sprites
+        .retain(|_, sprite| sprite.entering || sprite.transition_progress > 0.0);
+
+    let transition_finished = if let Some(transition) = &mut state.bg_transition {
+        let delta = transition
+            .kind
+            .duration()
+            .map_or(1.0, |duration| delta_seconds / duration.max(f32::EPSILON));
+        transition.progress = (transition.progress + delta).min(1.0);
+        transition.progress >= 1.0
+    } else {
+        false
+    };
+    if transition_finished {
+        state.bg_transition = None;
+    }
+
+    let avatar_delta = delta_seconds * 3.0;
+    if state.mini_avatar.is_some() {
+        state.mini_avatar_progress = (state.mini_avatar_progress + avatar_delta).min(1.0);
+    } else {
+        state.mini_avatar_progress = (state.mini_avatar_progress - avatar_delta).max(0.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crabgal_core::state::Dialogue;
+
+    use super::*;
+
+    #[test]
+    fn typewriter_preserves_fractional_progress() {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.cursor = 1;
+        state.dialogue = Some(Dialogue {
+            speaker: String::new(),
+            text: "abcdefghij".into(),
+            visible_chars: 0,
+        });
+        let mut clock = TypewriterClock::default();
+
+        for _ in 0..4 {
+            update_typewriter(&mut state, 0.05, 10.0, &mut clock);
+        }
+
+        assert_eq!(state.dialogue.unwrap().visible_chars, 2);
+    }
+}

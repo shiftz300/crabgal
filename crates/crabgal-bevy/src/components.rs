@@ -1,8 +1,16 @@
 use bevy::prelude::*;
 
-/// Marker for background entities
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BackgroundLayer {
+    Previous,
+    Current,
+}
+
 #[derive(Component)]
-pub struct Bg;
+pub struct BackgroundNode {
+    pub layer: BackgroundLayer,
+    pub image: String,
+}
 
 /// Marker for sprite entities with stable ID for diff-based sync
 #[derive(Component)]

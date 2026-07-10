@@ -6,11 +6,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::types::{Position, Transition, Value, SpriteTransform};
 use crate::Action;
+use crate::types::{Position, SpriteTransform, Transition, Value};
 
 /// The complete game state at any point in time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct State {
     // ── Script execution ──
     /// All parsed actions across all scenes, keyed by scene name.
@@ -48,7 +48,7 @@ pub struct State {
 }
 
 /// A sprite displayed on screen.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sprite {
     /// Asset path.
     pub image: String,
@@ -60,15 +60,17 @@ pub struct Sprite {
     pub transition: Transition,
     /// Whether this sprite is entering (true) or exiting (false).
     pub entering: bool,
-    /// Rendered y-offset for vertical positioning.
-    pub y_offset: f32,
+    /// Horizontal offset at the start of a slide transition.
+    ///
+    /// This field keeps its original serialization position for save compatibility.
+    pub transition_offset_x: f32,
     /// Transform applied on top of base position (offset, alpha, scale, etc).
     #[serde(default)]
     pub transform: SpriteTransform,
 }
 
 /// Background transition state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BgTransition {
     /// Previous background path (for crossfade).
     pub from: Option<String>,
@@ -81,7 +83,7 @@ pub struct BgTransition {
 }
 
 /// Current dialogue being displayed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dialogue {
     /// Speaker name.
     pub speaker: String,
@@ -93,25 +95,6 @@ pub struct Dialogue {
 
 impl State {
     pub fn new() -> Self {
-        Self {
-            scenes: HashMap::new(),
-            current_scene: String::new(),
-            cursor: 0,
-            bg: None,
-            bg_transition: None,
-            sprites: HashMap::new(),
-            dialogue: None,
-            mini_avatar: None,
-            mini_avatar_progress: 0.0,
-            menu: None,
-            vars: HashMap::new(),
-            labels: HashMap::new(),
-        }
-    }
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }

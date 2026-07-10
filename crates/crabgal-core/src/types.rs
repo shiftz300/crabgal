@@ -37,13 +37,22 @@ pub struct Position {
 
 impl Position {
     pub fn left(y: f32) -> Self {
-        Self { x: Anchor::Left(0.0), y }
+        Self {
+            x: Anchor::Left(0.0),
+            y,
+        }
     }
     pub fn right(y: f32) -> Self {
-        Self { x: Anchor::Right(0.0), y }
+        Self {
+            x: Anchor::Right(0.0),
+            y,
+        }
     }
     pub fn center(y: f32) -> Self {
-        Self { x: Anchor::Center(0.0), y }
+        Self {
+            x: Anchor::Center(0.0),
+            y,
+        }
     }
 }
 
@@ -63,6 +72,18 @@ pub enum Transition {
     Crossfade(f32),
 }
 
+impl Transition {
+    pub const fn duration(self) -> Option<f32> {
+        match self {
+            Self::Instant => None,
+            Self::Fade(duration)
+            | Self::SlideFromLeft(duration)
+            | Self::SlideFromRight(duration)
+            | Self::Crossfade(duration) => Some(duration),
+        }
+    }
+}
+
 /// A color with alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rgba {
@@ -73,9 +94,21 @@ pub struct Rgba {
 }
 
 impl Rgba {
-    pub const WHITE: Self = Self { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-    pub const BLACK: Self = Self { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-    pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self { Self { r, g, b, a } }
+    pub const WHITE: Self = Self {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    pub const BLACK: Self = Self {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a }
+    }
 }
 
 /// Game variable value.

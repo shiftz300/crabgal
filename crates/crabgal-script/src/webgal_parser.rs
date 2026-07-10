@@ -2,7 +2,7 @@
 // Convert WebGAL script format to crabgal Actions.
 
 use crabgal_core::action::{Action, Choice};
-use crabgal_core::types::{Position, Transition, SpriteTransform};
+use crabgal_core::types::{Position, SpriteTransform, Transition};
 
 pub fn parse_webgal(input: &str) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -40,12 +40,16 @@ pub fn parse_webgal(input: &str) -> Vec<Action> {
 
 fn parse_webgal_line(cmd: &str) -> Option<Action> {
     // Skip non-action commands
-    if cmd.starts_with("unlock") || cmd.starts_with("setTransition")
+    if cmd.starts_with("unlock")
+        || cmd.starts_with("setTransition")
         || cmd.starts_with("setAnimation")
-        || cmd.starts_with("getUserInput") || cmd.starts_with("setTextbox")
-        || cmd.starts_with("playVideo") || cmd.starts_with("setTempAnimation")
-        || cmd.starts_with("intro:") || cmd.starts_with("changeFigure:none")
-        || cmd.starts_with("unlockBgm") || cmd.starts_with("unlockCg")
+        || cmd.starts_with("getUserInput")
+        || cmd.starts_with("setTextbox")
+        || cmd.starts_with("playVideo")
+        || cmd.starts_with("setTempAnimation")
+        || cmd.starts_with("intro:")
+        || cmd.starts_with("unlockBgm")
+        || cmd.starts_with("unlockCg")
     {
         return None;
     }
@@ -56,16 +60,15 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
         let mut t = SpriteTransform::default();
         for part in rest.split_whitespace() {
             if let Some((k, v)) = part.split_once('=') {
-                let val: f32 = v.parse().unwrap_or(0.0);
                 match k {
-                    "x" => t.offset_x = val,
-                    "y" => t.offset_y = val,
-                    "alpha" => t.alpha = val,
-                    "scale_x" => t.scale_x = val,
-                    "scale_y" => t.scale_y = val,
-                    "rotation" => t.rotation = val,
-                    "blur" => t.blur = val,
                     "-target" | "target" => id = v.to_string(),
+                    "x" => t.offset_x = parse_number(v, "x"),
+                    "y" => t.offset_y = parse_number(v, "y"),
+                    "alpha" => t.alpha = parse_number(v, "alpha"),
+                    "scale_x" => t.scale_x = parse_number(v, "scale_x"),
+                    "scale_y" => t.scale_y = parse_number(v, "scale_y"),
+                    "rotation" => t.rotation = parse_number(v, "rotation"),
+                    "blur" => t.blur = parse_number(v, "blur"),
                     _ => {}
                 }
             } else if !part.starts_with('-') && id.is_empty() {
@@ -85,15 +88,24 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
     // jumpLabel:target
     if let Some(target) = cmd.strip_prefix("jumpLabel:") {
         let t = target.trim();
-        if !t.is_empty() { return Some(Action::Jump(t.to_string())); }
+        if !t.is_empty() {
+            return Some(Action::Jump(t.to_string()));
+        }
     }
 
     // changeBg:file [flags]
     if let Some(rest) = cmd.strip_prefix("changeBg:") {
         let parts: Vec<&str> = rest.split_whitespace().collect();
-        let image = parts.first().filter(|s| !s.starts_with('-')).unwrap_or(&"").to_string();
+        let image = parts
+            .first()
+            .filter(|s| !s.starts_with('-'))
+            .unwrap_or(&"")
+            .to_string();
         if !image.is_empty() {
-            return Some(Action::ShowBg { image, transition: Transition::Instant });
+            return Some(Action::ShowBg {
+                image,
+                transition: Transition::Instant,
+            });
         }
     }
 
@@ -110,11 +122,17 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
     if let Some(rest) = cmd.strip_prefix("changeFigure:") {
         let parts: Vec<&str> = rest.split_whitespace().collect();
         let image = parts.first().unwrap_or(&"");
-        if *image == "none" { return None; } // hide handled above
         let side = parts.get(1).copied().unwrap_or("center");
         let id = figure_id(side);
+        if *image == "none" {
+            return Some(Action::HideSprite {
+                id,
+                transition: Transition::Instant,
+            });
+        }
         return Some(Action::ShowSprite {
-            id, image: image.to_string(),
+            id,
+            image: image.to_string(),
             position: parse_position(side),
             transition: Transition::Instant,
         });
@@ -124,18 +142,25 @@ fn parse_webgal_line(cmd: &str) -> Option<Action> {
     if let Some(rest) = cmd.strip_prefix("choose:") {
         let choices = parse_choices(rest);
         if !choices.is_empty() {
-            return Some(Action::Menu { prompt: String::new(), choices });
+            return Some(Action::Menu {
+                prompt: String::new(),
+                choices,
+            });
         }
     }
 
     // bgm:file
     if let Some(rest) = cmd.strip_prefix("bgm:") {
         let file = rest.split_whitespace().next().unwrap_or("").to_string();
-        if !file.is_empty() { return Some(Action::Bgm { file, volume: 0.8 }); }
+        if !file.is_empty() {
+            return Some(Action::Bgm { file, volume: 0.8 });
+        }
     }
 
     // stopBgm
-    if cmd == "stopBgm" { return Some(Action::StopBgm); }
+    if cmd == "stopBgm" {
+        return Some(Action::StopBgm);
+    }
 
     // Say: speaker:text [flags]
     //   or  {speaker}:text [flags]
@@ -153,11 +178,16 @@ fn parse_say(cmd: &str) -> Option<Action> {
         let prefix = &cmd[..colon_idx].trim();
         // Only treat as speaker if prefix looks like a name (no spaces, no leading dash)
         if !prefix.is_empty() && !prefix.starts_with('-') && !prefix.contains(' ') {
-            let speaker = prefix.trim_matches(|c: char| c == '{' || c == '}').to_string();
+            let speaker = prefix
+                .trim_matches(|c: char| c == '{' || c == '}')
+                .to_string();
             let rest = cmd[colon_idx + 1..].trim();
             let text = strip_say_flags(rest);
             if !text.is_empty() {
-                return Some(Action::Say { speaker, text: text.to_string() });
+                return Some(Action::Say {
+                    speaker,
+                    text: text.to_string(),
+                });
             }
         }
     }
@@ -165,7 +195,10 @@ fn parse_say(cmd: &str) -> Option<Action> {
     // Plain narration line
     let text = strip_say_flags(cmd);
     if !text.is_empty() {
-        return Some(Action::Say { speaker: String::new(), text: text.to_string() });
+        return Some(Action::Say {
+            speaker: String::new(),
+            text: text.to_string(),
+        });
     }
     None
 }
@@ -173,7 +206,18 @@ fn parse_say(cmd: &str) -> Option<Action> {
 fn strip_say_flags(s: &str) -> String {
     let s = s.trim();
     // Remove trailing flags like -v1.wav, -v1.ogg, -left, -right, -next, -continue
-    for flag in &[" -v", " -left", " -right", " -continue", " -next", " -enter", " -volume", " -name", " -target", " -transform"] {
+    for flag in &[
+        " -v",
+        " -left",
+        " -right",
+        " -continue",
+        " -next",
+        " -enter",
+        " -volume",
+        " -name",
+        " -target",
+        " -transform",
+    ] {
         if let Some(pos) = s.find(flag) {
             return s[..pos].trim().to_string();
         }
@@ -212,3 +256,36 @@ fn figure_id(side: &str) -> String {
     }
 }
 
+fn parse_number(value: &str, field: &str) -> f32 {
+    value.parse().unwrap_or_else(|_| {
+        log::warn!("Invalid setTransform {field} value: {value}");
+        0.0
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_change_figure_removal() {
+        let actions = parse_webgal("changeFigure:none -left;");
+        assert_eq!(
+            actions,
+            vec![Action::HideSprite {
+                id: "left".into(),
+                transition: Transition::Instant,
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_transform_target_without_numeric_coercion() {
+        let actions = parse_webgal("setTransform:x=12 alpha=0.5 -target=hero;");
+        assert!(matches!(
+            &actions[0],
+            Action::SetTransform { id, transform }
+                if id == "hero" && transform.offset_x == 12.0 && transform.alpha == 0.5
+        ));
+    }
+}

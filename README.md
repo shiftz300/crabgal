@@ -1,15 +1,12 @@
 # crabgal
 
-A visual novel engine built with Rust + notan GPU rendering. WOFF2 native, WebGAL-compatible.
+A visual novel engine built with Rust and Bevy 0.19, with WebGAL script compatibility.
 
 ## Quick Start
 
 ```bash
-# Check script syntax (.crab or WebGAL .txt)
-cargo run -- check path/to/scene.crab
-
 # Run in dev mode (hot reload, windowed preview)
-cargo run -- dev path/to/project/
+cargo run -p crabgal-bevy -- dev projects/test-project
 ```
 
 ## Script Format
@@ -52,26 +49,26 @@ jumpLabel:target;
 crabgal/
 ├── crates/
 │   ├── crabgal-core      State machine, Action system, step engine
-│   └── crabgal-script    .crab + WebGAL .txt parsers, hot-reload watcher
-├── crabgal-cli           CLI: dev / check commands, notan GPU rendering
+│   ├── crabgal-script    .crab + WebGAL .txt parsers, hot-reload watcher
+│   └── crabgal-bevy      Bevy frontend, ECS synchronization, UI and rendering
 └── dev/docs/             Architecture docs + TODO tracking
 ```
 
 ## Features
 
-- **GPU rendering** — notan + Metal, 2560x1440 design resolution, letterbox scaling
-- **Multi-font** — fontdue Layout with script-segmented MavenPro (Latin) + HanaMinA (CJK)
-- **WOFF2 native** — woofwoof brotli decoder, no TTF conversion needed
+- **GPU rendering** — Bevy/wgpu, 2560x1440 design resolution, letterbox scaling
+- **GPU blur** — region-based separable Gaussian blur and modal backdrop blur
+- **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
 - **WebGAL compatible** — parse `.txt` scripts from WebGAL projects
-- **Hot reload** — edit scripts, changes apply instantly (F7)
-- **Quick save/load** — F5/F6, bincode serialization
+- **Hot reload** — script file changes are watched during development
+- **Quick save/load** — confirmation UI and bincode serialization
 - **Sprite animations** — fade, slide, instant transitions
-- **Choice menus** — clickable, keyboard navigable
+- **Choice state** — script choices compile into deterministic engine state
 - **Auto / Skip modes** — A for auto-advance, Ctrl for skip
 
 ## Tech Stack
 
-Rust | notan (Metal) | fontdue | woofwoof | image | notify | bincode
+Rust | Bevy 0.19 | wgpu | notify | serde | bincode
 
 ## Project Structure
 
@@ -81,8 +78,8 @@ my-game/
 ├── assets/
 │   ├── background/
 │   ├── figure/
-│   └── fonts/      .woff2 files (MavenPro + HanaMinA)
-└── crabgal.cfg     window size memory
+│   └── fonts/      .ttf font files used by Bevy UI
+└── config.yaml     title, font and layout configuration
 ```
 
 ## Implementation Phases
@@ -91,12 +88,11 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking.
 
 | Phase | Status | Focus |
 |-------|--------|-------|
-| 0 — Rendering & Script | Done | GPU, fonts, parser, input, save/load |
-| 1 — Usability | Next | Multi-slot save, rollback, system menu, settings |
-| 2 — Audio | Planned | BGM, voice, SFX |
-| 3 — Script Enhance | Planned | Variables, conditions, Lua, text effects |
-| 4 — Visual Polish | Planned | Transitions, Live2D, particles, video |
-| 5 — Production | Planned | ECS refactor, packaging, distribution |
+| 0 — Bevy foundation | Done | Rendering, UI, blur, input, save/load |
+| 1 — Script commands | Done | Dialogue, scenes, choices, variables, transforms |
+| 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
+| 3 — Extended UI | Next | Save/load slots, backlog, settings, title |
+| 4+ — Production | Planned | Audio, effects, richer text, packaging |
 
 ## Credits
 
