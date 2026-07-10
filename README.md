@@ -59,11 +59,11 @@ crabgal/
 - **GPU rendering** — Bevy/wgpu, 2560x1440 design resolution, letterbox scaling
 - **GPU blur** — region-based separable Gaussian blur and modal backdrop blur
 - **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
-- **WebGAL compatible** — parse `.txt` scripts from WebGAL projects
+- **WebGAL migration path** — parse and execute a growing, explicitly tracked subset of `.txt` scripts
 - **Hot reload** — script file changes are watched during development
 - **Quick save/load** — confirmation UI and bincode serialization
 - **Sprite animations** — fade, slide, instant transitions
-- **Choice state** — script choices compile into deterministic engine state
+- **Choice core state** — script choices compile into deterministic engine state; interactive UI is next
 - **Auto / Skip modes** — A for auto-advance, Ctrl for skip
 
 ## Tech Stack
@@ -84,15 +84,17 @@ my-game/
 
 ## Implementation Phases
 
-See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking.
+See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
+[WebGAL_K gap audit](dev/docs/10-webgal-k-gap-analysis.md) records actual compatibility, and
+[engine advantages](dev/docs/11-engine-advantages.md) defines the product and technical strategy.
 
 | Phase | Status | Focus |
 |-------|--------|-------|
 | 0 — Bevy foundation | Done | Rendering, UI, blur, input, save/load |
-| 1 — Script commands | Done | Dialogue, scenes, choices, variables, transforms |
+| 1 — Script commands | In progress | Choice UI, scenes, common WebGAL semantics and diagnostics |
 | 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
-| 3 — Extended UI | Next | Save/load slots, backlog, settings, title |
-| 4+ — Production | Planned | Audio, effects, richer text, packaging |
+| 3 — Stateful UI | Planned | Backlog/read history/rollback, save slots, settings, title |
+| 4+ — Production | Planned | Audio, performances, richer text, tooling and packaging |
 
 ## Credits
 

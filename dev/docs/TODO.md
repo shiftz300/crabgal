@@ -133,3 +133,4 @@
 | [07-references.md](07-references.md) | 业界引擎参考 |
 | [09-webgal-script-reference.md](09-webgal-script-reference.md) | WebGAL 脚本参考 |
 | [10-webgal-k-gap-analysis.md](10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
+| [11-engine-advantages.md](11-engine-advantages.md) | crabgal 的差异化、优势支柱与量化验收标准 |
