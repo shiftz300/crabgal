@@ -4,9 +4,12 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crabgal_core::State;
 use crabgal_core::step;
-use crabgal_script::load_scenes;
+use crabgal_script::{DiagnosticLevel, load_scenes};
 
-use crate::resources::{GameConfigResource, GameState, ProjectRoot, ScriptWatcherResource};
+use crate::resources::{
+    GameConfigResource, GameState, LocalAssetManifest, LocalSceneAssets, ProjectRoot,
+    ScriptWatcherResource,
+};
 use crate::ui::control_bar::{ButtonAction, ToggleStates};
 use crate::ui::dialog::DialogRequest;
 
@@ -26,6 +29,7 @@ pub struct TickContext<'w, 's> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     mouse: Res<'w, ButtonInput<MouseButton>>,
     watcher: Option<Res<'w, ScriptWatcherResource>>,
+    asset_manifest: ResMut<'w, LocalAssetManifest>,
     toggles: ResMut<'w, ToggleStates>,
     buttons: Query<'w, 's, (&'static Interaction, Option<&'static ButtonAction>), With<Button>>,
     dialog: Option<Res<'w, DialogRequest>>,
@@ -37,7 +41,12 @@ pub struct TickContext<'w, 's> {
 pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
     update_toggle_shortcuts(&context.keys, &mut context.toggles, &mut context.auto_timer);
-    reload_scripts_if_changed(&context.watcher, &context.project_root, &mut context.state);
+    reload_scripts_if_changed(
+        &context.watcher,
+        &context.project_root,
+        &mut context.state,
+        &mut context.asset_manifest,
+    );
 
     if context.toggles.skip {
         skip_once(&mut context.state);
@@ -51,6 +60,7 @@ pub fn tick(mut context: TickContext) {
         context.config.styles.typewriter_speed,
         &mut context.typewriter_clock,
     );
+    update_notend(&mut context.state);
     update_auto_mode(
         &mut context.state,
         context.toggles.auto,
@@ -72,6 +82,16 @@ pub fn tick(mut context: TickContext) {
     }
 
     update_transitions(&mut context.state, delta_seconds as f32);
+}
+
+fn update_notend(state: &mut State) {
+    let should_advance = state.dialogue.as_ref().is_some_and(|dialogue| {
+        dialogue.auto_advance && dialogue.visible_chars >= dialogue.text.chars().count()
+    });
+    if should_advance {
+        step::advance(state);
+        step::step(state);
+    }
 }
 
 fn update_toggle_shortcuts(
@@ -98,6 +118,7 @@ fn reload_scripts_if_changed(
     watcher: &Option<Res<ScriptWatcherResource>>,
     project_root: &Path,
     state: &mut State,
+    asset_manifest: &mut LocalAssetManifest,
 ) {
     let Some(watcher) = watcher else {
         return;
@@ -116,13 +137,41 @@ fn reload_scripts_if_changed(
         log::error!("failed to reload scripts from {}", script_dir.display());
         return;
     };
-    state.scenes = scenes
-        .into_iter()
-        .map(|scene| (scene.name, scene.actions))
-        .collect();
+    asset_manifest.clear();
+    state.scenes.clear();
+    for scene in scenes {
+        for diagnostic in &scene.diagnostics {
+            let message = format!(
+                "{}:{}:{}: {}",
+                scene.path.display(),
+                diagnostic.span.line,
+                diagnostic.span.column,
+                diagnostic.message
+            );
+            match diagnostic.level {
+                DiagnosticLevel::Warning => log::warn!("{message}"),
+                DiagnosticLevel::Error => log::error!("{message}"),
+            }
+        }
+        asset_manifest.insert(
+            scene.name.clone(),
+            LocalSceneAssets {
+                resources: scene.resources,
+                sub_scenes: scene.sub_scenes,
+            },
+        );
+        state.scenes.insert(scene.name, scene.actions);
+    }
+    state.scene_stack.retain_mut(|frame| {
+        let Some(scene) = state.scenes.get(&frame.scene) else {
+            return false;
+        };
+        frame.cursor = frame.cursor.min(scene.len());
+        true
+    });
 
     if !state.scenes.contains_key(&state.current_scene) {
-        state.current_scene = state.scenes.keys().min().cloned().unwrap_or_default();
+        state.current_scene = crate::scene::entry_scene(state);
         state.cursor = 0;
     } else if let Some(scene) = state.scenes.get(&state.current_scene) {
         state.cursor = state.cursor.min(scene.len());
@@ -232,6 +281,16 @@ fn advance_once(state: &mut State) {
 
 fn update_transitions(state: &mut State, delta_seconds: f32) {
     for sprite in state.sprites.values_mut() {
+        if let Some(animation) = &mut sprite.transform_animation {
+            animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
+            let progress = animation
+                .easing
+                .sample(animation.elapsed / animation.duration);
+            sprite.transform = animation.from.lerp(animation.to, progress);
+            if animation.elapsed >= animation.duration {
+                sprite.transform_animation = None;
+            }
+        }
         let delta = sprite
             .transition
             .duration()
@@ -260,6 +319,17 @@ fn update_transitions(state: &mut State, delta_seconds: f32) {
         state.bg_transition = None;
     }
 
+    if let Some(animation) = &mut state.bg_transform_animation {
+        animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
+        let progress = animation
+            .easing
+            .sample(animation.elapsed / animation.duration);
+        state.bg_transform = animation.from.lerp(animation.to, progress);
+        if animation.elapsed >= animation.duration {
+            state.bg_transform_animation = None;
+        }
+    }
+
     let avatar_delta = delta_seconds * 3.0;
     if state.mini_avatar.is_some() {
         state.mini_avatar_progress = (state.mini_avatar_progress + avatar_delta).min(1.0);
@@ -283,6 +353,9 @@ mod tests {
             speaker: String::new(),
             text: "abcdefghij".into(),
             visible_chars: 0,
+            vocal: None,
+            volume: 1.0,
+            auto_advance: false,
         });
         let mut clock = TypewriterClock::default();
 

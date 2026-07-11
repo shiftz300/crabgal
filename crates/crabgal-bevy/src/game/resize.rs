@@ -1,10 +1,11 @@
-use crate::ui::textbox::ContentRoot;
+use crate::ui::textbox::{ContentRoot, QuickPreviewLayer};
 use crate::viewport::DesignViewport;
 use bevy::prelude::*;
 
 /// Keeps the fixed design canvas centered inside the window letterbox.
 pub fn on_resize(
-    mut content_root: Query<&mut Node, With<ContentRoot>>,
+    mut content_root: Query<&mut Node, (With<ContentRoot>, Without<QuickPreviewLayer>)>,
+    mut quick_preview_layer: Query<&mut Node, (With<QuickPreviewLayer>, Without<ContentRoot>)>,
     window_query: Query<&Window>,
     mut ui_scale: ResMut<UiScale>,
 ) {
@@ -15,6 +16,10 @@ pub fn on_resize(
 
     ui_scale.0 = viewport.scale;
     if let Ok(mut node) = content_root.single_mut() {
+        node.left = Val::Px(viewport.offset.x / viewport.scale);
+        node.top = Val::Px(viewport.offset.y / viewport.scale);
+    }
+    if let Ok(mut node) = quick_preview_layer.single_mut() {
         node.left = Val::Px(viewport.offset.x / viewport.scale);
         node.top = Val::Px(viewport.offset.y / viewport.scale);
     }

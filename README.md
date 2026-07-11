@@ -61,9 +61,13 @@ crabgal/
 - **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
 - **WebGAL migration path** — parse and execute a growing, explicitly tracked subset of `.txt` scripts
 - **Hot reload** — script file changes are watched during development
-- **Quick save/load** — confirmation UI and bincode serialization
+- **Quick save/load** — confirmation UI, persisted stage-snapshot preview and bincode serialization
 - **Sprite animations** — fade, slide, instant transitions
-- **Choice core state** — script choices compile into deterministic engine state; interactive UI is next
+- **Choice UI** — deterministic choice state with mouse and keyboard interaction
+- **Scene flow** — `changeScene`, nested `callScene` returns and terminal `end`
+- **Script runtime** — expressions, arrays, global variables, interpolation and common flow arguments
+- **Local asset pipeline** — parser-generated manifests and bounded Bevy `AssetServer` prefetch
+- **Local vocal playback** — WebGAL vocal shorthand and per-line volume
 - **Auto / Skip modes** — A for auto-advance, Ctrl for skip
 
 ## Tech Stack
@@ -91,9 +95,9 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | Phase | Status | Focus |
 |-------|--------|-------|
 | 0 — Bevy foundation | Done | Rendering, UI, blur, input, save/load |
-| 1 — Script commands | In progress | Choice UI, scenes, common WebGAL semantics and diagnostics |
+| 1 — Script commands | Done; awaiting acceptance | Scenes, expressions, common WebGAL semantics, diagnostics and local prefetch |
 | 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
-| 3 — Stateful UI | Planned | Backlog/read history/rollback, save slots, settings, title |
+| 3 — Stateful UI | Planned | Backlog/read history/rollback, save slots and settings |
 | 4+ — Production | Planned | Audio, performances, richer text, tooling and packaging |
 
 ## Credits

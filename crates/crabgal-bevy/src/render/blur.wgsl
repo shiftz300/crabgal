@@ -6,7 +6,7 @@
 @group(0) @binding(2) var<uniform> u: BlurUniform;
 
 struct BlurRect { min_x: f32, max_x: f32, min_y: f32, max_y: f32 }
-struct BlurUniform { count: u32, coc: f32, _pad: vec2<f32>, rects: array<BlurRect, 2> }
+struct BlurUniform { count: u32, coc: f32, _pad: vec2<f32>, rects: array<BlurRect, 16> }
 
 fn inside(pos: vec4<f32>) -> bool {
     for (var i = 0u; i < u.count; i += 1u) {

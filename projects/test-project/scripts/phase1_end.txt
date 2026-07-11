@@ -1,0 +1,5 @@
+; Changed scene: this scene replaces the caller and does not return.
+changeBg:WebGalEnter.webp -fade -duration=500
+changeFigure:open_mouth.webp -right -id=ending -fade -duration=500
+小夜:changeScene 工作正常；本场景不会返回主场景。
+end

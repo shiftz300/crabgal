@@ -4,10 +4,14 @@
 
 pub mod parser;
 pub mod project;
+pub mod report;
 pub mod watcher;
 pub mod webgal_parser;
 
-pub use parser::parse_script;
+pub use parser::{parse_script, parse_script_report};
 pub use project::{LoadedScene, ScriptFormat, load_scenes};
+pub use report::{
+    Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,
+};
 pub use watcher::ScriptWatcher;
-pub use webgal_parser::parse_webgal;
+pub use webgal_parser::{parse_webgal, parse_webgal_report};

@@ -36,6 +36,10 @@ pub fn load_game(slot: u32, project_root: &Path) -> Result<State> {
     Ok(state)
 }
 
+pub fn preview_path(project_root: &Path, slot: u32) -> PathBuf {
+    project_root.join("saves").join(format!("slot_{slot}.png"))
+}
+
 fn slot_path(project_root: &Path, slot: u32) -> PathBuf {
     project_root.join("saves").join(format!("slot_{slot}.bin"))
 }

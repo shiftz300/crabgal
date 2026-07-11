@@ -17,11 +17,12 @@
 pub mod action;
 pub mod config;
 pub mod dissolve;
+pub mod expression;
 pub mod state;
 pub mod step;
 pub mod types;
 
-pub use action::Action;
-pub use state::State;
+pub use action::{Action, ChoiceTarget, SayOptions};
+pub use state::{MenuChoice, MenuState, SceneFrame, State};
 pub use step::StepResult;
 pub use types::*;

@@ -68,7 +68,7 @@ pub fn sync_sprites(
             center_x + transform.offset_x + transition_x,
             center_y + transform.offset_y,
         ));
-        let z = 0.1 + index as f32 * 0.01;
+        let z = 0.1 + data.z_index as f32 * 0.001 + index as f32 * 0.000_001;
 
         let sprite = Sprite {
             image: handle,

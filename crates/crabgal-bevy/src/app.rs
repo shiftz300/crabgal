@@ -9,11 +9,14 @@ use bevy::window::WindowResolution;
 use crabgal_core::config::GameConfig;
 use crabgal_core::step;
 use crabgal_core::{Action, State};
-use crabgal_script::{ScriptWatcher, load_scenes};
+use crabgal_script::{DiagnosticLevel, ScriptWatcher, load_scenes};
 
 use crate::plugin::GamePlugin;
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
-use crate::resources::{GameConfigResource, GameState, ProjectRoot, ScriptWatcherResource};
+use crate::resources::{
+    GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest, LocalSceneAssets,
+    ProjectRoot, ScriptWatcherResource,
+};
 
 pub fn run() {
     let project_root = project_root_from_args(std::env::args_os().skip(1));
@@ -78,9 +81,30 @@ fn bootstrap_project(mut commands: Commands, project_root: Res<ProjectRoot>) {
     create_project_directories(&project_root, &script_dir);
 
     let mut state = State::new();
+    let mut manifest = LocalAssetManifest::default();
     match load_scenes(&script_dir) {
         Ok(scenes) => {
             for scene in scenes {
+                for diagnostic in &scene.diagnostics {
+                    let message = format!(
+                        "{}:{}:{}: {}",
+                        scene.path.display(),
+                        diagnostic.span.line,
+                        diagnostic.span.column,
+                        diagnostic.message
+                    );
+                    match diagnostic.level {
+                        DiagnosticLevel::Warning => log::warn!("{message}"),
+                        DiagnosticLevel::Error => log::error!("{message}"),
+                    }
+                }
+                manifest.insert(
+                    scene.name.clone(),
+                    LocalSceneAssets {
+                        resources: scene.resources,
+                        sub_scenes: scene.sub_scenes,
+                    },
+                );
                 state.scenes.insert(scene.name, scene.actions);
             }
         }
@@ -90,6 +114,8 @@ fn bootstrap_project(mut commands: Commands, project_root: Res<ProjectRoot>) {
     step::index_labels(&mut state);
     step::step(&mut state);
     commands.insert_resource(GameState(state));
+    commands.insert_resource(manifest);
+    commands.insert_resource(LocalAssetCache::default());
 
     match ScriptWatcher::start(&script_dir) {
         Ok(watcher) => {
@@ -152,14 +178,16 @@ fn ensure_playable_scene(state: &mut State) {
                 Action::ShowBg {
                     image: "bg.webp".into(),
                     transition: Default::default(),
+                    transform: Default::default(),
                 },
                 Action::Say {
                     speaker: "crabgal".into(),
                     text: "No script found.".into(),
+                    options: Default::default(),
                 },
             ],
         );
     }
 
-    state.current_scene = state.scenes.keys().min().cloned().unwrap_or_default();
+    state.current_scene = crate::scene::entry_scene(state);
 }

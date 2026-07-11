@@ -1,6 +1,11 @@
 // Lightweight region-based Gaussian blur post-processing for Bevy 0.19.
-use crate::ui::control_bar::{AutoHideTiming, BlurSource, ToggleStates};
+use crate::components::SpriteNode;
+use crate::resources::GameState;
+use crate::ui::control_bar::{
+    AutoHideTiming, BlurSource, BlurStrength, ToggleStates, UiBlurSource,
+};
 use crate::ui::dialog::DialogRequest;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::{
@@ -22,7 +27,7 @@ pub struct BlurCamera {
     pub count: u32,
     pub coc: f32,
     pub _pad: Vec2,
-    pub rects: [BlurRect; 2],
+    pub rects: [BlurRect; 16],
 }
 #[derive(Clone, Copy, Default, ShaderType)]
 pub(crate) struct BlurRect {
@@ -50,7 +55,7 @@ impl Default for BlurCamera {
             count: 0,
             coc: 30.0,
             _pad: Vec2::ZERO,
-            rects: [BlurRect::default(); 2],
+            rects: [BlurRect::default(); 16],
         }
     }
 }
@@ -267,14 +272,25 @@ type SceneBlurQuery<'w, 's> =
 type UiBlurQuery<'w, 's> =
     Query<'w, 's, &'static mut BlurCamera, (With<UiBlurCamera>, Without<SceneBlurCamera>)>;
 
+#[derive(SystemParam)]
+pub struct BlurBehavior<'w> {
+    dialog: Option<Res<'w, DialogRequest>>,
+    timing: Res<'w, AutoHideTiming>,
+    toggles: Res<'w, ToggleStates>,
+    state: Res<'w, GameState>,
+}
+
 pub fn update_blur_regions(
     window_query: Query<&Window>,
     mut scene_blur_query: SceneBlurQuery,
     mut ui_blur_query: UiBlurQuery,
-    dialog: Option<Res<DialogRequest>>,
-    timing: Res<AutoHideTiming>,
-    toggles: Res<ToggleStates>,
-    blur_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<BlurSource>>,
+    behavior: BlurBehavior,
+    blur_nodes: Query<(&ComputedNode, &UiGlobalTransform, Option<&BlurStrength>), With<BlurSource>>,
+    ui_blur_nodes: Query<
+        (&ComputedNode, &UiGlobalTransform, Option<&BlurStrength>),
+        With<UiBlurSource>,
+    >,
+    world_sprites: Query<(&SpriteNode, &Sprite, &Transform)>,
 ) {
     let Ok(w) = window_query.single() else { return };
     let sf = w.scale_factor();
@@ -283,7 +299,7 @@ pub fn update_blur_regions(
     // Camera 1 runs after the regular UI has been composited, so a full-screen
     // pass here blurs the scene, textbox, and control bar together. Camera 2
     // then draws the dialog itself without post-processing.
-    if dialog.is_some() {
+    if behavior.dialog.is_some() {
         if let Ok(mut bc) = scene_blur_query.single_mut() {
             bc.count = 0;
         }
@@ -294,7 +310,7 @@ pub fn update_blur_regions(
                 min_y: 0.0,
                 max_y: sh,
             };
-            bc.coc = 15.0;
+            bc.coc = 36.0;
             bc.count = 1;
         }
         return;
@@ -302,6 +318,27 @@ pub fn update_blur_regions(
 
     if let Ok(mut bc) = ui_blur_query.single_mut() {
         bc.count = 0;
+        bc.coc = 0.0;
+        for (node, transform, strength) in &ui_blur_nodes {
+            let size = node.size();
+            if size.x <= 0.0 || size.y <= 0.0 {
+                continue;
+            }
+            let index = bc.count as usize;
+            if index >= bc.rects.len() {
+                break;
+            }
+            let position = transform.translation;
+            let half = size * 0.5;
+            bc.rects[index] = BlurRect {
+                min_x: position.x - half.x,
+                max_x: position.x + half.x,
+                min_y: position.y - half.y,
+                max_y: position.y + half.y,
+            };
+            bc.count += 1;
+            bc.coc = bc.coc.max(strength.map_or(30.0, |strength| strength.0));
+        }
     }
 
     let Ok(mut bc) = scene_blur_query.single_mut() else {
@@ -309,26 +346,72 @@ pub fn update_blur_regions(
     };
 
     // Skip blur when hide content is mostly gone
-    if toggles.hide && timing.hide_alpha < 0.5 {
+    if behavior.toggles.hide && behavior.timing.hide_alpha < 0.5 {
         bc.count = 0;
         return;
     }
 
-    bc.coc = 30.0;
+    bc.coc = 0.0;
     bc.count = 0;
-    for (i, (node, transform)) in blur_nodes.iter().enumerate() {
+    if behavior.state.bg_transform.blur > 0.0 {
+        bc.rects[0] = BlurRect {
+            min_x: 0.0,
+            max_x: w.width() * sf,
+            min_y: 0.0,
+            max_y: sh,
+        };
+        bc.count = 1;
+        bc.coc = behavior.state.bg_transform.blur;
+    }
+    for (node, sprite, transform) in &world_sprites {
+        let Some(effect) = behavior
+            .state
+            .sprites
+            .get(&node.0)
+            .map(|sprite| sprite.transform)
+        else {
+            continue;
+        };
+        if effect.blur <= 0.0 {
+            continue;
+        }
+        let Some(size) = sprite.custom_size else {
+            continue;
+        };
+        let index = bc.count as usize;
+        if index >= bc.rects.len() {
+            break;
+        }
+        let center =
+            (transform.translation.truncate() + Vec2::new(w.width(), w.height()) * 0.5) * sf;
+        let half = size.abs() * sf * 0.5;
+        bc.rects[index] = BlurRect {
+            min_x: center.x - half.x,
+            max_x: center.x + half.x,
+            min_y: center.y - half.y,
+            max_y: center.y + half.y,
+        };
+        bc.count += 1;
+        bc.coc = bc.coc.max(effect.blur);
+    }
+    for (node, transform, strength) in &blur_nodes {
         let size = node.size(); // physical pixels
+        if size.x <= 0.0 || size.y <= 0.0 {
+            continue;
+        }
+        let index = bc.count as usize;
+        if index >= bc.rects.len() {
+            break;
+        }
         let pos = transform.translation; // Vec2, screen-space center in physical px
         let half = size * 0.5;
-        bc.rects[i] = BlurRect {
+        bc.rects[index] = BlurRect {
             min_x: pos.x - half.x,
             max_x: pos.x + half.x,
             min_y: pos.y - half.y,
             max_y: pos.y + half.y,
         };
-        bc.count = (i + 1) as u32;
-        if bc.count >= 2 {
-            break;
-        }
+        bc.count += 1;
+        bc.coc = bc.coc.max(strength.map_or(30.0, |strength| strength.0));
     }
 }

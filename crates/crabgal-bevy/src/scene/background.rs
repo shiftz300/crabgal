@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
+use crabgal_core::SpriteTransform;
 use crabgal_core::dissolve;
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
@@ -14,6 +15,7 @@ struct DesiredBackground<'a> {
     image: &'a str,
     alpha: f32,
     z: f32,
+    transform: SpriteTransform,
 }
 
 /// Synchronizes background entities without recreating them every frame.
@@ -77,14 +79,18 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                 image: previous,
                 alpha: 1.0,
                 z: -1.0,
+                transform: state.bg_transform,
             });
         }
-        backgrounds.push(DesiredBackground {
-            layer: BackgroundLayer::Current,
-            image: &transition.to,
-            alpha: dissolve::smooth_fade(transition.progress),
-            z: 0.0,
-        });
+        if !transition.to.is_empty() {
+            backgrounds.push(DesiredBackground {
+                layer: BackgroundLayer::Current,
+                image: &transition.to,
+                alpha: dissolve::smooth_fade(transition.progress),
+                z: 0.0,
+                transform: state.bg_transform,
+            });
+        }
         backgrounds
     } else {
         state
@@ -96,6 +102,7 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                     image,
                     alpha: 1.0,
                     z: 0.0,
+                    transform: state.bg_transform,
                 }]
             })
             .unwrap_or_default()
@@ -108,7 +115,16 @@ fn apply_background_layout(
     background: &DesiredBackground<'_>,
     viewport: DesignViewport,
 ) {
-    sprite.custom_size = Some(Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * viewport.scale);
-    sprite.color = Color::srgba(1.0, 1.0, 1.0, background.alpha);
-    transform.translation = viewport.content_center().extend(background.z);
+    let effect = background.transform;
+    sprite.custom_size = Some(
+        Vec2::new(
+            DESIGN_WIDTH * effect.scale_x,
+            DESIGN_HEIGHT * effect.scale_y,
+        ) * viewport.scale,
+    );
+    sprite.color = Color::srgba(1.0, 1.0, 1.0, background.alpha * effect.alpha);
+    transform.translation = (viewport.content_center()
+        + Vec2::new(effect.offset_x, effect.offset_y) * viewport.scale)
+        .extend(background.z);
+    transform.rotation = Quat::from_rotation_z(effect.rotation);
 }

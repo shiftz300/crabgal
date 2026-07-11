@@ -1,5 +1,7 @@
 // Loading screen — shown while assets are being loaded.
 use crate::render::blur::UiBlurCamera;
+use crate::resources::{GameState, LocalAssetCache};
+use bevy::asset::LoadState;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -35,9 +37,24 @@ pub fn setup_loading(
     ));
 }
 
-pub fn update_loading(mut query: Query<(Entity, &mut Visibility), With<LoadingText>>) {
-    // With lazy loading, hide loading indicator immediately
-    for (_entity, mut vis) in query.iter_mut() {
-        *vis = Visibility::Hidden;
+pub fn update_loading(
+    state: Res<GameState>,
+    asset_server: Res<AssetServer>,
+    cache: Res<LocalAssetCache>,
+    mut query: Query<&mut Visibility, With<LoadingText>>,
+) {
+    let loading = !state.ended
+        && cache.0.values().any(|handle| {
+            matches!(
+                asset_server.load_state(handle.id()),
+                LoadState::NotLoaded | LoadState::Loading
+            )
+        });
+    for mut visibility in &mut query {
+        *visibility = if loading {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }

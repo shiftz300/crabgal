@@ -19,14 +19,20 @@
 // Lines are newline-delimited. Blank lines are ignored.
 // Labels are standalone "label name" lines.
 
-use crabgal_core::action::{Action, Choice};
-use crabgal_core::types::{Anchor, Position, Transition, Value};
+use crabgal_core::action::{Action, Choice, ChoiceTarget, SayOptions};
+use crabgal_core::types::{Anchor, BlendMode, Position, SpriteTransform, Transition};
+
+use crate::report::{Diagnostic, DiagnosticLevel, ParseReport, SourceSpan};
 
 /// Parse a .crab script string into a Vec of Actions.
 pub fn parse_script(input: &str) -> Vec<Action> {
-    let mut actions = Vec::new();
+    parse_script_report(input).actions
+}
 
-    for line in input.lines() {
+pub fn parse_script_report(input: &str) -> ParseReport {
+    let mut report = ParseReport::default();
+
+    for (line_index, line) in input.lines().enumerate() {
         let trimmed = line.trim();
 
         // Skip empty lines and comments
@@ -35,11 +41,26 @@ pub fn parse_script(input: &str) -> Vec<Action> {
         }
 
         if let Some(action) = parse_line(trimmed) {
-            actions.push(action);
+            report.push(
+                action,
+                SourceSpan {
+                    line: line_index + 1,
+                    column: line.find(trimmed).unwrap_or(0) + 1,
+                },
+            );
+        } else {
+            report.diagnostics.push(Diagnostic {
+                level: DiagnosticLevel::Error,
+                span: SourceSpan {
+                    line: line_index + 1,
+                    column: line.find(trimmed).unwrap_or(0) + 1,
+                },
+                message: format!("unknown or malformed command: {trimmed}"),
+            });
         }
     }
 
-    actions
+    report
 }
 
 fn parse_line(line: &str) -> Option<Action> {
@@ -57,6 +78,9 @@ fn parse_line(line: &str) -> Option<Action> {
         "menu" => parse_menu(arguments),
         "jump" => parse_jump(arguments),
         "label" => parse_label(arguments),
+        "change_scene" | "changescene" => parse_scene_target(arguments).map(Action::ChangeScene),
+        "call_scene" | "callscene" => parse_scene_target(arguments).map(Action::CallScene),
+        "end" if arguments.is_empty() => Some(Action::End),
         "bgm" => parse_bgm(arguments),
         "stop_bgm" if arguments.is_empty() => Some(Action::StopBgm),
         "set" => parse_set(arguments),
@@ -75,7 +99,11 @@ fn parse_bg(arguments: &str) -> Option<Action> {
     }
     let image = parts[0].to_string();
     let transition = parse_transition(parts.get(1).copied());
-    Some(Action::ShowBg { image, transition })
+    Some(Action::ShowBg {
+        image,
+        transition,
+        transform: SpriteTransform::default(),
+    })
 }
 
 fn parse_show(arguments: &str) -> Option<Action> {
@@ -104,6 +132,9 @@ fn parse_show(arguments: &str) -> Option<Action> {
         image,
         position,
         transition,
+        transform: SpriteTransform::default(),
+        z_index: 0,
+        blend: BlendMode::Alpha,
     })
 }
 
@@ -127,7 +158,11 @@ fn parse_say(arguments: &str) -> Option<Action> {
         if text.is_empty() {
             return None;
         }
-        Some(Action::Say { speaker, text })
+        Some(Action::Say {
+            speaker,
+            text,
+            options: SayOptions::default(),
+        })
     } else {
         // No colon — treat first word as speaker
         let parts: Vec<&str> = arguments.splitn(2, char::is_whitespace).collect();
@@ -137,6 +172,7 @@ fn parse_say(arguments: &str) -> Option<Action> {
         Some(Action::Say {
             speaker: parts[0].to_string(),
             text: parts[1].to_string(),
+            options: SayOptions::default(),
         })
     }
 }
@@ -180,12 +216,27 @@ fn parse_choices(input: &str) -> Vec<Choice> {
             let text = part[..arrow_idx].trim().trim_matches('"').to_string();
             let target = part[arrow_idx + 2..].trim().to_string();
             if !text.is_empty() && !target.is_empty() {
-                choices.push(Choice { text, target });
+                choices.push(Choice {
+                    text,
+                    target: parse_native_choice_target(&target),
+                    show_when: None,
+                    enable_when: None,
+                });
             }
         }
     }
 
     choices
+}
+
+fn parse_native_choice_target(target: &str) -> ChoiceTarget {
+    if let Some(scene) = target.strip_prefix("scene:") {
+        ChoiceTarget::ChangeScene(canonical_scene_name(scene).unwrap_or_else(|| scene.to_owned()))
+    } else if let Some(scene) = target.strip_prefix("call:") {
+        ChoiceTarget::CallScene(canonical_scene_name(scene).unwrap_or_else(|| scene.to_owned()))
+    } else {
+        ChoiceTarget::Label(target.to_owned())
+    }
 }
 
 fn parse_jump(arguments: &str) -> Option<Action> {
@@ -202,6 +253,19 @@ fn parse_label(arguments: &str) -> Option<Action> {
         return None;
     }
     Some(Action::Label(name))
+}
+
+fn parse_scene_target(arguments: &str) -> Option<String> {
+    canonical_scene_name(arguments.split_whitespace().next()?.trim_matches('"'))
+}
+
+fn canonical_scene_name(path: &str) -> Option<String> {
+    let filename = path.rsplit(['/', '\\']).next()?.trim();
+    let name = filename
+        .strip_suffix(".txt")
+        .or_else(|| filename.strip_suffix(".crab"))
+        .unwrap_or(filename);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 fn parse_bgm(arguments: &str) -> Option<Action> {
@@ -221,20 +285,11 @@ fn parse_set(arguments: &str) -> Option<Action> {
     let name = parts[0].trim().to_string();
     let val_str = parts[1].trim();
 
-    // Try parsing as int first, then float, then string
-    let value = if val_str.eq_ignore_ascii_case("true") {
-        Value::Bool(true)
-    } else if val_str.eq_ignore_ascii_case("false") {
-        Value::Bool(false)
-    } else if let Ok(i) = val_str.parse::<i64>() {
-        Value::Int(i)
-    } else if let Ok(f) = val_str.parse::<f64>() {
-        Value::Float(f)
-    } else {
-        Value::Str(val_str.trim_matches('"').to_string())
-    };
-
-    Some(Action::Set { name, value })
+    Some(Action::Set {
+        name,
+        expression: val_str.to_owned(),
+        global: false,
+    })
 }
 
 fn parse_transition(s: Option<&str>) -> Transition {
@@ -273,7 +328,7 @@ mod tests {
         let actions = parse_script("say eileen: hello world");
         assert_eq!(actions.len(), 1);
         assert!(
-            matches!(&actions[0], Action::Say { speaker, text } if speaker == "eileen" && text == "hello world")
+            matches!(&actions[0], Action::Say { speaker, text, .. } if speaker == "eileen" && text == "hello world")
         );
     }
 
@@ -284,7 +339,7 @@ mod tests {
         if let Action::Menu { choices, .. } = &actions[0] {
             assert_eq!(choices.len(), 2);
             assert_eq!(choices[0].text, "Yes");
-            assert_eq!(choices[0].target, "yes_label");
+            assert_eq!(choices[0].target, ChoiceTarget::Label("yes_label".into()));
         }
     }
 
@@ -327,14 +382,23 @@ mod tests {
     fn test_parse_boolean_and_quoted_string_values() {
         assert!(matches!(
             parse_script("set enabled = true")[0],
-            Action::Set {
-                value: Value::Bool(true),
-                ..
-            }
+            Action::Set { ref expression, .. } if expression == "true"
         ));
         assert!(matches!(
             &parse_script("set name = \"Crab Gal\"")[0],
-            Action::Set { value: Value::Str(value), .. } if value == "Crab Gal"
+            Action::Set { expression, .. } if expression == "\"Crab Gal\""
         ));
+    }
+
+    #[test]
+    fn parses_scene_control_commands() {
+        assert_eq!(
+            parse_script("change_scene scenes/chapter.crab\ncallScene aside.txt\nend"),
+            vec![
+                Action::ChangeScene("chapter".into()),
+                Action::CallScene("aside".into()),
+                Action::End,
+            ]
+        );
     }
 }

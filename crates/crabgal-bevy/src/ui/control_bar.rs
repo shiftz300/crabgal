@@ -1,8 +1,14 @@
 // WebGAL-style control bar icon definitions and interaction.
 // Both top and bottom bars spawn as children of TextBoxRoot in textbox.rs.
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
+use crabgal_core::State;
 
+use crate::resources::ProjectRoot;
+use crate::save::QUICK_SAVE_SLOT;
 use crate::ui::dialog::{DialogAction, DialogRequest};
+use crate::ui::textbox::ContentRoot;
 
 #[derive(Component)]
 pub(crate) struct ControlBarTop;
@@ -10,7 +16,7 @@ pub(crate) struct ControlBarTop;
 pub(crate) struct ControlBarBot;
 
 /// Identifies which button was clicked, attached to each Button entity at spawn.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ButtonAction {
     // Top row
     Backlog,
@@ -27,6 +33,71 @@ pub(crate) enum ButtonAction {
     System,
     Title,
 }
+
+#[derive(Resource, Default)]
+pub(crate) struct QuickSavePreview {
+    pub(crate) state: Option<State>,
+    pub(crate) image: Option<Handle<Image>>,
+}
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewPanel {
+    pub(crate) owner: ButtonAction,
+}
+
+#[derive(Component, Default)]
+pub(crate) struct QuickPreviewFade {
+    pub(crate) target: f32,
+    pub(crate) current: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewSurface;
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewVisual {
+    pub(crate) owner: ButtonAction,
+    pub(crate) base_alpha: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewImage;
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewContent;
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewSpeaker;
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewDialogue;
+
+#[derive(Component)]
+pub(crate) struct QuickPreviewEmpty;
+
+type EmptyPreviewQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Node,
+    (
+        With<QuickPreviewEmpty>,
+        Without<QuickPreviewContent>,
+        Without<QuickPreviewImage>,
+    ),
+>;
+
+type PreviewAnimationQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static QuickPreviewPanel,
+        &'static mut QuickPreviewFade,
+        &'static mut Node,
+        Option<&'static QuickPreviewSurface>,
+        Option<&'static mut BackgroundColor>,
+        Option<&'static mut BlurStrength>,
+    ),
+>;
 
 /// Per-button hover alpha state for CSS-like transition animation.
 #[derive(Component)]
@@ -229,6 +300,197 @@ pub fn handle_button_click(
     }
 }
 
+pub fn load_quick_save_preview(
+    project_root: Res<ProjectRoot>,
+    mut images: ResMut<Assets<Image>>,
+    mut preview: ResMut<QuickSavePreview>,
+) {
+    preview.state = crate::save::load_game(QUICK_SAVE_SLOT, &project_root).ok();
+    let path = crate::save::preview_path(&project_root, QUICK_SAVE_SLOT);
+    preview.image = std::fs::read(&path)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| {
+            Image::from_buffer(
+                &bytes,
+                ImageType::Extension("png"),
+                CompressedImageFormats::NONE,
+                true,
+                ImageSampler::default(),
+                RenderAssetUsages::default(),
+            )
+            .map_err(anyhow::Error::from)
+        })
+        .map(|image| images.add(image))
+        .map_err(|error| log::debug!("quick-save preview unavailable: {error:#}"))
+        .ok();
+}
+
+pub fn show_quick_preview(
+    buttons: Query<(&Interaction, &ButtonAction), Changed<Interaction>>,
+    mut previews: Query<(&QuickPreviewPanel, &mut QuickPreviewFade, &mut Node)>,
+) {
+    for (interaction, action) in &buttons {
+        if !matches!(action, ButtonAction::QuickSave | ButtonAction::QuickLoad) {
+            continue;
+        }
+        for (preview, mut fade, mut node) in &mut previews {
+            if preview.owner == *action {
+                fade.target = if matches!(interaction, Interaction::Hovered | Interaction::Pressed)
+                {
+                    node.display = Display::Flex;
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+        }
+    }
+}
+
+/// Runs a short CSS-like transition for the preview surface, its content, and
+/// the matching regional blur proxy. Keeping the proxy alive until fade-out is
+/// complete avoids a sharp blur pop at either end of the animation.
+pub fn animate_quick_previews(
+    time: Res<Time>,
+    mut panels: PreviewAnimationQuery,
+    mut text: Query<(&QuickPreviewVisual, &mut TextColor)>,
+    mut images: Query<(&QuickPreviewVisual, &mut ImageNode)>,
+) {
+    const TRANSITION_SECONDS: f32 = 0.13;
+    const SURFACE_ALPHA: f32 = 0.56;
+    const BLUR_STRENGTH: f32 = 42.0;
+
+    let amount = (time.delta_secs() / TRANSITION_SECONDS).min(1.0);
+    let mut visual_alpha = [0.0; 2];
+    for (panel, mut fade, mut node, surface, background, strength) in &mut panels {
+        fade.current = if fade.current < fade.target {
+            (fade.current + amount).min(fade.target)
+        } else {
+            (fade.current - amount).max(fade.target)
+        };
+        let eased = fade.current * fade.current * (3.0 - 2.0 * fade.current);
+
+        if let Some(mut background) = background {
+            background.0 = Color::srgba(0.0, 0.0, 0.0, SURFACE_ALPHA * eased);
+        }
+        if let Some(mut strength) = strength {
+            strength.0 = BLUR_STRENGTH * eased;
+        }
+        if surface.is_some() {
+            visual_alpha[preview_index(panel.owner)] = eased;
+        }
+        if fade.target == 0.0 && fade.current == 0.0 {
+            node.display = Display::None;
+        }
+    }
+
+    for (visual, mut color) in &mut text {
+        color.0 = color
+            .0
+            .with_alpha(visual.base_alpha * visual_alpha[preview_index(visual.owner)]);
+    }
+    for (visual, mut image) in &mut images {
+        image.color = image
+            .color
+            .with_alpha(visual.base_alpha * visual_alpha[preview_index(visual.owner)]);
+    }
+}
+
+fn preview_index(owner: ButtonAction) -> usize {
+    usize::from(matches!(owner, ButtonAction::QuickLoad))
+}
+
+/// Anchors both the UI-layer blur proxy and the Dialog-camera preview to the
+/// corresponding control button. All inputs are physical layout values, then
+/// converted back into the shared 2560x1440 design canvas.
+pub fn position_quick_previews(
+    buttons: Query<(&ButtonAction, &ComputedNode, &UiGlobalTransform), With<Button>>,
+    content_root: Query<(&ComputedNode, &UiGlobalTransform), With<ContentRoot>>,
+    mut previews: Query<(&QuickPreviewPanel, &mut Node)>,
+) {
+    let Ok((root_node, root_transform)) = content_root.single() else {
+        return;
+    };
+    let root_center = root_transform.translation;
+    let to_design = root_node.inverse_scale_factor();
+    let root_size = root_node.size() * to_design;
+
+    for (action, button_node, button_transform) in &buttons {
+        if !matches!(action, ButtonAction::QuickSave | ButtonAction::QuickLoad) {
+            continue;
+        }
+        let button_center =
+            root_size * 0.5 + (button_transform.translation - root_center) * to_design;
+        let button_size = button_node.size() * to_design;
+        let left = button_center.x + button_size.x * 0.5 - 1050.0;
+        let top = button_center.y - button_size.y * 0.5 - 270.0 - 8.0;
+
+        for (preview, mut node) in &mut previews {
+            if preview.owner == *action {
+                node.left = Val::Px(left);
+                node.top = Val::Px(top);
+                node.right = Val::Auto;
+                node.bottom = Val::Auto;
+            }
+        }
+    }
+}
+
+pub fn sync_quick_preview(
+    preview: Res<QuickSavePreview>,
+    asset_server: Res<AssetServer>,
+    mut images: Query<(&mut ImageNode, &mut Node), With<QuickPreviewImage>>,
+    mut contents: Query<&mut Node, (With<QuickPreviewContent>, Without<QuickPreviewImage>)>,
+    mut speakers: Query<&mut Text, With<QuickPreviewSpeaker>>,
+    mut dialogues: Query<&mut Text, (With<QuickPreviewDialogue>, Without<QuickPreviewSpeaker>)>,
+    mut empty: EmptyPreviewQuery,
+) {
+    if !preview.is_changed() {
+        return;
+    }
+
+    let Some(state) = &preview.state else {
+        for (_, mut node) in &mut images {
+            node.display = Display::None;
+        }
+        for mut node in &mut contents {
+            node.display = Display::None;
+        }
+        for mut node in &mut empty {
+            node.display = Display::Flex;
+        }
+        return;
+    };
+
+    for (mut image, mut node) in &mut images {
+        if let Some(preview_image) = &preview.image {
+            image.image = preview_image.clone();
+            node.display = Display::Flex;
+        } else if let Some(background) = &state.bg {
+            image.image = asset_server.load(format!("background/{background}"));
+            node.display = Display::Flex;
+        } else {
+            node.display = Display::None;
+        }
+    }
+    for mut node in &mut contents {
+        node.display = Display::Flex;
+    }
+    for mut node in &mut empty {
+        node.display = Display::None;
+    }
+
+    let (speaker, dialogue) = state.dialogue.as_ref().map_or(("", ""), |dialogue| {
+        (dialogue.speaker.as_str(), dialogue.text.as_str())
+    });
+    for mut text in &mut speakers {
+        **text = speaker.to_owned();
+    }
+    for mut text in &mut dialogues {
+        **text = dialogue.to_owned();
+    }
+}
+
 // ── Auto-hide control bars ──
 
 /// Marker component for control bar containers that auto-hide.
@@ -351,6 +613,12 @@ pub(crate) struct LockIcon;
 /// The blur post-process auto-collects all ComputedNode + BlurSource entities.
 #[derive(Component)]
 pub(crate) struct BlurSource;
+
+#[derive(Component)]
+pub(crate) struct BlurStrength(pub f32);
+
+#[derive(Component)]
+pub(crate) struct UiBlurSource;
 
 const LOCK_ICON: char = '\u{f47b}';
 const UNLOCK_ICON: char = '\u{f600}';

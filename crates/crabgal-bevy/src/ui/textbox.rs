@@ -1,15 +1,18 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
 use crabgal_core::config::GameConfig;
 use crabgal_core::{Anchor, DESIGN_HEIGHT, DESIGN_WIDTH};
 
-use crate::render::blur::UiBlurCamera;
+use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::resources::{GameConfigResource, GameState};
 use crate::ui::control_bar::{
-    AutoHideBar, AutoHideText, AutoHideTiming, BOTTOM_ITEMS, BlurSource, ButtonAction,
-    ControlBarBot, ControlBarTop, ControlItem, HideButtonText, HideContentBg, HideContentText,
-    HoverAlpha, LockIcon, TOP_ITEMS,
+    AutoHideBar, AutoHideText, AutoHideTiming, BOTTOM_ITEMS, BlurSource, BlurStrength,
+    ButtonAction, ControlBarBot, ControlBarTop, ControlItem, HideButtonText, HideContentBg,
+    HideContentText, HoverAlpha, LockIcon, QuickPreviewContent, QuickPreviewDialogue,
+    QuickPreviewEmpty, QuickPreviewFade, QuickPreviewImage, QuickPreviewPanel, QuickPreviewSpeaker,
+    QuickPreviewSurface, QuickPreviewVisual, TOP_ITEMS, UiBlurSource,
 };
 
 #[derive(Component)]
@@ -22,6 +25,26 @@ pub(crate) struct TextBoxRoot;
 pub(crate) struct NameBarRoot;
 #[derive(Component)]
 pub(crate) struct ContentRoot;
+#[derive(Component)]
+pub(crate) struct MiniAvatarNode;
+#[derive(Component)]
+pub(crate) struct QuickPreviewLayer;
+
+type ContentRootFilter = (
+    With<ContentRoot>,
+    Without<NameBarRoot>,
+    Without<TextBoxRoot>,
+);
+type NameBarFilter = (
+    With<NameBarRoot>,
+    Without<TextBoxRoot>,
+    Without<ContentRoot>,
+);
+type TextBoxFilter = (
+    With<TextBoxRoot>,
+    Without<NameBarRoot>,
+    Without<ContentRoot>,
+);
 
 #[derive(Clone)]
 struct TextboxAssets {
@@ -34,6 +57,7 @@ pub fn setup_textbox(
     config: Res<GameConfigResource>,
     asset_server: Res<AssetServer>,
     ui_camera_query: Query<Entity, With<UiBlurCamera>>,
+    dialog_camera_query: Query<Entity, With<DialogCamera>>,
 ) {
     let Ok(ui_camera) = ui_camera_query.single() else {
         log::error!("textbox requires exactly one UI camera");
@@ -42,6 +66,10 @@ pub fn setup_textbox(
     let assets = TextboxAssets {
         text_font: asset_server.load("fonts/MavenPro-CJK.ttf"),
         icon_font: asset_server.load("fonts/bootstrap-icons.ttf"),
+    };
+    let Ok(dialog_camera) = dialog_camera_query.single() else {
+        log::error!("quick preview requires exactly one dialog camera");
+        return;
     };
 
     commands
@@ -58,9 +86,51 @@ pub fn setup_textbox(
             RenderLayers::layer(1),
         ))
         .with_children(|root| {
+            spawn_mini_avatar(root, &config);
             spawn_name_bar(root, &config, &assets);
             spawn_text_box(root, &config, &assets);
+            spawn_quick_preview_backdrops(root);
         });
+    spawn_quick_preview_layer(&mut commands, dialog_camera, &assets);
+}
+
+fn spawn_mini_avatar(root: &mut ChildSpawnerCommands, config: &GameConfig) {
+    root.spawn((
+        Name::new("mini_avatar"),
+        MiniAvatarNode,
+        ImageNode::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Percent(config.layout.textbox_bottom),
+            left: Val::Percent(config.layout.textbox_left),
+            width: Val::Px(280.0),
+            height: Val::Px(280.0),
+            display: Display::None,
+            ..default()
+        },
+        ZIndex(103),
+        RenderLayers::layer(1),
+    ));
+}
+
+pub fn update_mini_avatar(
+    state: Res<GameState>,
+    config: Res<GameConfigResource>,
+    asset_server: Res<AssetServer>,
+    mut avatars: Query<(&mut ImageNode, &mut Node), With<MiniAvatarNode>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    for (mut image, mut node) in &mut avatars {
+        let Some(avatar) = &state.mini_avatar else {
+            node.display = Display::None;
+            continue;
+        };
+        image.image = asset_server.load(config.figure_path(avatar));
+        image.color = Color::srgba(1.0, 1.0, 1.0, state.mini_avatar_progress);
+        node.display = Display::Flex;
+    }
 }
 
 fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: &TextboxAssets) {
@@ -72,7 +142,7 @@ fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             position_type: PositionType::Absolute,
             bottom: Val::Percent(layout.namebar_bottom),
             left: Val::Percent(layout.textbox_left),
-            padding: UiRect::axes(Val::Px(20.0), Val::Px(6.0)),
+            padding: UiRect::axes(Val::Px(32.0), Val::Px(12.0)),
             min_width: Val::Px(100.0),
             ..default()
         },
@@ -159,7 +229,9 @@ fn spawn_top_controls(
                 top: Val::Px(0.0),
                 right: Val::Px(24.0),
                 flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(4.0),
+                // Adjacent hit boxes prevent hover from dropping while moving
+                // horizontally across the control bar.
+                column_gap: Val::ZERO,
                 ..default()
             },
             ZIndex(110),
@@ -230,7 +302,9 @@ fn spawn_bottom_controls(
                 bottom: Val::Px(0.0),
                 right: Val::Px(24.0),
                 flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(2.0),
+                // Keep Q·SAVE/Q·LOAD and the remaining controls contiguous so
+                // quick-preview transitions are not interrupted by dead space.
+                column_gap: Val::ZERO,
                 ..default()
             },
             ZIndex(110),
@@ -278,14 +352,177 @@ fn spawn_bottom_controls(
         });
 }
 
+fn spawn_quick_preview_backdrops(root: &mut ChildSpawnerCommands) {
+    for owner in [ButtonAction::QuickSave, ButtonAction::QuickLoad] {
+        root.spawn((
+            Name::new(format!("quick_preview_blur::{owner:?}")),
+            QuickPreviewPanel { owner },
+            QuickPreviewFade::default(),
+            UiBlurSource,
+            BlurStrength(0.0),
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(40.0),
+                bottom: Val::Px(290.0),
+                width: Val::Px(1050.0),
+                height: Val::Px(270.0),
+                display: Display::None,
+                ..default()
+            },
+            FocusPolicy::Pass,
+            GlobalZIndex(139),
+        ));
+    }
+}
+
+fn spawn_quick_preview_layer(
+    commands: &mut Commands,
+    dialog_camera: Entity,
+    assets: &TextboxAssets,
+) {
+    commands
+        .spawn((
+            Name::new("quick_preview_layer"),
+            QuickPreviewLayer,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(DESIGN_WIDTH),
+                height: Val::Px(DESIGN_HEIGHT),
+                ..default()
+            },
+            FocusPolicy::Pass,
+            UiTargetCamera(dialog_camera),
+            RenderLayers::layer(2),
+        ))
+        .with_children(|layer| {
+            for owner in [ButtonAction::QuickSave, ButtonAction::QuickLoad] {
+                spawn_quick_preview(layer, owner, assets);
+            }
+        });
+}
+
+fn spawn_quick_preview(
+    layer: &mut ChildSpawnerCommands,
+    owner: ButtonAction,
+    assets: &TextboxAssets,
+) {
+    layer
+        .spawn((
+            Name::new(format!("quick_preview::{owner:?}")),
+            QuickPreviewPanel { owner },
+            QuickPreviewFade::default(),
+            QuickPreviewSurface,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(40.0),
+                bottom: Val::Px(290.0),
+                width: Val::Px(1050.0),
+                height: Val::Px(270.0),
+                display: Display::None,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(Val::Px(16.0)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            FocusPolicy::Pass,
+            GlobalZIndex(140),
+        ))
+        .with_children(|preview| {
+            preview.spawn((
+                QuickPreviewImage,
+                QuickPreviewVisual {
+                    owner,
+                    base_alpha: 1.0,
+                },
+                ImageNode::default(),
+                Node {
+                    width: Val::Px(424.0),
+                    height: Val::Percent(100.0),
+                    flex_shrink: 0.0,
+                    display: Display::None,
+                    ..default()
+                },
+            ));
+            preview
+                .spawn((
+                    QuickPreviewContent,
+                    Node {
+                        height: Val::Percent(100.0),
+                        flex_grow: 1.0,
+                        display: Display::None,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(12.0),
+                        padding: UiRect::left(Val::Px(20.0)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ))
+                .with_children(|content| {
+                    content.spawn((
+                        QuickPreviewSpeaker,
+                        QuickPreviewVisual {
+                            owner,
+                            base_alpha: 0.85,
+                        },
+                        Text::new(""),
+                        TextFont {
+                            font: assets.text_font.clone().into(),
+                            font_size: FontSize::from(32.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+                    ));
+                    content.spawn((
+                        QuickPreviewDialogue,
+                        QuickPreviewVisual {
+                            owner,
+                            base_alpha: 0.67,
+                        },
+                        Text::new(""),
+                        TextFont {
+                            font: assets.text_font.clone().into(),
+                            font_size: FontSize::from(26.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.67)),
+                    ));
+                });
+            preview.spawn((
+                QuickPreviewEmpty,
+                QuickPreviewVisual {
+                    owner,
+                    base_alpha: 0.67,
+                },
+                Text::new("暂无存档"),
+                TextFont {
+                    font: assets.text_font.clone().into(),
+                    font_size: FontSize::from(30.0),
+                    ..default()
+                },
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.67)),
+            ));
+        });
+}
+
 pub fn update_textbox(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
+    mut content_root: Query<&mut Node, ContentRootFilter>,
     mut speaker_text: Query<&mut Text, (With<SpeakerText>, Without<DialogueText>)>,
     mut dialogue_text: Query<&mut Text, (With<DialogueText>, Without<SpeakerText>)>,
-    mut name_bar: Query<&mut Node, (With<NameBarRoot>, Without<TextBoxRoot>)>,
-    mut text_box: Query<&mut Node, (With<TextBoxRoot>, Without<NameBarRoot>)>,
+    mut name_bar: Query<&mut Node, NameBarFilter>,
+    mut text_box: Query<&mut Node, TextBoxFilter>,
 ) {
+    if let Ok(mut root) = content_root.single_mut() {
+        root.display = if state.ended {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
+
     let (speaker, dialogue) = state.dialogue.as_ref().map_or_else(
         || (String::new(), String::new()),
         |dialogue| {
@@ -309,7 +546,12 @@ pub fn update_textbox(
     let width = 100.0 - left;
     for mut node in &mut name_bar {
         node.left = Val::Percent(left);
-        node.width = Val::Percent(width);
+        node.width = Val::Auto;
+        node.display = if speaker.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
     }
     for mut node in &mut text_box {
         node.left = Val::Percent(left);

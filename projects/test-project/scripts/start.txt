@@ -1,0 +1,38 @@
+; crabgal Phase 1 acceptance scene
+; Local resources only. No package/container format is involved.
+
+setVar:heroName="小夜"
+setVar:chapter=1 -global
+setVar:flags=[true, false, 3]
+setVar:flags[1]=chapter == 1
+setVar:showSecret=false
+setVar:enableLocked=false
+
+changeBg:bg.webp -fade -duration=500
+changeFigure:stand.webp -left -id=hero -fade -duration=500 -zIndex=2
+{heroName}:Phase {chapter} 验收开始。数组第二项是 {flags[1]}。 -v16.wav -volume=65
+{heroName}:富文本可读降级：[样式文本](color=#ffb7c5)，注音：[蟹](かに)，以及第一行<br>第二行。
+
+setTransform:{"position":{"x":180,"y":0},"scale":{"x":1.04,"y":1.04},"rotation":0.02,"blur":5} -target=hero -duration=700 -easing=easeInOut
+changeBg:WebGAL_New_Enter_Image.webp -fade -duration=600 -transform={"scale":{"x":1.03,"y":1.03},"blur":2}
+这句只有条件成立时显示。 -when=chapter==1
+这句使用 -next，不单独停顿。 -next
+{heroName}:上一句已经和本句在同一次执行中衔接。
+这一句会在打字完成后自动前进。 -notend
+
+choose:(showSecret)->隐藏选项:never|[enableLocked]->禁用选项:never|本场景标签:local_branch|调用子场景:callScene(phase1_sub.txt)|切换场景:phase1_end.txt
+
+jumpLabel:after_choice
+
+label:local_branch
+{heroName}:label 分支工作正常。
+jumpLabel:after_choice
+
+label:never
+不应进入这个分支。
+
+label:after_choice
+changeFigure:none -left -id=hero -fade -duration=400
+changeBg:none -fade -duration=400
+Phase 1 主场景结束，下一步应回到标题页。
+end

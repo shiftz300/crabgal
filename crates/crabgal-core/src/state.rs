@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::Action;
-use crate::types::{Position, SpriteTransform, Transition, Value};
+use crate::action::ChoiceTarget;
+use crate::types::{BlendMode, Easing, Position, SpriteTransform, Transition, Value};
 
 /// The complete game state at any point in time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -19,16 +20,24 @@ pub struct State {
     pub current_scene: String,
     /// Index into the current scene's action list.
     pub cursor: usize,
+    /// Suspended callers, most recent frame last.
+    pub scene_stack: Vec<SceneFrame>,
+    /// Explicit `end` reached; the presentation layer should show the title.
+    pub ended: bool,
 
     // ── Display state ──
     /// Current background image path.
     pub bg: Option<String>,
     /// Current background transition in progress.
     pub bg_transition: Option<BgTransition>,
+    pub bg_transform: SpriteTransform,
+    pub bg_transform_animation: Option<TransformAnimation>,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
     /// Current dialogue text (if any).
     pub dialogue: Option<Dialogue>,
+    /// Last settled dialogue, used by WebGAL `-concat`.
+    pub previous_dialogue: Option<Dialogue>,
     /// Mini avatar image path (displayed beside text box).
     pub mini_avatar: Option<String>,
     /// Mini avatar enter/exit transition progress (0→1).
@@ -36,15 +45,38 @@ pub struct State {
 
     // ── Choice state ──
     /// Active choice menu (if any).
-    pub menu: Option<Vec<crate::action::Choice>>,
+    pub menu: Option<MenuState>,
 
     // ── Variables ──
     /// Game variables (set by scripts).
     pub vars: HashMap<String, Value>,
+    /// Persistent variables requested with WebGAL's `-global` flag.
+    pub global_vars: HashMap<String, Value>,
 
     // ── Scene labels ──
     /// Label → action index mapping for the current scene.
     pub labels: HashMap<String, usize>,
+}
+
+/// Return point saved by `callScene`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SceneFrame {
+    pub scene: String,
+    pub cursor: usize,
+}
+
+/// Choice menu currently blocking script execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MenuState {
+    pub prompt: String,
+    pub choices: Vec<MenuChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MenuChoice {
+    pub text: String,
+    pub target: ChoiceTarget,
+    pub enabled: bool,
 }
 
 /// A sprite displayed on screen.
@@ -67,6 +99,18 @@ pub struct Sprite {
     /// Transform applied on top of base position (offset, alpha, scale, etc).
     #[serde(default)]
     pub transform: SpriteTransform,
+    pub transform_animation: Option<TransformAnimation>,
+    pub z_index: i32,
+    pub blend: BlendMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransformAnimation {
+    pub from: SpriteTransform,
+    pub to: SpriteTransform,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub easing: Easing,
 }
 
 /// Background transition state.
@@ -91,6 +135,9 @@ pub struct Dialogue {
     pub text: String,
     /// Number of visible characters (typewriter effect).
     pub visible_chars: usize,
+    pub vocal: Option<String>,
+    pub volume: f32,
+    pub auto_advance: bool,
 }
 
 impl State {

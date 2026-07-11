@@ -281,6 +281,15 @@ impl GameConfig {
             .cloned()
             .unwrap_or_else(|| format!("figure/{}", name))
     }
+
+    /// Resolve a voice asset name to its path below the local asset root.
+    pub fn voice_path(&self, name: &str) -> String {
+        self.assets
+            .voices
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("vocal/{name}"))
+    }
 }
 
 #[cfg(test)]
