@@ -30,8 +30,8 @@ game/
 │   name = "My Game"
 │   resolution = [1600, 900]
 ├── scripts/
-│   ├── main.crab
-│   └── scene01.crab
+│   ├── start.txt
+│   └── scene01.txt
 ├── assets/
 │   ├── bg/alley.png
 │   ├── chr/eileen/happy.png

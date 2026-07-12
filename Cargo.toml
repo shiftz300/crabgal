@@ -3,6 +3,17 @@ resolver = "2"
 members = [
     "crates/*",
 ]
+default-members = ["."]
+
+[package]
+name = "crabgal"
+version.workspace = true
+edition.workspace = true
+description = "A dedicated visual-novel engine with WebGAL script compatibility"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
@@ -12,12 +23,27 @@ members = [
 debug-assertions = false
 
 [workspace.dependencies]
-crabgal-core = { path = "crates/crabgal-core" }
-crabgal-script = { path = "crates/crabgal-script" }
+crabgal-core = { path = "crates/core" }
+crabgal-script = { path = "crates/script" }
 
 log = "0.4"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
+crc32fast = "1"
 notify = "7"
+serde_yaml = "0.9"
+bevy = { version = "0.19", default-features = false }
+libwebp-sys = "0.14.4"
+
+[dependencies]
+crabgal-core = { workspace = true }
+crabgal-script = { workspace = true }
+log = { workspace = true }
+bincode = { workspace = true }
+crc32fast = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+libwebp-sys = { workspace = true }
+bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "wav", "mp3", "vorbis", "png", "jpeg"] }

@@ -12,7 +12,7 @@
 | 桌面壳 | 原生 winit (via Bevy) | 无 WebView 开销 |
 | 资源打包 | hexz (.hxz) 待集成 | AES-256-GCM、zstd、O(1) 随机访问 |
 | 存档序列化 | bincode | ECS World 差分快照 |
-| 脚本 | 自定义 DSL (.crab + WebGAL .txt) | 命令式、对标 WebGAL 风格 |
+| 脚本 | 可注册语言适配器（内置 WebGAL `.txt`） | 各语法统一编译为 `Action` IR |
 
 ## 不选
 
@@ -20,7 +20,7 @@
 |------|------|
 | 字节码 VM | VN 脚本执行频率极低（每次点击一次），VM 过度设计 |
 | Tauri / WebView | 增加构建复杂度，原生 winit 更轻 |
-| Lua 嵌入 | DSL 更可控、更易调试，无需嵌入语言 |
+| Lua 嵌入 | 当前创作需求由轻量语言适配器覆盖，无需嵌入完整 VM |
 | 手写 wgpu 渲染 | Bevy 提供成熟的渲染抽象和 UI 系统 |
 
 ## 参考项目
@@ -28,7 +28,7 @@
 | 项目 | 借鉴点 |
 |------|--------|
 | Bevy | Plugin trait、Schedule、双世界、AssetPlugin::Processed |
-| WebGAL | 编辑器预览协议、脚本 DSL、UI 布局参考 |
+| WebGAL | 编辑器预览协议、脚本语义、UI 布局参考 |
 | YU-RIS | 延迟命令队列 + batch 合并 |
 | Ren'Py | RevertableObject、差分 rollback |
 | hexz_k | .hxz 加密归档 |

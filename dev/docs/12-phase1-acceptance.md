@@ -12,7 +12,7 @@
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p crabgal-bevy -- dev projects/test-project
+cargo run -- dev projects/test-project
 ```
 
 预期：43 个测试通过，Clippy 无 warning；窗口打开后使用 `start.txt`，终端没有缺失场景、

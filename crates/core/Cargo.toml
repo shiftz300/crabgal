@@ -1,0 +1,10 @@
+[package]
+name = "crabgal-core"
+version.workspace = true
+edition.workspace = true
+description = "Language-neutral visual-novel model and deterministic state machine"
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+log = { workspace = true }

@@ -6,34 +6,10 @@ A visual novel engine built with Rust and Bevy 0.19, with WebGAL script compatib
 
 ```bash
 # Run in dev mode (hot reload, windowed preview)
-cargo run -p crabgal-bevy -- dev projects/test-project
+cargo run -- dev projects/test-project
 ```
 
-## Script Format
-
-### .crab DSL
-
-```
-label start
-
-bg bg.webp fade
-show girl stand.webp at left slide
-say WebGAL: 欢迎使用 crabgal！中英文混排显示。
-say WebGAL: GPU 渲染，动画系统，分支选择——应有尽有。
-
-menu "请选择": "了解更多" -> more, "结束演示" -> end
-
-label more
-jump goodbye
-
-label end
-jump goodbye
-
-label goodbye
-say WebGAL: 感谢体验！Have a nice day!
-```
-
-### WebGAL .txt (compatible)
+## WebGAL Script Format
 
 ```
 changeBg:bg.webp -next;
@@ -47,10 +23,10 @@ jumpLabel:target;
 
 ```
 crabgal/
+├── src/                  Final engine, Bevy runtime, UI and rendering
 ├── crates/
-│   ├── crabgal-core      State machine, Action system, step engine
-│   ├── crabgal-script    .crab + WebGAL .txt parsers, hot-reload watcher
-│   └── crabgal-bevy      Bevy frontend, ECS synchronization, UI and rendering
+│   ├── core/             crabgal-core: state machine and domain model
+│   └── script/           crabgal-script: language adapters and project loading
 └── dev/docs/             Architecture docs + TODO tracking
 ```
 
@@ -78,7 +54,7 @@ Rust | Bevy 0.19 | wgpu | notify | serde | bincode
 
 ```
 my-game/
-├── scripts/        .crab or .txt files
+├── scripts/        WebGAL .txt files
 ├── assets/
 │   ├── background/
 │   ├── figure/
@@ -97,7 +73,7 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | 0 — Bevy foundation | Done | Rendering, UI, blur, input, save/load |
 | 1 — Script commands | Done; awaiting acceptance | Scenes, expressions, common WebGAL semantics, diagnostics and local prefetch |
 | 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
-| 3 — Stateful UI | Planned | Backlog/read history/rollback, save slots and settings |
+| 3 — Stateful UI | Done; awaiting acceptance | Backlog/read history/rollback, save slots and settings |
 | 4+ — Production | Planned | Audio, performances, richer text, tooling and packaging |
 
 ## Credits

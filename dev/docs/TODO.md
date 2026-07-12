@@ -7,10 +7,10 @@
 
 ## 当前优先级
 
-1. **Backlog / 已读 / 回滚快照** — 先补核心状态，再实现 Backlog UI
-2. **SAVE / LOAD 多槽位** — 基于版本化快照补齐正式存档界面
-3. **音频总线** — BGM、vocal、SE、Replay 和音量设置
-4. **演出控制器** — 阻塞动画、filter 生命周期和非 alpha blend
+1. **Phase 3 视觉验收** — Backlog、SAVE / LOAD、CONFIG、TITLE 的最终人工验收
+2. **音频总线** — BGM、vocal、SE、Replay 和分总线音量
+3. **演出控制器** — 阻塞动画、filter 生命周期和非 alpha blend
+4. **输入抽象** — 为桌面、触控、手柄建立统一 InputAction
 
 ## Phase 0 — Bevy 引擎基础 (DONE)
 
@@ -21,6 +21,7 @@
 - [x] MavenPro + HanaMin 日文假名并集字体（format 12 cmap）与全局黑色文字背景阴影
 - [x] Bootstrap Icons 图标 + hover 动画 + toggle 状态机
 - [x] 打字机逐字显示 + 鼠标/键盘推进
+- [x] 打字机首字符零延迟，并通过版本化设置淘汰 HiDPI 滑杆 bug 写入的异常低速值
 
 ## Phase 1 — 脚本引擎 & 核心命令 (DONE — 待用户验收)
 
@@ -34,10 +35,9 @@
 - [x] choose — 桌面 Bevy 选项面板、局部模糊、鼠标/键盘选择与恢复推进
 - [x] choose — 场景/callScene 目标与条件显示/启用
 - [x] label / jumpLabel — 跳转
-- [x] changeScene / callScene — `.crab`/WebGAL 解析、场景切换、嵌套调用与自然返回
+- [x] changeScene / callScene — WebGAL 解析、场景切换、嵌套调用与自然返回
 - [x] end — 核心流程终止并清空场景栈
 - [x] end — 重置舞台并返回标题 UI
-- [x] setVar — 自有 `.crab` DSL 标量变量
 - [x] setVar — WebGAL parser、表达式、数组与全局变量
 - [x] setTransform — 立绘 offset/alpha/scale/rotation 基础渲染
 - [x] setTransform — duration/easing/background/filter；接通 blur 渲染
@@ -67,20 +67,48 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] 背景和立绘改为增量同步，避免每帧全量重建实体
 - [x] 项目加载顺序稳定，并拒绝重复场景名
 - [x] ScriptWatcher 持有 watcher 生命周期，脚本修改后真实重载
+- [x] 三 crate 按稳定职责重组：core `model/runtime`、script `adapter/workspace`、Bevy `runtime/scene/storage/ui`
+- [x] 根 package 直接产出 `crabgal` 引擎二进制，内部库目录收敛为 `crates/core` 与 `crates/script`
+- [x] 验收项目收敛为唯一、自包含的 `projects/test-project`，移除旧空壳、无效脚本、生成物和未使用配置/依赖
+- [x] WebGAL 语法、语言类型与解析实现集中到 `crates/script/src/adapter/`
+- [x] 合并短生命周期模块：core transition math、script watcher、Bevy plugin/runtime 注册
 - [x] 文本框系统按职责拆分，Dialog 模糊、专用样式与键盘操作完成实际交互验证
 - [x] 存档 API 返回 `Result`，使用临时文件 + rename 原子替换
-- [x] Rust 2024、格式检查、严格 Clippy 与 33 个测试全部通过
+- [x] Rust 2024、格式检查、严格 Clippy 与 51 个测试全部通过
+- [x] UI 公共字体、文本原语、菜单顶栏与淡入/模糊生命周期集中化；CONFIG 控件改为数据表驱动
 
-## Phase 3 — 控制栏扩展
+## Phase 3 — 控制栏扩展 (DONE — 待用户验收)
 
-- [ ] Backlog 核心快照（舞台、变量、scene stack、cursor）与容量上限
-- [ ] 已读历史持久化 + Skip All/Read 语义
-- [ ] Backlog UI、滚动、语音重播与回想跳转
-- [ ] SAVE / LOAD 多槽位面板
-- [ ] 槽位截图、角色/文本/时间预览、分页、覆盖/删除确认
-- [ ] 存档格式版本、迁移、损坏恢复与 game key 隔离
-- [ ] SYSTEM 设置面板 (音量、速度、skip 模式)
-- [ ] TITLE 返回标题画面
+- [x] Backlog 轻量快照（舞台、变量、scene stack、cursor）与 200 条容量上限
+- [x] 已读历史持久化 + Skip All/Read 语义（默认 Read，`Shift+S` 切换模式）
+- [x] WebGAL K 风格 Backlog UI、反向滚动、语音重播、回想跳转与进出动画
+- [x] WebGAL K 风格 SAVE / LOAD：20 页 × 10 槽、空槽保护、覆盖/读取确认
+- [x] 槽位 WebP 截图、角色/文本/时间预览、分页与右键删除确认
+- [x] 专用二进制存档：元数据前置、状态载荷分离、CRC32 校验、原子替换与项目目录隔离
+- [x] SYSTEM 设置面板（主音量、文字速度、Auto 延迟、Skip 模式与本地持久化）
+- [x] TITLE 返回标题画面
+- [x] 对齐 WebGAL K 的菜单模糊、分页/卡片 hover、0.2 秒页面过渡、Backlog 退出与标题按钮反馈
+- [x] SAVE / LOAD / CONFIG 共用同尺寸壳层与 blur 生命周期，存档预览有界缓存，CONFIG 水印置于右下角模糊底层
+- [x] 所有 UI/Dialog 锁定舞台 16:9 viewport；悬浮层统一淡出 textbox/namebar；存档分页使用紧凑大按钮与中点换页淡出
+- [x] CONFIG 常驻隐藏以消除重复入场重建；槽位 Dialog 同帧切换渲染层，空存档使用淡色整块卡片
+- [x] Backlog 退出同步衰减文字阴影并统一释放时序；资源与 UI 字体未加载完成时锁定按键、指针和滚轮
+- [x] 悬浮层同步衰减 textbox 文字阴影；SAVE/LOAD 取消槽位交错入场，存档后留在当前页并即时刷新信息/预览
+- [x] 全屏菜单统一增强至 48 强度高斯模糊，并加深 SAVE / LOAD / CONFIG / Backlog 暗色层
+- [x] CONFIG Dialog 模态层级、K 风格滑杆/选项布局、TITLE 轻量 hover 与区域模糊像素边界修正
+- [x] CONFIG 15%/85% 原版页面结构、紧凑顶栏、深色高对比模糊层与 TITLE 可见按压反馈
+- [x] CONFIG 对齐 K 的完整三页控件密度（全屏、字号、透明度、五路音量与文本预览）并持久化
+- [x] TITLE 按钮整块缩放、原版宽度收缩曲线与 CONTINUE 预览顶部模糊越界修正
+- [x] UI 稳态性能收尾：隐藏 CONFIG 停止更新、滑杆松手落盘、Backlog 有界入场、存档预览异步解码，并为 textbox/TITLE/SAVE 动画增加变更检测
+- [x] CONFIG 全控件与 blur 同步淡入淡出、SL→CONFIG 无白闪交接；全局文字使用四向低成本字形扩散阴影
+- [x] GAL 生命周期调度：活动态按显示器自然刷新，稳态事件驱动休眠，失焦暂停虚拟时间；剧情与 UI 动画不绑定固定帧率
+- [x] 稳态渲染收敛：准确标记 `GameState` 变更，背景/立绘只在状态、资源或 viewport 改变时同步；隐藏/零强度 blur 跳过并复用区域缓冲
+- [x] 图片内存管线：原生 libwebp 在解码阶段直出目标尺寸，背景上限 1920×1080、立绘按设计高度；GPU 上传后释放 CPU 像素，资源离开预取窗口即卸载
+- [x] SL 分页彻底移除黑幕并改为槽位内容自身淡出/淡入；CONFIG 预览设置不再穿透显示舞台 textbox；TITLE 预览与按钮缩进解耦并移除左边框
+- [x] 集中式 UI 输入 scope（Loading/Dialog/Menu/Backlog/Title/Stage）阻止快捷键穿透；SL 子页与 SL↔CONFIG 使用连续 blur 和内容淡入淡出交接
+- [x] TITLE 统一低透明黑色可交互按钮与低透明灰色禁用按钮；CONFIG 导航对齐内容垂直节奏；SL 分页采用方向滑动并收敛 UI 动画为帧率无关时间函数
+- [x] SL 页码栏与滑动槽位网格解耦；SAVE/LOAD/CONFIG 复用持久全屏 blur；未开始游戏禁止存档，无快速存档时禁用带 blur 的 CONTINUE
+- [x] SAVE / LOAD / CONFIG 固定顶栏下改为连续全宽滑轨：出入页并存、页码即时切换、动画结束后释放旧页，且所有位移按真实时间推进
+- [x] 按 WebGAL_K Options CSS 细粒度对齐 CONFIG hover：页面文字 0.175/0.5/0.8，NormalButton 文字 0.376/0.667 与 0.188 浅白横向填充，并修正 0.2 秒左上入场方向
 
 ## Phase 4 — 音频
 
@@ -140,7 +168,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 | [03-render-pipeline.md](03-render-pipeline.md) | 渲染管线 |
 | [04-rollback-and-save.md](04-rollback-and-save.md) | 存档与回溯 |
 | [05-bevy-architecture.md](05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
-| [05-script-dsl.md](05-script-dsl.md) | 脚本 DSL 设计 |
+| `crates/script/src/language.rs` | 可注册语言适配器边界 |
 | [07-references.md](07-references.md) | 业界引擎参考 |
 | [09-webgal-script-reference.md](09-webgal-script-reference.md) | WebGAL 脚本参考 |
 | [10-webgal-k-gap-analysis.md](10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
