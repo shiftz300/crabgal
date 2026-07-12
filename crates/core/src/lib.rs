@@ -10,5 +10,8 @@ pub use model::{action, state, types};
 pub use runtime::{dissolve, expression, step};
 
 pub use model::types::*;
-pub use model::{Action, ChoiceTarget, MenuChoice, MenuState, SayOptions, SceneFrame, State};
+pub use model::{
+    Action, BgmState, ChoiceTarget, EffectCue, EffectEvent, EffectState, MenuChoice, MenuState,
+    SayOptions, SceneFrame, State,
+};
 pub use runtime::StepResult;

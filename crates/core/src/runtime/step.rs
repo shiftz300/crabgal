@@ -290,12 +290,43 @@ pub fn step(state: &mut State) -> StepResult {
                 end_game(state);
                 return StepResult::EndOfScene;
             }
-            Action::Bgm { file, volume } => {
-                debug!("Bgm: {} (vol {})", file, volume);
-                // Audio stubbed — will be wired to rodio later.
+            Action::Bgm {
+                file,
+                volume,
+                fade_seconds,
+            } => {
+                let file = interpolate(&file, &state.vars, &state.global_vars);
+                state.bgm.file = (file != "none" && !file.is_empty()).then_some(file);
+                state.bgm.volume = volume.clamp(0.0, 1.0);
+                state.bgm.fade_seconds = fade_seconds.max(0.0);
+                state.bgm.revision = state.bgm.revision.wrapping_add(1);
             }
-            Action::StopBgm => {
-                debug!("StopBgm");
+            Action::Effect { file, volume, id } => {
+                let id = id.map(|id| interpolate(&id, &state.vars, &state.global_vars));
+                let file = file.map(|file| interpolate(&file, &state.vars, &state.global_vars));
+                match (id, file) {
+                    (Some(id), Some(file)) => {
+                        state.looping_effects.insert(
+                            id,
+                            crate::state::EffectState {
+                                file,
+                                volume: volume.clamp(0.0, 1.0),
+                            },
+                        );
+                    }
+                    (Some(id), None) => {
+                        state.looping_effects.remove(&id);
+                    }
+                    (None, Some(file)) => {
+                        state.effect_queue.push(crate::state::EffectEvent::Play(
+                            crate::state::EffectCue {
+                                file,
+                                volume: volume.clamp(0.0, 1.0),
+                            },
+                        ));
+                    }
+                    (None, None) => state.effect_queue.push(crate::state::EffectEvent::Stop),
+                }
             }
             Action::Set {
                 name,
@@ -388,6 +419,11 @@ pub fn end_game(state: &mut State) {
     state.bg_transition = None;
     state.sprites.clear();
     state.mini_avatar = None;
+    state.bgm.file = None;
+    state.bgm.fade_seconds = 0.0;
+    state.bgm.revision = state.bgm.revision.wrapping_add(1);
+    state.looping_effects.clear();
+    state.effect_queue.clear();
     state.vars.clear();
     state.cursor = state.scenes.get(&state.current_scene).map_or(0, Vec::len);
     state.ended = true;
@@ -888,5 +924,36 @@ mod tests {
             Action::Jump("loop".into()),
         ]);
         assert_eq!(step(&mut state), StepResult::ExecutionLimit);
+    }
+
+    #[test]
+    fn audio_commands_update_persistent_and_transient_state() {
+        let mut state = state_with(vec![
+            Action::Bgm {
+                file: "theme.ogg".into(),
+                volume: 0.7,
+                fade_seconds: 1.5,
+            },
+            Action::Effect {
+                file: Some("rain.ogg".into()),
+                volume: 0.4,
+                id: Some("weather".into()),
+            },
+            Action::Effect {
+                file: Some("click.wav".into()),
+                volume: 0.8,
+                id: None,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(state.bgm.file.as_deref(), Some("theme.ogg"));
+        assert_eq!(state.bgm.volume, 0.7);
+        assert_eq!(state.bgm.fade_seconds, 1.5);
+        assert_eq!(state.looping_effects["weather"].file, "rain.ogg");
+        assert!(matches!(
+            &state.effect_queue[0],
+            crate::state::EffectEvent::Play(cue) if cue.file == "click.wav"
+        ));
     }
 }

@@ -74,7 +74,8 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | 1 — Script commands | Done; awaiting acceptance | Scenes, expressions, common WebGAL semantics, diagnostics and local prefetch |
 | 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
 | 3 — Stateful UI | Done; awaiting acceptance | Backlog/read history/rollback, save slots and settings |
-| 4+ — Production | Planned | Audio, performances, richer text, tooling and packaging |
+| 4 — Audio | Done; awaiting acceptance | BGM fades, vocal/replay, effects and volume buses |
+| 5+ — Production | Planned | Performances, richer text, tooling and packaging |
 
 ## Credits
 

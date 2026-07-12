@@ -81,11 +81,19 @@ pub enum Action {
     /// End the current game flow without returning through the scene stack.
     End,
 
-    // ── Audio (stub for now) ──
+    // ── Audio ──
     /// Play background music.
-    Bgm { file: String, volume: f32 },
-    /// Stop background music.
-    StopBgm,
+    Bgm {
+        file: String,
+        volume: f32,
+        fade_seconds: f32,
+    },
+    /// Play, replace, or stop a sound effect. An id makes the effect loop.
+    Effect {
+        file: Option<String>,
+        volume: f32,
+        id: Option<String>,
+    },
 
     // ── UI ──
     /// Show mini avatar beside the text box.

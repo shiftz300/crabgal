@@ -43,6 +43,14 @@ pub struct State {
     /// Mini avatar enter/exit transition progress (0→1).
     pub mini_avatar_progress: f32,
 
+    // ── Audio state ──
+    pub bgm: BgmState,
+    /// Persistent looping effects, keyed by WebGAL's `-id`.
+    pub looping_effects: HashMap<String, EffectState>,
+    /// One-shot effects emitted since the presentation layer last synchronized.
+    #[serde(skip)]
+    pub effect_queue: Vec<EffectEvent>,
+
     // ── Choice state ──
     /// Active choice menu (if any).
     pub menu: Option<MenuState>,
@@ -66,6 +74,43 @@ pub struct State {
 }
 
 pub const DEFAULT_BACKLOG_CAPACITY: usize = 200;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BgmState {
+    pub file: Option<String>,
+    pub volume: f32,
+    pub fade_seconds: f32,
+    pub revision: u64,
+}
+
+impl Default for BgmState {
+    fn default() -> Self {
+        Self {
+            file: None,
+            volume: 1.0,
+            fade_seconds: 0.0,
+            revision: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectState {
+    pub file: String,
+    pub volume: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectCue {
+    pub file: String,
+    pub volume: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectEvent {
+    Play(EffectCue),
+    Stop,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DialogueKey {
@@ -92,6 +137,8 @@ pub struct RollbackSnapshot {
     pub sprites: HashMap<String, Sprite>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
+    pub bgm: BgmState,
+    pub looping_effects: HashMap<String, EffectState>,
     pub vars: HashMap<String, Value>,
     pub global_vars: HashMap<String, Value>,
     pub labels: HashMap<String, usize>,
@@ -206,6 +253,8 @@ impl State {
                 sprites: self.sprites.clone(),
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
+                bgm: self.bgm.clone(),
+                looping_effects: self.looping_effects.clone(),
                 vars: self.vars.clone(),
                 global_vars: self.global_vars.clone(),
                 labels: self.labels.clone(),
@@ -252,6 +301,10 @@ impl State {
         self.previous_dialogue = None;
         self.mini_avatar = snapshot.mini_avatar;
         self.mini_avatar_progress = 1.0;
+        self.bgm = snapshot.bgm;
+        self.bgm.revision = self.bgm.revision.wrapping_add(1);
+        self.looping_effects = snapshot.looping_effects;
+        self.effect_queue.clear();
         self.vars = snapshot.vars;
         self.global_vars = snapshot.global_vars;
         self.labels = snapshot.labels;

@@ -3,7 +3,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 
-use crate::render::blur::UiBlurCamera;
+use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
 use crate::runtime::viewport::DesignViewport;
 use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePreview};
@@ -30,6 +30,70 @@ pub enum TitleAction {
 pub struct PendingTitleAction {
     action: TitleAction,
     remaining: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ReturnToTitleTransition {
+    elapsed: f32,
+    switched: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct ReturnToTitleOverlay;
+
+pub(crate) fn animate_return_to_title(
+    transition: Option<ResMut<ReturnToTitleTransition>>,
+    time: Res<Time>,
+    mut state: ResMut<GameState>,
+    camera: Query<Entity, With<DialogCamera>>,
+    mut overlays: Query<(Entity, &mut BackgroundColor), With<ReturnToTitleOverlay>>,
+    mut commands: Commands,
+) {
+    const COVER_SECONDS: f32 = 0.18;
+    const REVEAL_SECONDS: f32 = 0.28;
+    let Some(mut transition) = transition else {
+        return;
+    };
+    if overlays.is_empty()
+        && let Ok(camera) = camera.single()
+    {
+        commands.spawn((
+            ReturnToTitleOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(DESIGN_WIDTH),
+                height: Val::Px(DESIGN_HEIGHT),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            FocusPolicy::Block,
+            GlobalZIndex(1000),
+            UiTargetCamera(camera),
+            RenderLayers::layer(2),
+        ));
+    }
+    transition.elapsed += time.delta_secs();
+    if !transition.switched && transition.elapsed >= COVER_SECONDS {
+        crabgal_core::step::end_game(&mut state);
+        transition.switched = true;
+    }
+    let alpha = if transition.elapsed < COVER_SECONDS {
+        crate::ui::foundation::smoothstep(transition.elapsed / COVER_SECONDS)
+    } else {
+        1.0 - crate::ui::foundation::smoothstep(
+            (transition.elapsed - COVER_SECONDS) / REVEAL_SECONDS,
+        )
+    }
+    .clamp(0.0, 1.0);
+    for (_, mut background) in &mut overlays {
+        background.0 = Color::srgba(0.0, 0.0, 0.0, alpha);
+    }
+    if transition.elapsed >= COVER_SECONDS + REVEAL_SECONDS {
+        for (entity, _) in &mut overlays {
+            commands.entity(entity).despawn();
+        }
+        commands.remove_resource::<ReturnToTitleTransition>();
+    }
 }
 
 #[derive(Component)]

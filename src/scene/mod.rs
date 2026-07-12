@@ -14,6 +14,9 @@ pub(crate) struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(audio::VocalPlayback::default())
+            .init_resource::<audio::BgmPlayback>()
+            .init_resource::<audio::EffectPlayback>()
+            .init_resource::<audio::AudioAnimationActivity>()
             .init_resource::<images::ImageDimensions>()
             .init_resource::<crate::runtime::resources::AssetLoadingGate>();
         app.add_systems(
@@ -27,7 +30,15 @@ impl Plugin for ScenePlugin {
                     .chain(),
                 background::sync_bg,
                 sprites::sync_sprites,
-                (audio::sync_vocal, audio::apply_master_volume).chain(),
+                (
+                    audio::sync_bgm,
+                    audio::sync_effects,
+                    audio::sync_vocal,
+                    audio::replay_vocal,
+                    audio::animate_bgm,
+                    audio::apply_bus_volumes,
+                )
+                    .chain(),
             )
                 .in_set(GameSystemSet::Sync),
         );

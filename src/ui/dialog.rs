@@ -385,7 +385,7 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::BackToTitle => {
-                crabgal_core::step::end_game(&mut context.state);
+                commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
                 context.save_load.mode = None;
                 context.settings_ui.open = false;
                 context.backlog_ui.open = false;

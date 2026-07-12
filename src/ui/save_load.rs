@@ -12,7 +12,9 @@ use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::ProjectRoot;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
-use crate::ui::foundation::{UiFonts, exp_lerp, fill_node, smoothstep, text, text_weight};
+use crate::ui::foundation::{
+    UiFonts, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text, text_weight,
+};
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
     PersistentMenu, active_route, root_node, spawn_header, surface_transform,
@@ -49,6 +51,10 @@ impl Default for SaveLoadUi {
             page: 1,
         }
     }
+}
+
+pub(crate) fn save_load_open(ui: Res<SaveLoadUi>) -> bool {
+    ui.mode.is_some()
 }
 
 #[derive(Component)]
@@ -137,6 +143,7 @@ pub(crate) struct SaveLoadSlotGrid {
 #[derive(Default)]
 pub(crate) struct SaveLoadContentFadeCache {
     active: bool,
+    last_alpha: f32,
     text: HashMap<Entity, f32>,
     background: HashMap<Entity, f32>,
     border: HashMap<Entity, [f32; 4]>,
@@ -193,13 +200,12 @@ pub(crate) struct SaveLoadSlotMotion {
 impl SaveLoadSlotMotion {
     pub(crate) fn is_animating(&self, interaction: Interaction) -> bool {
         let target_scale = match interaction {
-            Interaction::Pressed => 0.985,
-            Interaction::Hovered => 1.025,
+            Interaction::Pressed => 0.97,
+            Interaction::Hovered => 0.985,
             Interaction::None => 1.0,
         };
         let (target_x, target_y) = match interaction {
-            Interaction::Hovered => (-5.0, -5.0),
-            Interaction::Pressed => (0.0, 2.0),
+            Interaction::Hovered | Interaction::Pressed => (0.0, 0.0),
             Interaction::None => (0.0, 0.0),
         };
         (self.scale - target_scale).abs() > 0.001
@@ -391,8 +397,7 @@ pub fn sync_save_load(
             }
         }
         for (mut watermark, mut label) in &mut context.watermarks {
-            watermark.show();
-            **label = mode.watermark().into();
+            watermark.show_label(&mut label, mode.watermark());
         }
         let Ok(viewport) = context.grid_viewports.single() else {
             return;
@@ -459,6 +464,7 @@ pub fn sync_save_load(
                     0.0
                 }),
                 fill_node(),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, crate::ui::MENU_BACKDROP_ALPHA)),
                 GlobalZIndex(179),
                 UiTargetCamera(blur_camera),
                 RenderLayers::layer(1),
@@ -477,8 +483,7 @@ pub fn sync_save_load(
         }
     }
     for (mut watermark, mut label) in &mut context.watermarks {
-        watermark.show();
-        **label = mode.watermark().into();
+        watermark.show_label(&mut label, mode.watermark());
     }
     let icon_font = context.fonts.icons.clone();
     context
@@ -654,6 +659,7 @@ pub fn animate_save_load_content(
         }
         restore_save_load_content(root, &mut context, &cache);
         cache.active = false;
+        cache.last_alpha = 1.0;
         cache.text.clear();
         cache.background.clear();
         cache.border.clear();
@@ -661,7 +667,12 @@ pub fn animate_save_load_content(
         return;
     }
 
+    if cache.active && (cache.last_alpha - menu_alpha).abs() < 0.0001 {
+        return;
+    }
+
     cache.active = true;
+    cache.last_alpha = menu_alpha;
     for (entity, mut color) in &mut context.texts {
         if belongs_to(entity, root) {
             let alpha = menu_alpha;
@@ -730,8 +741,7 @@ pub fn animate_save_load_grid_track(
         }
         return;
     }
-    let progress =
-        smoothstep((transition.elapsed / SaveLoadPageTransition::SECONDS).clamp(0.0, 1.0));
+    let progress = ease_in_out_cubic(transition.elapsed / SaveLoadPageTransition::SECONDS);
     let width = grids
         .iter()
         .map(|(_, _, _, node)| node.size().x)
@@ -1011,13 +1021,12 @@ pub fn animate_save_load_slots(
     let amount = exp_lerp(time.delta_secs(), 14.0);
     for (interaction, mut motion, mut transform) in &mut slots {
         let target_scale = match interaction {
-            Interaction::Pressed => 0.985,
-            Interaction::Hovered => 1.025,
+            Interaction::Pressed => 0.97,
+            Interaction::Hovered => 0.985,
             Interaction::None => 1.0,
         };
         let (target_x, target_y) = match interaction {
-            Interaction::Hovered => (-5.0, -5.0),
-            Interaction::Pressed => (0.0, 2.0),
+            Interaction::Hovered | Interaction::Pressed => (0.0, 0.0),
             Interaction::None => (0.0, 0.0),
         };
         if (motion.scale - target_scale).abs() < 0.001
@@ -1080,7 +1089,8 @@ pub fn animate_save_load_pages(
             visual.background = target_background;
             visual.text = target_text;
         }
-        if (visual.background - target_background).abs() < 0.001
+        if !selection_changed
+            && (visual.background - target_background).abs() < 0.001
             && (visual.text - target_text).abs() < 0.001
             && visual.press == 0.0
         {

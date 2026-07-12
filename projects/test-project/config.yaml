@@ -2,6 +2,10 @@
 title: "crabgal Demo"
 title_background: "bg.webp"
 
+assets:
+  bgm:
+    v16.wav: "vocal/v16.wav"
+
 fonts:
   speaker_size: 52.0
   dialogue_size: 60.0

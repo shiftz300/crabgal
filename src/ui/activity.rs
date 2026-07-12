@@ -6,6 +6,7 @@ use crate::ui::backlog::{BacklogButtonVisual, BacklogClose, BacklogRoot, Backlog
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
 use crate::ui::dialog::{DialogButtonVisual, DialogFade};
+use crate::ui::foundation::ButtonPressFeedback;
 use crate::ui::menu::{MenuFade, MenuRouteTransition};
 use crate::ui::save_load::{
     SaveLoadPage, SaveLoadPageTransition, SaveLoadPageVisual, SaveLoadSlotMotion, SaveLoadUi,
@@ -16,7 +17,7 @@ use crate::ui::settings_panel::{
     SettingsPagePanel, SettingsUi, SettingsWatermark,
 };
 use crate::ui::textbox::TextboxOverlayFade;
-use crate::ui::title::{PendingTitleAction, TitleButtonMotion};
+use crate::ui::title::{PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion};
 
 const SETTLED_EPSILON: f32 = 0.001;
 
@@ -33,6 +34,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     hovers: Query<'w, 's, &'static HoverAlpha>,
     previews: Query<'w, 's, &'static QuickPreviewFade>,
     menu_fades: Query<'w, 's, &'static MenuFade>,
+    button_feedback: Query<'w, 's, (&'static Interaction, &'static ButtonPressFeedback)>,
     title_buttons: Query<'w, 's, (&'static Interaction, &'static TitleButtonMotion)>,
     choice_roots: Query<'w, 's, &'static ChoiceRoot>,
     choices: Query<'w, 's, (&'static Interaction, &'static ChoiceButton)>,
@@ -90,6 +92,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     save_load_transition: Res<'w, SaveLoadPageTransition>,
     menu_route_transition: Res<'w, MenuRouteTransition>,
     pending_title: Option<Res<'w, PendingTitleAction>>,
+    return_to_title: Option<Res<'w, ReturnToTitleTransition>>,
     pending_window: Res<'w, PendingWindowMode>,
     active_slider: Res<'w, ActiveSettingSlider>,
 }
@@ -107,6 +110,10 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .menu_fades
             .iter()
             .any(|fade| (fade.current - fade.target).abs() > SETTLED_EPSILON)
+        || context
+            .button_feedback
+            .iter()
+            .any(|(interaction, feedback)| feedback.is_animating(*interaction))
         || context
             .title_buttons
             .iter()
@@ -133,6 +140,7 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
         || context.save_load_transition.is_animating()
         || context.menu_route_transition.is_animating()
         || context.pending_title.is_some()
+        || context.return_to_title.is_some()
         || context.pending_window.is_pending()
         || context.active_slider.is_active()
         || !is_endpoint(context.textbox_fade.alpha);

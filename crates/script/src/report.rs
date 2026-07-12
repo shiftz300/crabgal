@@ -25,6 +25,7 @@ pub enum ResourceKind {
     Figure,
     Voice,
     Bgm,
+    Effect,
     MiniAvatar,
 }
 
@@ -86,6 +87,9 @@ fn collect_references(
             }
         }
         Action::Bgm { file, .. } => resource(file, ResourceKind::Bgm),
+        Action::Effect {
+            file: Some(file), ..
+        } => resource(file, ResourceKind::Effect),
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
         Action::ChangeScene(scene) | Action::CallScene(scene) => {
             report.sub_scenes.push(SceneRef {

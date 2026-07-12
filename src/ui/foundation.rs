@@ -6,6 +6,7 @@
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 pub(crate) const TEXT_FONT_PATH: &str = "fonts/MavenPro-CJK.ttf";
 pub(crate) const ICON_FONT_PATH: &str = "fonts/bootstrap-icons.ttf";
@@ -57,8 +58,8 @@ pub(crate) fn text_weight(
 pub(crate) fn fill_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
+        width: Val::Px(DESIGN_WIDTH),
+        height: Val::Px(DESIGN_HEIGHT),
         ..default()
     }
 }
@@ -71,6 +72,75 @@ pub(crate) fn smoothstep(value: f32) -> f32 {
     value * value * (3.0 - 2.0 * value)
 }
 
+pub(crate) fn ease_in_out_cubic(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    if value < 0.5 {
+        4.0 * value * value * value
+    } else {
+        1.0 - (-2.0 * value + 2.0).powi(3) / 2.0
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct ButtonPressFeedback {
+    scale: f32,
+}
+
+impl Default for ButtonPressFeedback {
+    fn default() -> Self {
+        Self { scale: 1.0 }
+    }
+}
+
+impl ButtonPressFeedback {
+    pub(crate) fn is_animating(&self, interaction: Interaction) -> bool {
+        interaction == Interaction::Pressed || (self.scale - 1.0).abs() > 0.001
+    }
+}
+
+type ButtonFeedbackFilter = (
+    Without<crate::ui::title::TitleButtonMotion>,
+    Without<crate::ui::save_load::SaveLoadSlotMotion>,
+    Without<crate::ui::save_load::SaveLoadPageVisual>,
+    Without<crate::ui::settings_panel::SettingSlider>,
+);
+
+type NewButtonQuery<'w, 's> =
+    Query<'w, 's, (Entity, Option<&'static UiTransform>), (Added<Button>, ButtonFeedbackFilter)>;
+
+pub(crate) fn attach_button_feedback(buttons: NewButtonQuery, mut commands: Commands) {
+    for (entity, transform) in &buttons {
+        let mut entity = commands.entity(entity);
+        entity.insert(ButtonPressFeedback::default());
+        if transform.is_none() {
+            entity.insert(UiTransform::default());
+        }
+    }
+}
+
+pub(crate) fn animate_button_feedback(
+    time: Res<Time>,
+    mut buttons: Query<
+        (&Interaction, &mut ButtonPressFeedback, &mut UiTransform),
+        ButtonFeedbackFilter,
+    >,
+) {
+    for (interaction, mut feedback, mut transform) in &mut buttons {
+        let pressed = *interaction == Interaction::Pressed;
+        if !feedback.is_animating(*interaction) {
+            continue;
+        }
+
+        let target = if pressed { 0.965 } else { 1.0 };
+        feedback.scale += (target - feedback.scale)
+            * exp_lerp(time.delta_secs(), if pressed { 28.0 } else { 18.0 });
+        if !pressed && (feedback.scale - 1.0).abs() < 0.001 {
+            feedback.scale = 1.0;
+        }
+        transform.scale = Vec2::splat(feedback.scale);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +149,8 @@ mod tests {
     fn animation_helpers_are_bounded() {
         assert_eq!(smoothstep(0.0), 0.0);
         assert_eq!(smoothstep(1.0), 1.0);
+        assert_eq!(ease_in_out_cubic(0.0), 0.0);
+        assert_eq!(ease_in_out_cubic(1.0), 1.0);
         assert!((0.0..=1.0).contains(&exp_lerp(1.0 / 60.0, 12.0)));
     }
 }

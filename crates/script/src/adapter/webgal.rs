@@ -220,13 +220,34 @@ fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
     if let Some(rest) = cmd.strip_prefix("bgm:") {
         let file = rest.split_whitespace().next().unwrap_or("").to_string();
         if !file.is_empty() {
-            return Some(Action::Bgm { file, volume: 0.8 });
+            return Some(Action::Bgm {
+                file,
+                volume: percent_arg(args, "volume", 100.0),
+                fade_seconds: milliseconds_arg(args, "enter"),
+            });
         }
     }
 
     // stopBgm
     if cmd == "stopBgm" {
-        return Some(Action::StopBgm);
+        return Some(Action::Bgm {
+            file: "none".into(),
+            volume: 1.0,
+            fade_seconds: milliseconds_arg(args, "enter"),
+        });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("playEffect:") {
+        let file = rest
+            .split_whitespace()
+            .next()
+            .filter(|file| !file.is_empty() && *file != "none")
+            .map(str::to_owned);
+        return Some(Action::Effect {
+            file,
+            volume: percent_arg(args, "volume", 100.0),
+            id: args.get("id").cloned().filter(|id| !id.is_empty()),
+        });
     }
 
     // Say: speaker:text [flags]
@@ -371,6 +392,22 @@ fn duration_from_args(args: &ScriptArgs) -> f32 {
         .and_then(|value| value.parse::<f32>().ok())
         .map(|milliseconds| milliseconds / 1000.0)
         .unwrap_or(0.0)
+}
+
+fn milliseconds_arg(args: &ScriptArgs, key: &str) -> f32 {
+    args.get(key)
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0)
+        .max(0.0)
+        / 1000.0
+}
+
+fn percent_arg(args: &ScriptArgs, key: &str, default: f32) -> f32 {
+    args.get(key)
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(default)
+        .clamp(0.0, 100.0)
+        / 100.0
 }
 
 fn easing_from_args(args: &ScriptArgs) -> Easing {
@@ -580,6 +617,27 @@ mod tests {
                             && options.volume == 0.3
                             && options.concat
                             && options.auto_advance)
+        ));
+    }
+
+    #[test]
+    fn parses_bgm_and_effect_parameters() {
+        let actions = parse_webgal(
+            "bgm:theme.ogg -volume=35 -enter=1200;\nplayEffect:rain.ogg -volume=60 -id=weather;\nplayEffect:none -id=weather;",
+        );
+        assert!(matches!(
+            &actions[0],
+            Action::Bgm { file, volume, fade_seconds }
+                if file == "theme.ogg" && *volume == 0.35 && *fade_seconds == 1.2
+        ));
+        assert!(matches!(
+            &actions[1],
+            Action::Effect { file: Some(file), volume, id: Some(id) }
+                if file == "rain.ogg" && *volume == 0.6 && id == "weather"
+        ));
+        assert!(matches!(
+            &actions[2],
+            Action::Effect { file: None, id: Some(id), .. } if id == "weather"
         ));
     }
 

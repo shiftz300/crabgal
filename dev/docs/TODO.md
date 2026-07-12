@@ -8,9 +8,8 @@
 ## 当前优先级
 
 1. **Phase 3 视觉验收** — Backlog、SAVE / LOAD、CONFIG、TITLE 的最终人工验收
-2. **音频总线** — BGM、vocal、SE、Replay 和分总线音量
-3. **演出控制器** — 阻塞动画、filter 生命周期和非 alpha blend
-4. **输入抽象** — 为桌面、触控、手柄建立统一 InputAction
+2. **Phase 5 演出控制器** — 阻塞动画、filter 生命周期和非 alpha blend
+3. **输入抽象** — 为桌面、触控、手柄建立统一 InputAction
 
 ## Phase 0 — Bevy 引擎基础 (DONE)
 
@@ -109,13 +108,17 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] SL 页码栏与滑动槽位网格解耦；SAVE/LOAD/CONFIG 复用持久全屏 blur；未开始游戏禁止存档，无快速存档时禁用带 blur 的 CONTINUE
 - [x] SAVE / LOAD / CONFIG 固定顶栏下改为连续全宽滑轨：出入页并存、页码即时切换、动画结束后释放旧页，且所有位移按真实时间推进
 - [x] 按 WebGAL_K Options CSS 细粒度对齐 CONFIG hover：页面文字 0.175/0.5/0.8，NormalButton 文字 0.376/0.667 与 0.188 浅白横向填充，并修正 0.2 秒左上入场方向
+- [x] SL↔CONFIG 使用单一共享暗幕、缓存布局宽度与无越界 cubic 加减速曲线，消除双层黑幕闪帧；通用按钮补齐按下缩小与平滑复位反馈
 
-## Phase 4 — 音频
+## Phase 4 — 音频 (DONE)
 
-- [ ] bgm — 背景音乐 + 淡入淡出 + volume
-- [x] vocal — 本地语音播放、`-vocal` 简写与单句 volume
-- [ ] playEffect — 音效 (含 id 循环)
-- [ ] Replay 重播按钮
+- [x] bgm — 循环背景音乐、毫秒级 `-enter` 淡入/淡出、单曲 volume 与读档/回滚恢复
+- [x] vocal — 本地语音播放、`-vocal` 简写、单句 volume 与 vocal 分总线
+- [x] playEffect — 一次性音效、volume、带 id 循环/替换/停止与存档恢复
+- [x] Replay — 控制栏当前语音重播与 Backlog 任意语音重播
+- [x] 主音量/BGM/vocal/SE 分总线实时更新；淡入生命周期保持事件驱动调度活跃
+
+验收入口与逐步预期见 [`14-phase4-acceptance.md`](14-phase4-acceptance.md)。
 
 ## Phase 5 — 演出
 
@@ -174,3 +177,4 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 | [10-webgal-k-gap-analysis.md](10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
 | [11-engine-advantages.md](11-engine-advantages.md) | crabgal 的差异化、优势支柱与量化验收标准 |
 | [12-phase1-acceptance.md](12-phase1-acceptance.md) | Phase 1 桌面端手工验收提纲与预期结果 |
+| [14-phase4-acceptance.md](14-phase4-acceptance.md) | Phase 4 音频总线、淡入淡出、音效与 Replay 验收步骤 |

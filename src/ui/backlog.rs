@@ -5,6 +5,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui::FocusPolicy;
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -193,8 +194,8 @@ pub fn sync_backlog(
         BlurStrength(0.0),
         Node {
             position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            width: Val::Px(DESIGN_WIDTH),
+            height: Val::Px(DESIGN_HEIGHT),
             ..default()
         },
         FocusPolicy::Pass,
@@ -211,8 +212,8 @@ pub fn sync_backlog(
             },
             Node {
                 position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
+                width: Val::Px(DESIGN_WIDTH),
+                height: Val::Px(DESIGN_HEIGHT),
                 padding: UiRect::axes(Val::ZERO, Val::Px(32.0)),
                 ..default()
             },

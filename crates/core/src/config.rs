@@ -110,6 +110,9 @@ pub struct AssetMap {
     /// Voice name → file path.
     #[serde(default)]
     pub voices: HashMap<String, String>,
+    /// Sound-effect name → file path.
+    #[serde(default)]
+    pub effects: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +252,24 @@ impl GameConfig {
             .get(name)
             .cloned()
             .unwrap_or_else(|| format!("vocal/{name}"))
+    }
+
+    /// Resolve a sound effect below the local asset root.
+    pub fn effect_path(&self, name: &str) -> String {
+        self.assets
+            .effects
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("vocal/{name}"))
+    }
+
+    /// Resolve background music below the local asset root.
+    pub fn bgm_path(&self, name: &str) -> String {
+        self.assets
+            .bgm
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("bgm/{name}"))
     }
 }
 

@@ -101,6 +101,8 @@ fn add_stage_systems(app: &mut App) {
                 .chain(),
             control_bar::set_hover_target,
             control_bar::animate_hover,
+            foundation::attach_button_feedback,
+            foundation::animate_button_feedback,
             control_bar::handle_button_click.run_if(loading::assets_ready),
             (
                 control_bar::show_quick_preview,
@@ -153,6 +155,7 @@ fn add_overlay_systems(app: &mut App) {
             )
                 .chain(),
             (
+                title::animate_return_to_title,
                 title::sync_title,
                 title::handle_title_input
                     .run_if(loading::assets_ready)
@@ -210,9 +213,9 @@ fn add_menu_systems(app: &mut App) {
                 settings_panel::update_settings_pages.run_if(settings_panel::settings_open),
                 settings_panel::animate_watermark,
                 settings_panel::fade_settings_visuals,
-                save_load::animate_save_load_grid_track,
-                save_load::animate_save_load_pages,
-                save_load::animate_save_load_slots,
+                save_load::animate_save_load_grid_track.run_if(save_load::save_load_open),
+                save_load::animate_save_load_pages.run_if(save_load::save_load_open),
+                save_load::animate_save_load_slots.run_if(save_load::save_load_open),
                 save_load::animate_save_load_content,
                 menu::animate,
                 menu::animate_route_transition,

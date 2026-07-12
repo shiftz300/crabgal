@@ -24,7 +24,7 @@ use bevy::{
 };
 use std::borrow::Cow;
 
-const MAX_BLUR_STRENGTH: f32 = 48.0;
+const MAX_BLUR_STRENGTH: f32 = 96.0;
 
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
@@ -538,6 +538,7 @@ pub fn update_blur_regions(
     let sh = w.height() * sf;
     let design_viewport = crate::runtime::viewport::DesignViewport::from_window(w);
     let ui_origin = design_viewport.offset * sf;
+    let blur_scale = design_viewport.scale * sf;
 
     // Camera 1 runs after the regular UI has been composited, so a full-screen
     // pass here blurs the scene, textbox, and control bar together. Camera 2
@@ -557,7 +558,7 @@ pub fn update_blur_regions(
                 max_x: max.x,
                 min_y: min.y,
                 max_y: max.y,
-                coc: clamp_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH),
+                coc: clamp_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH * blur_scale),
                 _pad: Vec3::ZERO,
             };
             bc.count = 1;
@@ -580,7 +581,7 @@ pub fn update_blur_regions(
                 max_x: position.x + half.x,
                 min_y: position.y - half.y,
                 max_y: position.y + half.y,
-                coc: clamp_blur(strength),
+                coc: clamp_blur(strength * blur_scale),
                 _pad: Vec3::ZERO,
             });
         }
@@ -604,7 +605,7 @@ pub fn update_blur_regions(
             max_x: w.width() * sf,
             min_y: 0.0,
             max_y: sh,
-            coc: clamp_blur(behavior.state.bg_transform.blur),
+            coc: clamp_blur(behavior.state.bg_transform.blur * blur_scale),
             _pad: Vec3::ZERO,
         });
     }
@@ -631,7 +632,7 @@ pub fn update_blur_regions(
             max_x: center.x + half.x,
             min_y: center.y - half.y,
             max_y: center.y + half.y,
-            coc: clamp_blur(effect.blur),
+            coc: clamp_blur(effect.blur * blur_scale),
             _pad: Vec3::ZERO,
         });
     }
@@ -651,7 +652,7 @@ pub fn update_blur_regions(
             max_x: pos.x + half.x,
             min_y: pos.y - half.y,
             max_y: pos.y + half.y,
-            coc: clamp_blur(strength),
+            coc: clamp_blur(strength * blur_scale),
             _pad: Vec3::ZERO,
         });
     }

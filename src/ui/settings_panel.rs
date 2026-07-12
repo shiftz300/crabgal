@@ -78,6 +78,7 @@ pub(crate) struct SettingsBlurProxy;
 pub(crate) struct SettingsWatermark {
     current: f32,
     target: f32,
+    pending_label: Option<String>,
 }
 
 impl SettingsWatermark {
@@ -85,6 +86,7 @@ impl SettingsWatermark {
         Self {
             current: 0.0,
             target: 1.0,
+            pending_label: None,
         }
     }
 
@@ -96,8 +98,17 @@ impl SettingsWatermark {
         self.target = 0.0;
     }
 
+    pub(crate) fn show_label(&mut self, text: &mut Text, label: &str) {
+        if text.0 == label && self.pending_label.is_none() {
+            self.show();
+        } else {
+            self.pending_label = Some(label.to_owned());
+            self.target = 0.0;
+        }
+    }
+
     pub(crate) fn is_animating(&self) -> bool {
-        (self.current - self.target).abs() > 0.001
+        self.pending_label.is_some() || (self.current - self.target).abs() > 0.001
     }
 }
 
@@ -346,7 +357,10 @@ impl SettingChoiceVisual {
         } else {
             OPTION_TEXT_IDLE
         };
-        (self.fill - target_fill).abs() > 0.001 || (self.text_alpha - target_text).abs() > 0.001
+        self.selected != selected
+            || self.hovered != hovered
+            || (self.fill - target_fill).abs() > 0.001
+            || (self.text_alpha - target_text).abs() > 0.001
     }
 }
 
@@ -475,8 +489,7 @@ pub fn sync_settings(
             }
         }
         for (mut watermark, mut label) in &mut context.watermarks {
-            watermark.show();
-            **label = "CONFIG".into();
+            watermark.show_label(&mut label, "CONFIG");
         }
         for (entity, mut visibility) in &mut context.roots {
             *visibility = Visibility::Inherited;
@@ -528,6 +541,7 @@ pub fn sync_settings(
                     0.0
                 }),
                 fill_node(),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, crate::ui::MENU_BACKDROP_ALPHA)),
                 GlobalZIndex(179),
                 UiTargetCamera(blur_camera),
                 RenderLayers::layer(1),
@@ -605,7 +619,7 @@ fn spawn_options_content(
                 body.spawn((Node {
                     width: Val::Percent(18.0),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(12.0),
+                    row_gap: Val::Px(8.0),
                     ..default()
                 },))
                     .with_children(|pages| {
@@ -635,16 +649,22 @@ fn spawn_options_content(
 
 pub fn animate_watermark(
     time: Res<Time>,
-    mut watermarks: Query<(&mut SettingsWatermark, &mut TextColor)>,
+    mut watermarks: Query<(&mut SettingsWatermark, &mut Text, &mut TextColor)>,
 ) {
-    let amount = exp_lerp(time.delta_secs(), 16.0);
-    for (mut watermark, mut color) in &mut watermarks {
-        if (watermark.current - watermark.target).abs() < 0.001 {
-            continue;
+    let amount = exp_lerp(time.delta_secs(), 34.0);
+    for (mut watermark, mut text, mut color) in &mut watermarks {
+        if (watermark.current - watermark.target).abs() >= 0.001 {
+            watermark.current += (watermark.target - watermark.current) * amount;
+            if (watermark.target - watermark.current).abs() < 0.001 {
+                watermark.current = watermark.target;
+            }
         }
-        watermark.current += (watermark.target - watermark.current) * amount;
-        if (watermark.target - watermark.current).abs() < 0.001 {
-            watermark.current = watermark.target;
+        if watermark.current == 0.0
+            && watermark.target == 0.0
+            && let Some(label) = watermark.pending_label.take()
+        {
+            text.0 = label;
+            watermark.target = 1.0;
         }
         color.0 = Color::srgba(1.0, 1.0, 1.0, 0.075 * watermark.current);
     }
@@ -687,6 +707,11 @@ pub fn fade_settings_visuals(
     let alpha = smoothstep(fade.current);
 
     if fading {
+        if cache.settled {
+            cache.text_alpha.clear();
+            cache.background_alpha.clear();
+            cache.outline_alpha.clear();
+        }
         cache.settled = false;
         for (entity, mut color) in &mut context.texts {
             if belongs_to_settings(entity) {
@@ -718,13 +743,15 @@ pub fn fade_settings_visuals(
         return;
     }
 
+    if cache.settled {
+        return;
+    }
+
     for (entity, mut color) in &mut context.texts {
         if !belongs_to_settings(entity) {
             continue;
         }
-        if cache.settled {
-            cache.text_alpha.insert(entity, color.0.alpha());
-        } else if let Some(base) = cache.text_alpha.get(&entity) {
+        if let Some(base) = cache.text_alpha.get(&entity) {
             color.0 = color.0.with_alpha(*base);
         }
     }
@@ -732,9 +759,7 @@ pub fn fade_settings_visuals(
         if !belongs_to_settings(entity) {
             continue;
         }
-        if cache.settled {
-            cache.background_alpha.insert(entity, background.0.alpha());
-        } else if let Some(base) = cache.background_alpha.get(&entity) {
+        if let Some(base) = cache.background_alpha.get(&entity) {
             background.0 = background.0.with_alpha(*base);
         }
     }
@@ -742,12 +767,13 @@ pub fn fade_settings_visuals(
         if !belongs_to_settings(entity) {
             continue;
         }
-        if cache.settled {
-            cache.outline_alpha.insert(entity, outline.color.alpha());
-        } else if let Some(base) = cache.outline_alpha.get(&entity) {
+        if let Some(base) = cache.outline_alpha.get(&entity) {
             outline.color = outline.color.with_alpha(*base);
         }
     }
+    cache.text_alpha.clear();
+    cache.background_alpha.clear();
+    cache.outline_alpha.clear();
     cache.settled = true;
 }
 
@@ -768,7 +794,7 @@ fn spawn_page_button(
             PAGE_TEXT_IDLE
         }),
         Node {
-            height: Val::Px(100.0),
+            height: Val::Px(84.0),
             padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
             align_items: AlignItems::Center,
             ..default()
@@ -1347,9 +1373,15 @@ pub fn handle_setting_sliders(
     }
 }
 
+#[derive(SystemParam)]
+pub(crate) struct SettingsVisualResources<'w> {
+    time: Res<'w, Time>,
+    settings: Res<'w, RuntimeSettings>,
+    drag: Res<'w, ActiveSettingSlider>,
+}
+
 pub fn update_setting_visuals(
-    time: Res<Time>,
-    settings: Res<RuntimeSettings>,
+    resources: SettingsVisualResources,
     sliders: Query<(&Interaction, &SettingSlider)>,
     mut thumbs: Query<
         (
@@ -1372,25 +1404,38 @@ pub fn update_setting_visuals(
     mut fills: SettingChoiceFillQuery,
     mut choice_text: Query<(&mut TextColor, &mut TextFont)>,
 ) {
-    let amount = exp_lerp(time.delta_secs(), OPTION_TRANSITION_RATE);
+    let amount = exp_lerp(resources.time.delta_secs(), OPTION_TRANSITION_RATE);
     for (kind, mut visual, mut node, mut background) in &mut thumbs {
+        let dragging = resources.drag.kind == Some(kind.0);
         let hovered = sliders.iter().any(|(interaction, slider)| {
             slider.0 == kind.0 && matches!(interaction, Interaction::Hovered | Interaction::Pressed)
         });
-        let target_width = if hovered { 12.0 } else { 10.0 };
+        let target_width = if hovered || dragging { 12.0 } else { 10.0 };
         if (visual.0 - target_width).abs() < 0.001
             && node.left
-                == Val::Percent(kind.0.ratio(&settings).clamp(0.0, 1.0) * (100.0 - visual.0))
+                == Val::Percent(
+                    kind.0.ratio(&resources.settings).clamp(0.0, 1.0) * (100.0 - visual.0),
+                )
         {
             continue;
         }
-        visual.0 += (target_width - visual.0) * amount;
+        if dragging {
+            // Pointer motion owns the thumb while captured. Do not interpolate
+            // its geometry underneath the cursor.
+            visual.0 = target_width;
+        } else {
+            visual.0 += (target_width - visual.0) * amount;
+        }
         node.width = Val::Percent(visual.0);
-        node.left = Val::Percent(kind.0.ratio(&settings).clamp(0.0, 1.0) * (100.0 - visual.0));
+        node.left =
+            Val::Percent(kind.0.ratio(&resources.settings).clamp(0.0, 1.0) * (100.0 - visual.0));
         background.0 = Color::srgba(1.0, 1.0, 1.0, if hovered { 0.67 } else { 0.5 });
     }
     for (interaction, choice, mut visual, children) in &mut choices {
-        let selected = choice_is_selected(&settings, choice.0);
+        if !visual.is_animating(*interaction, choice.0, &resources.settings) {
+            continue;
+        }
+        let selected = choice_is_selected(&resources.settings, choice.0);
         let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
         visual.selected = selected;
         visual.hovered = hovered;
@@ -1490,6 +1535,9 @@ pub fn update_settings_pages(
 ) {
     let amount = exp_lerp(time.delta_secs(), OPTION_TRANSITION_RATE);
     for (interaction, page, mut visual, children) in &mut buttons {
+        if !visual.is_animating(*interaction, page.0, ui.page) {
+            continue;
+        }
         let active = ui.page == page.0;
         let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
         let target = if active {

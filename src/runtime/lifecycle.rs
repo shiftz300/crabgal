@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::winit::{UpdateMode, WinitSettings};
 
 use crate::runtime::resources::{AssetLoadingGate, GameState};
+use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
 use crate::ui::control_bar::{AutoHideTiming, ToggleStates};
 
@@ -20,6 +21,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     state: Res<'w, GameState>,
     loading: Res<'w, AssetLoadingGate>,
     ui: Res<'w, UiAnimationActivity>,
+    audio: Res<'w, AudioAnimationActivity>,
     toggles: Res<'w, ToggleStates>,
     auto_hide: Res<'w, AutoHideTiming>,
     real_time: Res<'w, Time<Real>>,
@@ -42,6 +44,7 @@ pub(crate) fn update(
         RuntimeActivity::Loading
     } else if core_is_animating(&context.state)
         || context.ui.0
+        || context.audio.0
         || context.toggles.auto
         || context.toggles.skip
         || auto_hide.0

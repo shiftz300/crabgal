@@ -16,7 +16,7 @@ pub struct TextBackdrop;
 #[derive(Component)]
 pub(crate) struct NoTextShadow;
 
-/// Four low-alpha glyph samples form a compact, diffuse drop shadow without
+/// Eight low-alpha glyph samples form a compact, diffuse drop shadow without
 /// duplicating UI text entities or paying for a full-screen blur pass.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SoftTextShadow {
@@ -60,8 +60,8 @@ pub fn apply_text_shadows(texts: Query<Entity, TextShadowTarget>, mut commands: 
         commands.entity(entity).insert((
             TextBackdrop,
             SoftTextShadow {
-                radius: 1.75,
-                color: Color::srgba(0.0, 0.0, 0.0, 0.42),
+                radius: 3.2,
+                color: Color::srgba(0.0, 0.0, 0.0, 0.26),
             },
         ));
     }
@@ -103,8 +103,12 @@ fn extract_soft_text_shadows(
             Vec2::new(radius, 0.0),
             Vec2::new(0.0, -radius),
             Vec2::new(0.0, radius),
+            Vec2::new(-radius * 0.707, -radius * 0.707),
+            Vec2::new(radius * 0.707, -radius * 0.707),
+            Vec2::new(-radius * 0.707, radius * 0.707),
+            Vec2::new(radius * 0.707, radius * 0.707),
         ];
-        let clip = text_clip(node, global_transform, maybe_clip, text_scroll);
+        let clip = text_clip(node, global_transform, maybe_clip, text_scroll, radius);
 
         for offset in offsets {
             let transform = Affine2::from(*global_transform)
@@ -132,6 +136,7 @@ fn text_clip(
     transform: &UiGlobalTransform,
     maybe_clip: Option<&CalculatedClip>,
     scroll: Option<&TextScroll>,
+    shadow_radius: f32,
 ) -> Option<Rect> {
     if scroll.is_some() {
         let content = node.content_box();
@@ -141,7 +146,10 @@ fn text_clip(
         );
         Some(maybe_clip.map_or(text_clip, |clip| clip.clip.intersect(text_clip)))
     } else {
-        maybe_clip.map(|clip| clip.clip)
+        maybe_clip.map(|clip| Rect {
+            min: clip.clip.min - Vec2::splat(shadow_radius),
+            max: clip.clip.max + Vec2::splat(shadow_radius),
+        })
     }
 }
 

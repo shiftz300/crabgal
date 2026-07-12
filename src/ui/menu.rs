@@ -2,9 +2,10 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::ui::control_bar::{BlurStrength, ButtonAction, HoverAlpha};
-use crate::ui::foundation::{exp_lerp, smoothstep, text};
+use crate::ui::foundation::{ease_in_out_cubic, exp_lerp, smoothstep, text};
 use crate::ui::save_load::{SaveLoadContent, SaveLoadMode, SaveLoadRoot, SaveLoadUi};
 use crate::ui::settings_panel::{SettingsContent, SettingsRoot, SettingsUi};
 use crate::ui::{FULLSCREEN_BLUR_STRENGTH, MENU_BACKDROP_ALPHA};
@@ -86,6 +87,7 @@ type MenuBlurQuery<'w, 's> = Query<
         Entity,
         &'static mut MenuFade,
         &'static mut BlurStrength,
+        &'static mut BackgroundColor,
         &'static mut Visibility,
         Option<&'static PersistentMenu>,
     ),
@@ -127,10 +129,11 @@ pub(crate) struct MenuRouteTransition {
     from: Option<MenuHeaderActive>,
     to: Option<MenuHeaderActive>,
     elapsed: f32,
+    width: f32,
 }
 
 impl MenuRouteTransition {
-    const SECONDS: f32 = 0.26;
+    const SECONDS: f32 = 0.34;
 
     pub(crate) fn begin(&mut self, from: MenuHeaderActive, to: MenuHeaderActive) {
         if from == to {
@@ -139,6 +142,7 @@ impl MenuRouteTransition {
         self.from = Some(from);
         self.to = Some(to);
         self.elapsed = 0.0;
+        self.width = 0.0;
     }
 
     pub(crate) fn is_animating(&self) -> bool {
@@ -157,8 +161,8 @@ pub(crate) fn route_settled(transition: Res<MenuRouteTransition>) -> bool {
 pub(crate) fn root_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
+        width: Val::Px(DESIGN_WIDTH),
+        height: Val::Px(DESIGN_HEIGHT),
         padding: UiRect::axes(Val::Percent(2.5), Val::Percent(2.0)),
         flex_direction: FlexDirection::Column,
         row_gap: Val::Percent(1.0),
@@ -353,7 +357,7 @@ pub(crate) fn animate(
             fade.current = fade.target;
         }
         let eased = smoothstep(fade.current);
-        background.0 = Color::srgba(0.0, 0.0, 0.0, MENU_BACKDROP_ALPHA * eased);
+        background.0 = Color::NONE;
         transform.scale = Vec2::splat(motion.start_scale + (1.0 - motion.start_scale) * eased);
         transform.translation = Val2::px(
             motion.start_translation.x * (1.0 - eased),
@@ -367,7 +371,7 @@ pub(crate) fn animate(
             }
         }
     }
-    for (entity, mut fade, mut strength, mut visibility, persistent) in &mut blurs {
+    for (entity, mut fade, mut strength, mut background, mut visibility, persistent) in &mut blurs {
         if persistent.is_some()
             && *visibility == Visibility::Hidden
             && fade.current == 0.0
@@ -382,6 +386,12 @@ pub(crate) fn animate(
             fade.current = fade.target;
         }
         strength.0 = FULLSCREEN_BLUR_STRENGTH * smoothstep(fade.current);
+        background.0 = Color::srgba(
+            0.0,
+            0.0,
+            0.0,
+            MENU_BACKDROP_ALPHA * smoothstep(fade.current),
+        );
         if fade.target == 0.0 && fade.current == 0.0 {
             if persistent.is_some() {
                 *visibility = Visibility::Hidden;
@@ -395,23 +405,13 @@ pub(crate) fn animate(
 type SaveRouteRootQuery<'w, 's> = Query<
     'w,
     's,
-    (
-        Entity,
-        &'static mut Visibility,
-        &'static mut BackgroundColor,
-        &'static mut MenuFade,
-    ),
+    (Entity, &'static mut Visibility, &'static mut MenuFade),
     (With<SaveLoadRoot>, Without<SettingsRoot>),
 >;
 type SettingsRouteRootQuery<'w, 's> = Query<
     'w,
     's,
-    (
-        Entity,
-        &'static mut Visibility,
-        &'static mut BackgroundColor,
-        &'static mut MenuFade,
-    ),
+    (Entity, &'static mut Visibility, &'static mut MenuFade),
     (With<SettingsRoot>, Without<SaveLoadRoot>),
 >;
 type SaveRouteContentQuery<'w, 's> = Query<
@@ -456,8 +456,8 @@ pub(crate) fn animate_route_transition(
         return;
     };
     let (
-        Ok((save_root, mut save_visibility, mut save_background, mut save_fade)),
-        Ok((settings_root, mut settings_visibility, mut settings_background, mut settings_fade)),
+        Ok((save_root, mut save_visibility, mut save_fade)),
+        Ok((settings_root, mut settings_visibility, mut settings_fade)),
     ) = (
         context.save_roots.single_mut(),
         context.settings_roots.single_mut(),
@@ -466,8 +466,10 @@ pub(crate) fn animate_route_transition(
         return;
     };
 
+    let starting = transition.elapsed <= f32::EPSILON;
     transition.elapsed = (transition.elapsed + time.delta_secs()).min(MenuRouteTransition::SECONDS);
-    let progress = smoothstep(transition.elapsed / MenuRouteTransition::SECONDS);
+    let linear = transition.elapsed / MenuRouteTransition::SECONDS;
+    let progress = ease_in_out_cubic(linear);
     let route_index = |route| -> f32 {
         match route {
             MenuHeaderActive::Save => 0.0,
@@ -476,43 +478,50 @@ pub(crate) fn animate_route_transition(
         }
     };
     let direction = (route_index(to) - route_index(from)).signum();
-    let width = context
-        .save_contents
-        .iter()
-        .map(|(_, node)| node.size().x)
-        .chain(
-            context
-                .settings_contents
-                .iter()
-                .map(|(_, node)| node.size().x),
-        )
-        .fold(0.0_f32, f32::max)
-        .max(
-            context
-                .windows
-                .single()
-                .map_or(1.0, |window| window.width() * 0.95),
-        );
+    if starting {
+        transition.width = context
+            .save_contents
+            .iter()
+            .map(|(_, node)| node.size().x)
+            .chain(
+                context
+                    .settings_contents
+                    .iter()
+                    .map(|(_, node)| node.size().x),
+            )
+            .fold(0.0_f32, f32::max)
+            .max(
+                context
+                    .windows
+                    .single()
+                    .map_or(1.0, |window| window.width() * 0.95),
+            );
+    }
+    let width = transition.width.max(1.0);
     let incoming_x = direction * width * (1.0 - progress);
     let outgoing_x = -direction * width * progress;
     let save_is_incoming = matches!(to, MenuHeaderActive::Save | MenuHeaderActive::Load);
 
-    *save_visibility = Visibility::Inherited;
-    *settings_visibility = Visibility::Inherited;
-    save_fade.current = 1.0;
-    save_fade.target = 1.0;
-    settings_fade.current = 1.0;
-    settings_fade.target = 1.0;
-    save_background.0 = if save_is_incoming {
-        Color::srgba(0.0, 0.0, 0.0, MENU_BACKDROP_ALPHA)
-    } else {
-        Color::NONE
-    };
-    settings_background.0 = if save_is_incoming {
-        Color::NONE
-    } else {
-        Color::srgba(0.0, 0.0, 0.0, MENU_BACKDROP_ALPHA)
-    };
+    if starting {
+        *save_visibility = Visibility::Inherited;
+        *settings_visibility = Visibility::Inherited;
+        save_fade.current = 1.0;
+        save_fade.target = 1.0;
+        settings_fade.current = 1.0;
+        settings_fade.target = 1.0;
+        let incoming_root = if save_is_incoming {
+            save_root
+        } else {
+            settings_root
+        };
+        for (parent, mut visibility) in &mut context.headers {
+            *visibility = if parent.parent() == incoming_root {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+    }
 
     for (mut transform, _) in &mut context.save_contents {
         transform.translation = Val2::px(
@@ -534,19 +543,6 @@ pub(crate) fn animate_route_transition(
             0.0,
         );
     }
-    let incoming_root = if save_is_incoming {
-        save_root
-    } else {
-        settings_root
-    };
-    for (parent, mut visibility) in &mut context.headers {
-        *visibility = if parent.parent() == incoming_root {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-    }
-
     if transition.elapsed < MenuRouteTransition::SECONDS {
         return;
     }
@@ -571,4 +567,5 @@ pub(crate) fn animate_route_transition(
     transition.from = None;
     transition.to = None;
     transition.elapsed = 0.0;
+    transition.width = 0.0;
 }

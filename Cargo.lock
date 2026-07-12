@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "crabgal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bevy",
@@ -1722,7 +1722,7 @@ dependencies = [
 
 [[package]]
 name = "crabgal-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "log",
  "serde",
@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "crabgal-script"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "crabgal-core",

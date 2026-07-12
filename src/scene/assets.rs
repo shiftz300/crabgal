@@ -75,6 +75,12 @@ pub fn prefetch_local_assets(
     {
         desired.insert(config.voice_path(vocal), ResourceKind::Voice);
     }
+    if let Some(bgm) = &state.bgm.file {
+        desired.insert(config.bgm_path(bgm), ResourceKind::Bgm);
+    }
+    for effect in state.looping_effects.values() {
+        desired.insert(config.effect_path(&effect.file), ResourceKind::Effect);
+    }
 
     let desired_paths = desired.keys().cloned().collect::<HashSet<_>>();
     cache.0.retain(|path, _| desired_paths.contains(path));
@@ -83,7 +89,7 @@ pub fn prefetch_local_assets(
             ResourceKind::Background | ResourceKind::Figure | ResourceKind::MiniAvatar => {
                 asset_server.load::<Image>(path).untyped()
             }
-            ResourceKind::Voice | ResourceKind::Bgm => {
+            ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
                 asset_server.load::<AudioSource>(path).untyped()
             }
         });
@@ -112,11 +118,7 @@ fn resolve_path(kind: ResourceKind, path: &str, config: &GameConfigResource) -> 
         ResourceKind::Background => config.bg_path(path),
         ResourceKind::Figure | ResourceKind::MiniAvatar => config.figure_path(path),
         ResourceKind::Voice => config.voice_path(path),
-        ResourceKind::Bgm => config
-            .assets
-            .bgm
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| format!("bgm/{path}")),
+        ResourceKind::Bgm => config.bgm_path(path),
+        ResourceKind::Effect => config.effect_path(path),
     }
 }
