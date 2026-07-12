@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use crabgal_core::action::{Action, Choice, ChoiceTarget, SayOptions};
-use crabgal_core::types::{BlendMode, Easing, Position, SpriteTransform, Transition};
+use crabgal_core::types::{
+    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, VisualFilter,
+};
 
 use crate::report::{Diagnostic, DiagnosticLevel, ParseReport, SourceSpan};
 
@@ -80,17 +82,104 @@ fn parse_webgal_line(raw: &str) -> Option<Action> {
 fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
     // Skip non-action commands
     if cmd.starts_with("unlock")
-        || cmd.starts_with("setTransition")
-        || cmd.starts_with("setAnimation")
         || cmd.starts_with("getUserInput")
         || cmd.starts_with("setTextbox")
         || cmd.starts_with("playVideo")
-        || cmd.starts_with("setTempAnimation")
-        || cmd.starts_with("intro:")
         || cmd.starts_with("unlockBgm")
         || cmd.starts_with("unlockCg")
     {
         return None;
+    }
+
+    if let Some(rest) = cmd
+        .strip_prefix("setAnimation:")
+        .or_else(|| cmd.strip_prefix("setComplexAnimation:"))
+        .or_else(|| cmd.strip_prefix("setTempAnimation:"))
+    {
+        let name = rest.split_whitespace().next().unwrap_or("enter");
+        return Some(Action::Animate {
+            target: args
+                .get("target")
+                .cloned()
+                .unwrap_or_else(|| "fig-center".into()),
+            preset: parse_animation_preset(name),
+            duration: positive_duration(args, 0.45),
+        });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("setTransition:") {
+        let fallback = rest
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty());
+        return Some(Action::SetTransition {
+            target: args
+                .get("target")
+                .cloned()
+                .unwrap_or_else(|| "fig-center".into()),
+            enter: args
+                .get("enter")
+                .map(|value| parse_animation_preset(value))
+                .or_else(|| fallback.map(parse_animation_preset)),
+            exit: args.get("exit").map(|value| parse_animation_preset(value)),
+            duration: positive_duration(args, 0.45),
+        });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("setFilter:") {
+        return Some(Action::SetFilter {
+            target: args
+                .get("target")
+                .cloned()
+                .unwrap_or_else(|| "bg-main".into()),
+            filter: parse_filter(rest),
+        });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("wait:") {
+        let milliseconds = rest
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(0.0)
+            .max(0.0);
+        return Some(Action::Wait {
+            seconds: milliseconds / 1000.0,
+        });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("intro:") {
+        let pages = rest
+            .split('|')
+            .map(str::trim)
+            .filter(|page| !page.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if !pages.is_empty() {
+            return Some(Action::Intro {
+                pages,
+                hold: args.boolean("hold"),
+            });
+        }
+    }
+
+    if let Some(rest) = cmd.strip_prefix("filmMode:") {
+        let mode = rest.split_whitespace().next().unwrap_or("none");
+        return Some(Action::FilmMode {
+            enabled: !matches!(mode, "none" | "disable" | "off" | "false"),
+        });
+    }
+
+    if cmd == "pixiInit" || cmd.starts_with("pixiInit:") {
+        return Some(Action::Particle { effect: None });
+    }
+    if let Some(rest) = cmd.strip_prefix("pixiPerform:") {
+        let effect = rest
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty() && !matches!(*value, "none" | "stop"))
+            .map(str::to_owned);
+        return Some(Action::Particle { effect });
     }
 
     // setTransform:id x=100 y=0 alpha=0.5 ...
@@ -377,14 +466,45 @@ fn split_command_args(input: &str) -> (String, ScriptArgs) {
 }
 
 fn transition_from_args(args: &ScriptArgs) -> Transition {
-    let duration = duration_from_args(args);
-    if args.boolean("fade") {
+    let named = args.get("enter").or_else(|| args.get("exit"));
+    let parsed_duration = duration_from_args(args);
+    let duration = if parsed_duration > 0.0 {
+        parsed_duration
+    } else if named.is_some() {
+        0.45
+    } else {
+        0.0
+    };
+    if let Some(name) = named.map(String::as_str) {
+        return match name {
+            "enter-from-left" | "exit-to-left" => Transition::SlideFromLeft(duration),
+            "enter-from-right" | "exit-to-right" => Transition::SlideFromRight(duration),
+            "wipe" | "wipeIn" | "wipeOut" => Transition::Wipe(duration),
+            "dissolve" => Transition::Dissolve(duration),
+            "crossfade" => Transition::Crossfade(duration),
+            _ => Transition::Fade(duration),
+        };
+    }
+    if args.boolean("wipe") || args.get("transition").is_some_and(|value| value == "wipe") {
+        Transition::Wipe(if duration > 0.0 { duration } else { 0.5 })
+    } else if args.boolean("dissolve")
+        || args
+            .get("transition")
+            .is_some_and(|value| value == "dissolve")
+    {
+        Transition::Dissolve(if duration > 0.0 { duration } else { 0.5 })
+    } else if args.boolean("fade") {
         Transition::Fade(if duration > 0.0 { duration } else { 0.5 })
     } else if duration > 0.0 {
         Transition::Fade(duration)
     } else {
         Transition::Instant
     }
+}
+
+fn positive_duration(args: &ScriptArgs, default: f32) -> f32 {
+    let duration = duration_from_args(args);
+    if duration > 0.0 { duration } else { default }
 }
 
 fn duration_from_args(args: &ScriptArgs) -> f32 {
@@ -426,6 +546,54 @@ fn parse_blend(value: Option<&str>) -> BlendMode {
         Some("screen") => BlendMode::Screen,
         _ => BlendMode::Alpha,
     }
+}
+
+fn parse_animation_preset(value: &str) -> AnimationPreset {
+    match value.trim() {
+        "enter" => AnimationPreset::Enter,
+        "exit" => AnimationPreset::Exit,
+        "shake" => AnimationPreset::Shake,
+        "enter-from-bottom" => AnimationPreset::EnterFromBottom,
+        "enter-from-left" => AnimationPreset::EnterFromLeft,
+        "enter-from-right" => AnimationPreset::EnterFromRight,
+        "move-front-and-back" => AnimationPreset::MoveFrontAndBack,
+        "blur" => AnimationPreset::Blur,
+        "oldFilm" => AnimationPreset::OldFilm,
+        "dotFilm" => AnimationPreset::DotFilm,
+        "reflectionFilm" => AnimationPreset::ReflectionFilm,
+        "glitchFilm" => AnimationPreset::GlitchFilm,
+        "rgbFilm" => AnimationPreset::RgbFilm,
+        "godrayFilm" => AnimationPreset::GodrayFilm,
+        "removeFilm" => AnimationPreset::RemoveFilm,
+        "shockwaveIn" => AnimationPreset::ShockwaveIn,
+        "shockwaveOut" => AnimationPreset::ShockwaveOut,
+        value => AnimationPreset::Custom(value.to_owned()),
+    }
+}
+
+fn parse_filter(input: &str) -> VisualFilter {
+    if matches!(input.trim(), "" | "none" | "clear") {
+        return VisualFilter::default();
+    }
+    let mut filter = VisualFilter::default();
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(input) else {
+        return filter;
+    };
+    let number = |name: &str, default: f32| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_f64)
+            .map_or(default, |value| value as f32)
+    };
+    filter.blur = number("blur", 0.0).max(0.0);
+    filter.brightness = normalize_filter_ratio(number("brightness", 1.0));
+    filter.contrast = normalize_filter_ratio(number("contrast", 1.0));
+    filter.saturation = normalize_filter_ratio(number("saturation", 1.0));
+    filter
+}
+
+fn normalize_filter_ratio(value: f32) -> f32 {
+    if value > 4.0 { value / 100.0 } else { value }.clamp(0.0, 4.0)
 }
 
 fn parse_transform(input: &str) -> SpriteTransform {
@@ -688,5 +856,35 @@ mod tests {
         assert_eq!(report.sub_scenes[0].scene, "aside");
         assert_eq!(report.diagnostics.len(), 1);
         assert_eq!(report.diagnostics[0].span.line, 4);
+    }
+
+    #[test]
+    fn parses_phase_five_presentation_commands() {
+        let report = parse_webgal_report(
+            "setAnimation:shake -target=hero -duration=350;\n\
+             setTransition: -target=hero -enter=enter-from-left -exit=exit;\n\
+             setFilter:{\"blur\":6,\"brightness\":90} -target=hero;\n\
+             intro:first|second -hold;\n\
+             filmMode:enable;\n\
+             wait:250;\n\
+             pixiInit;\n\
+             pixiPerform:rain;\n\
+             setTempAnimation:glitchFilm -target=bg-main -next;",
+        );
+        assert!(report.diagnostics.is_empty());
+        assert_eq!(report.actions.len(), 9);
+        assert!(matches!(
+            report.actions[0],
+            Action::Animate {
+                preset: AnimationPreset::Shake,
+                duration,
+                ..
+            } if duration == 0.35
+        ));
+        assert!(matches!(
+            report.actions[2],
+            Action::SetFilter { filter, .. } if filter.blur == 6.0 && filter.brightness == 0.9
+        ));
+        assert!(matches!(report.actions[8], Action::Flow { next: true, .. }));
     }
 }

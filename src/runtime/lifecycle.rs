@@ -82,10 +82,14 @@ fn core_is_animating(state: &GameState) -> bool {
         .dialogue
         .as_ref()
         .is_some_and(|dialogue| dialogue.visible_chars < dialogue.text.chars().count())
+        || state.presentation_blocked()
+        || state.particle_effect.is_some()
         || state.bg_transition.is_some()
         || state.bg_transform_animation.is_some()
+        || state.bg_animation.is_some()
         || state.sprites.values().any(|sprite| {
-            sprite.transform_animation.is_some()
+            sprite.animation.is_some()
+                || sprite.transform_animation.is_some()
                 || (sprite.entering && sprite.transition_progress < 1.0)
                 || (!sprite.entering && sprite.transition_progress > 0.0)
         })

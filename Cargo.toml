@@ -12,7 +12,7 @@ edition.workspace = true
 description = "A dedicated visual-novel engine with WebGAL script compatibility"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.

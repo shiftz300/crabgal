@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 const SAVE_MAGIC: [u8; 8] = *b"CRABGAL\0";
-const SAVE_VERSION: u32 = 1;
+const SAVE_VERSION: u32 = 2;
 const HEADER_SIZE: usize = 24;
 const MAX_METADATA_SIZE: usize = 64 * 1024;
 const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;

@@ -75,7 +75,8 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | 2 — Control bar | Done | Auto, skip, hide, lock, quick save/load |
 | 3 — Stateful UI | Done; awaiting acceptance | Backlog/read history/rollback, save slots and settings |
 | 4 — Audio | Done; awaiting acceptance | BGM fades, vocal/replay, effects and volume buses |
-| 5+ — Production | Planned | Performances, richer text, tooling and packaging |
+| 5 — Presentation | Done; awaiting acceptance | Timelines, filters, blend modes, transitions and particles |
+| 6+ — Production | Planned | Richer text, tooling and packaging |
 
 ## Credits
 

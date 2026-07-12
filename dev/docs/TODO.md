@@ -8,8 +8,8 @@
 ## 当前优先级
 
 1. **Phase 3 视觉验收** — Backlog、SAVE / LOAD、CONFIG、TITLE 的最终人工验收
-2. **Phase 5 演出控制器** — 阻塞动画、filter 生命周期和非 alpha blend
-3. **输入抽象** — 为桌面、触控、手柄建立统一 InputAction
+2. **Phase 5 演出视觉验收** — 按验收清单确认动画、filter、blend 与粒子
+3. **Phase 6 文本增强** — 富文本 span、ruby 与注音布局
 
 ## Phase 0 — Bevy 引擎基础 (DONE)
 
@@ -120,18 +120,20 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 
 验收入口与逐步预期见 [`14-phase4-acceptance.md`](acceptance/14-phase4-acceptance.md)。
 
-## Phase 5 — 演出
+## Phase 5 — 演出 (DONE — 待用户验收)
 
-- [ ] setAnimation — 预制动画 (enter/exit/shake/blur 等)
-- [ ] setTransition — 自定义进/退场效果
-- [ ] setFilter / setComplexAnimation / setTempAnimation
-- [ ] changeFigure 非 alpha blend（add/multiply/screen）实际渲染
-- [ ] intro — 黑屏独白
-- [ ] filmMode — 电影模式
-- [ ] wait — 延时
-- [ ] pixiPerform / pixiInit 对应的 Bevy 演出层
-- [ ] 转场效果 (wipe, dissolve)
-- [ ] 粒子特效
+- [x] setAnimation — 帧率无关预制动画（enter/exit/shake/方向入场/缩放/blur/film）
+- [x] setTransition — 按 target 持久化并应用自定义进/退场规则
+- [x] setFilter / setComplexAnimation / setTempAnimation — 统一演出时间线与 GPU filter
+- [x] changeFigure 非 alpha blend（add/multiply/screen）Material2D 实际渲染
+- [x] intro — 黑屏分页独白、自动推进与 `-hold` 点击推进
+- [x] filmMode — 固定设计视口电影遮幅
+- [x] wait — 真实时间延时和 `-next` 非阻塞语义
+- [x] pixiPerform / pixiInit — 无 Web 运行时的有界 Bevy 演出层
+- [x] 转场效果 — 不拉伸纹理的 wipe 与噪声 dissolve
+- [x] 粒子特效 — rain/snow/sakura/dust 预制与同帧替换/清理
+
+验收入口与逐步预期见 [`15-phase5-acceptance.md`](acceptance/15-phase5-acceptance.md)。
 
 ## Phase 6 — 文本增强
 
@@ -180,3 +182,4 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 | [12-phase1-acceptance.md](acceptance/12-phase1-acceptance.md) | Phase 1 桌面端手工验收提纲与预期结果 |
 | [13-phase3-acceptance.md](acceptance/13-phase3-acceptance.md) | Phase 3 状态 UI 手工验收提纲 |
 | [14-phase4-acceptance.md](acceptance/14-phase4-acceptance.md) | Phase 4 音频总线、淡入淡出、音效与 Replay 验收步骤 |
+| [15-phase5-acceptance.md](acceptance/15-phase5-acceptance.md) | Phase 5 演出控制器、blend、转场与粒子验收步骤 |

@@ -10,7 +10,8 @@ use crate::action::Action;
 use crate::action::ChoiceTarget;
 use crate::expression::{evaluate, interpolate};
 use crate::state::{
-    BgTransition, Dialogue, MenuChoice, MenuState, SceneFrame, Sprite, State, TransformAnimation,
+    BgTransition, Dialogue, IntroState, MenuChoice, MenuState, PresetAnimation, SceneFrame, Sprite,
+    State, TransformAnimation, TransitionRule,
 };
 use crate::types::{Anchor, Transition};
 
@@ -21,6 +22,8 @@ pub enum StepResult {
     AwaitClick,
     /// Engine is waiting for the user to choose (menu shown).
     AwaitChoice,
+    /// Engine is waiting for a timed presentation action to finish.
+    AwaitPresentation,
     /// No more actions in this scene.
     EndOfScene,
     /// Forward execution exceeded the deterministic safety limit.
@@ -34,6 +37,9 @@ const MAX_FORWARD_ACTIONS: usize = 1024;
 pub fn step(state: &mut State) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
+    }
+    if state.presentation_blocked() {
+        return StepResult::AwaitPresentation;
     }
 
     for _ in 0..MAX_FORWARD_ACTIONS {
@@ -82,14 +88,55 @@ pub fn step(state: &mut State) -> StepResult {
                 state.bg = Some(image.clone());
                 state.bg_transform = transform;
                 state.bg_transform_animation = None;
+                let rule_animation = state
+                    .transition_rules
+                    .get("bg-main")
+                    .and_then(|rule| rule.enter.clone().map(|preset| (preset, rule.duration)))
+                    .map(|(preset, duration)| PresetAnimation {
+                        preset,
+                        base: transform,
+                        elapsed: 0.0,
+                        duration: duration.max(f32::EPSILON),
+                        blocking: !next,
+                        remove_on_finish: false,
+                    });
+                let rule_blocks = rule_animation.is_some() && !next;
+                if let Some(animation) = &rule_animation {
+                    state.bg_transform =
+                        preset_initial_transform(animation.base, &animation.preset);
+                }
+                state.bg_animation = rule_animation;
                 state.bg_transition = (transition != Transition::Instant).then_some(BgTransition {
                     from,
                     to: image,
                     progress: 0.0,
                     kind: transition,
+                    blocking: !next,
                 });
+                if rule_blocks || (!next && transition != Transition::Instant) {
+                    return StepResult::AwaitPresentation;
+                }
             }
             Action::HideBg { transition } => {
+                if let Some((preset, duration)) = state
+                    .transition_rules
+                    .get("bg-main")
+                    .and_then(|rule| rule.exit.clone().map(|preset| (preset, rule.duration)))
+                    && state.bg.is_some()
+                {
+                    state.bg_animation = Some(PresetAnimation {
+                        preset,
+                        base: state.bg_transform,
+                        elapsed: 0.0,
+                        duration: duration.max(f32::EPSILON),
+                        blocking: !next,
+                        remove_on_finish: true,
+                    });
+                    if !next {
+                        return StepResult::AwaitPresentation;
+                    }
+                    continue;
+                }
                 let from = state.bg.take();
                 state.bg_transition = match (from, transition) {
                     (Some(from), transition) if transition != Transition::Instant => {
@@ -98,10 +145,14 @@ pub fn step(state: &mut State) -> StepResult {
                             to: String::new(),
                             progress: 0.0,
                             kind: transition,
+                            blocking: !next,
                         })
                     }
                     _ => None,
                 };
+                if !next && transition != Transition::Instant {
+                    return StepResult::AwaitPresentation;
+                }
             }
             Action::SetTransform {
                 id,
@@ -111,7 +162,9 @@ pub fn step(state: &mut State) -> StepResult {
             } => {
                 let id = interpolate(&id, &state.vars, &state.global_vars);
                 debug!("SetTransform: {} -> {:?}", id, target);
+                let mut started = false;
                 if matches!(id.as_str(), "bg-main" | "background") {
+                    started = true;
                     if duration > 0.0 {
                         state.bg_transform_animation = Some(TransformAnimation {
                             from: state.bg_transform,
@@ -119,12 +172,14 @@ pub fn step(state: &mut State) -> StepResult {
                             elapsed: 0.0,
                             duration,
                             easing,
+                            blocking: !next,
                         });
                     } else {
                         state.bg_transform = target;
                         state.bg_transform_animation = None;
                     }
                 } else if let Some(sprite) = state.sprites.get_mut(&id) {
+                    started = true;
                     if duration > 0.0 {
                         sprite.transform_animation = Some(TransformAnimation {
                             from: sprite.transform,
@@ -132,11 +187,15 @@ pub fn step(state: &mut State) -> StepResult {
                             elapsed: 0.0,
                             duration,
                             easing,
+                            blocking: !next,
                         });
                     } else {
                         sprite.transform = target;
                         sprite.transform_animation = None;
                     }
+                }
+                if started && !next && duration > 0.0 {
+                    return StepResult::AwaitPresentation;
                 }
             }
             Action::ShowSprite {
@@ -161,6 +220,21 @@ pub fn step(state: &mut State) -> StepResult {
                 } else {
                     0.0
                 };
+                let rule = state.transition_rules.get(&id).cloned();
+                let rule_animation = rule.as_ref().and_then(|rule| {
+                    rule.enter.clone().map(|preset| PresetAnimation {
+                        preset,
+                        base: transform,
+                        elapsed: 0.0,
+                        duration: rule.duration.max(f32::EPSILON),
+                        blocking: !next,
+                        remove_on_finish: false,
+                    })
+                });
+                let rule_blocks = rule_animation.is_some() && !next;
+                let initial_transform = rule_animation.as_ref().map_or(transform, |animation| {
+                    preset_initial_transform(animation.base, &animation.preset)
+                });
                 state.sprites.insert(
                     id,
                     Sprite {
@@ -170,26 +244,56 @@ pub fn step(state: &mut State) -> StepResult {
                         transition,
                         entering: true,
                         transition_offset_x,
-                        transform,
+                        transition_blocking: !next,
+                        transform: initial_transform,
                         transform_animation: None,
+                        filter: Default::default(),
+                        animation: rule_animation,
                         z_index,
                         blend,
                     },
                 );
+                if rule_blocks || (!next && transition != Transition::Instant) {
+                    return StepResult::AwaitPresentation;
+                }
             }
             Action::HideSprite { id, transition } => {
                 let id = interpolate(&id, &state.vars, &state.global_vars);
                 debug!("HideSprite: {}", id);
-                if transition == Transition::Instant {
+                let rule = state.transition_rules.get(&id).cloned();
+                if let Some((sprite, preset, duration)) = state
+                    .sprites
+                    .get_mut(&id)
+                    .zip(rule.and_then(|rule| rule.exit.map(|preset| (preset, rule.duration))))
+                    .map(|(sprite, (preset, duration))| (sprite, preset, duration))
+                {
+                    sprite.animation = Some(PresetAnimation {
+                        preset,
+                        base: sprite.transform,
+                        elapsed: 0.0,
+                        duration: duration.max(f32::EPSILON),
+                        blocking: !next,
+                        remove_on_finish: true,
+                    });
+                    sprite.entering = false;
+                    sprite.transition_blocking = false;
+                    if !next {
+                        return StepResult::AwaitPresentation;
+                    }
+                } else if transition == Transition::Instant {
                     state.sprites.remove(&id);
                 } else if let Some(sprite) = state.sprites.get_mut(&id) {
                     sprite.transition = transition;
                     sprite.entering = false;
+                    sprite.transition_blocking = !next;
                     sprite.transition_offset_x = match transition {
                         Transition::SlideFromLeft(_) => -400.0,
                         Transition::SlideFromRight(_) => 400.0,
                         _ => 0.0,
                     };
+                    if !next {
+                        return StepResult::AwaitPresentation;
+                    }
                 }
             }
             Action::Say {
@@ -356,12 +460,129 @@ pub fn step(state: &mut State) -> StepResult {
                 state.mini_avatar = None;
                 state.mini_avatar_progress = 0.0;
             }
+            Action::Animate {
+                target,
+                preset,
+                duration,
+            } => {
+                let target = interpolate(&target, &state.vars, &state.global_vars);
+                let animation = |base| PresetAnimation {
+                    preset: preset.clone(),
+                    base,
+                    elapsed: 0.0,
+                    duration: duration.max(f32::EPSILON),
+                    blocking: !next,
+                    remove_on_finish: matches!(preset, crate::types::AnimationPreset::Exit),
+                };
+                let mut started = false;
+                if is_background_target(&target) {
+                    started = true;
+                    let animation = animation(state.bg_transform);
+                    state.bg_transform =
+                        preset_initial_transform(animation.base, &animation.preset);
+                    state.bg_animation = Some(animation);
+                } else if let Some(sprite) = state.sprites.get_mut(&target) {
+                    started = true;
+                    let animation = animation(sprite.transform);
+                    sprite.transform = preset_initial_transform(animation.base, &animation.preset);
+                    sprite.animation = Some(animation);
+                } else {
+                    log::warn!("animation target does not exist: {target}");
+                }
+                if started && !next && duration > 0.0 {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::SetTransition {
+                target,
+                enter,
+                exit,
+                duration,
+            } => {
+                let target = interpolate(&target, &state.vars, &state.global_vars);
+                state.transition_rules.insert(
+                    target,
+                    TransitionRule {
+                        enter,
+                        exit,
+                        duration: duration.max(f32::EPSILON),
+                    },
+                );
+            }
+            Action::SetFilter { target, filter } => {
+                let target = interpolate(&target, &state.vars, &state.global_vars);
+                if is_background_target(&target) {
+                    state.bg_filter = filter;
+                } else if let Some(sprite) = state.sprites.get_mut(&target) {
+                    sprite.filter = filter;
+                } else {
+                    log::warn!("filter target does not exist: {target}");
+                }
+            }
+            Action::Wait { seconds } => {
+                state.wait_remaining = seconds.max(0.0);
+                state.wait_blocking = !next;
+                if !next && state.wait_remaining > 0.0 {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::Intro { pages, hold } => {
+                let pages = pages
+                    .into_iter()
+                    .map(|page| interpolate(&page, &state.vars, &state.global_vars))
+                    .collect();
+                state.dialogue = None;
+                state.intro = Some(IntroState {
+                    pages,
+                    page: 0,
+                    elapsed: 0.0,
+                    hold,
+                    blocking: !next,
+                });
+                if !next {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::FilmMode { enabled } => state.film_mode = enabled,
+            Action::Particle { effect } => {
+                state.particle_effect =
+                    effect.map(|effect| interpolate(&effect, &state.vars, &state.global_vars));
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
 
     log::error!("script exceeded {MAX_FORWARD_ACTIONS} actions without yielding");
     StepResult::ExecutionLimit
+}
+
+fn is_background_target(target: &str) -> bool {
+    matches!(target, "bg-main" | "background")
+}
+
+fn preset_initial_transform(
+    base: crate::types::SpriteTransform,
+    preset: &crate::types::AnimationPreset,
+) -> crate::types::SpriteTransform {
+    use crate::types::AnimationPreset;
+    let mut initial = base;
+    match preset {
+        AnimationPreset::Enter => initial.alpha = 0.0,
+        AnimationPreset::EnterFromBottom => {
+            initial.offset_y += 180.0;
+            initial.alpha = 0.0;
+        }
+        AnimationPreset::EnterFromLeft => {
+            initial.offset_x -= 220.0;
+            initial.alpha = 0.0;
+        }
+        AnimationPreset::EnterFromRight => {
+            initial.offset_x += 220.0;
+            initial.alpha = 0.0;
+        }
+        _ => {}
+    }
+    initial
 }
 
 fn assign_value(
@@ -417,8 +638,16 @@ pub fn end_game(state: &mut State) {
     state.menu = None;
     state.bg = None;
     state.bg_transition = None;
+    state.bg_animation = None;
+    state.bg_filter = Default::default();
     state.sprites.clear();
     state.mini_avatar = None;
+    state.wait_remaining = 0.0;
+    state.wait_blocking = false;
+    state.intro = None;
+    state.film_mode = false;
+    state.particle_effect = None;
+    state.transition_rules.clear();
     state.bgm.file = None;
     state.bgm.fade_seconds = 0.0;
     state.bgm.revision = state.bgm.revision.wrapping_add(1);
@@ -955,5 +1184,50 @@ mod tests {
             &state.effect_queue[0],
             crate::state::EffectEvent::Play(cue) if cue.file == "click.wav"
         ));
+    }
+
+    #[test]
+    fn presentation_commands_block_and_persist_stage_state() {
+        use crate::types::{AnimationPreset, BlendMode, Position, VisualFilter};
+
+        let filter = VisualFilter {
+            blur: 4.0,
+            brightness: 0.9,
+            ..Default::default()
+        };
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "hero.webp".into(),
+                position: Position::center(0.0),
+                transition: Transition::Instant,
+                transform: Default::default(),
+                z_index: 0,
+                blend: BlendMode::Screen,
+            },
+            Action::Animate {
+                target: "hero".into(),
+                preset: AnimationPreset::Shake,
+                duration: 0.4,
+            },
+            Action::SetFilter {
+                target: "hero".into(),
+                filter,
+            },
+            Action::FilmMode { enabled: true },
+            Action::Particle {
+                effect: Some("rain".into()),
+            },
+            Action::Wait { seconds: 0.5 },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.sprites["hero"].animation.is_some());
+        state.sprites.get_mut("hero").unwrap().animation = None;
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.sprites["hero"].filter, filter);
+        assert!(state.film_mode);
+        assert_eq!(state.particle_effect.as_deref(), Some("rain"));
+        assert_eq!(state.wait_remaining, 0.5);
     }
 }

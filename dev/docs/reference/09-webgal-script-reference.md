@@ -179,11 +179,28 @@ setTransition: -target=fig-center -enter=enter-from-bottom -exit=exit;
 setComplexAnimation:animName -target=fig-center;
 ```
 
+Both commands share the same target-owned timeline as `setAnimation`. Built-in names use the
+native presets; unknown names use the engine's bounded custom-animation fallback instead of
+starting a web runtime.
+
+### setFilter — Image-local GPU Filter
+
+```text
+setFilter:{"blur":6,"brightness":90,"contrast":110,"saturation":80} -target=fig-center;
+setFilter:none -target=fig-center;
+```
+
+`brightness`, `contrast`, and `saturation` accept either ratios (`0.9`) or percentages (`90`).
+Targets with no filter and alpha blending remain on the normal Sprite fast path.
+
 ### pixiInit / pixiPerform — PixiJS Effects
 ```
 pixiInit:effect.json;
 pixiPerform:effect.json;
 ```
+
+crabgal maps these commands to a native, fixed-capacity Bevy effect layer. Names containing
+`rain`, `snow`, `sakura`/`petal`, or `dust`/`light` select a preset; `pixiInit` clears the layer.
 
 ### wait — Delay
 ```

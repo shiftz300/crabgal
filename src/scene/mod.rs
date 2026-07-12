@@ -2,6 +2,7 @@ pub mod assets;
 pub mod audio;
 pub mod background;
 pub(crate) mod components;
+pub(crate) mod effects;
 pub(crate) mod images;
 pub mod sprites;
 
@@ -13,7 +14,8 @@ pub(crate) struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(audio::VocalPlayback::default())
+        app.add_plugins(effects::StageEffectsPlugin)
+            .insert_resource(audio::VocalPlayback::default())
             .init_resource::<audio::BgmPlayback>()
             .init_resource::<audio::EffectPlayback>()
             .init_resource::<audio::AudioAnimationActivity>()

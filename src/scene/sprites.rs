@@ -1,34 +1,43 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::Anchor;
+use crabgal_core::{Anchor, BlendMode};
 
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::runtime::viewport::DesignViewport;
 use crate::scene::components::SpriteNode;
+use crate::scene::effects::material::{StageMaterial, StageQuad, animation_uniform};
 use crate::scene::images::ImageDimensions;
 
+#[derive(SystemParam)]
+pub(crate) struct SpriteRenderResources<'w> {
+    asset_server: Res<'w, AssetServer>,
+    dimensions: Res<'w, ImageDimensions>,
+    quad: Res<'w, StageQuad>,
+    materials: ResMut<'w, Assets<StageMaterial>>,
+}
+
 /// Synchronizes character sprites with the engine state via stable sprite IDs.
-pub fn sync_sprites(
+pub(crate) fn sync_sprites(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
-    asset_server: Res<AssetServer>,
-    dimensions: Res<ImageDimensions>,
+    mut render: SpriteRenderResources,
     mut commands: Commands,
-    sprite_query: Query<(Entity, &SpriteNode)>,
+    sprite_query: Query<(Entity, &SpriteNode, Option<&MeshMaterial2d<StageMaterial>>)>,
     window_query: Query<Ref<Window>>,
 ) {
     let Ok(window) = window_query.single() else {
         return;
     };
-    if !state.is_changed() && !dimensions.is_changed() && !window.is_changed() {
+    if !state.is_changed() && !render.dimensions.is_changed() && !window.is_changed() {
         return;
     }
     let viewport = DesignViewport::from_window(&window);
     let desired_ids = state.sprites.keys().collect::<HashSet<_>>();
 
-    for (entity, node) in &sprite_query {
+    for (entity, node, _) in &sprite_query {
         if !desired_ids.contains(&node.0) {
             commands.entity(entity).despawn();
         }
@@ -36,14 +45,14 @@ pub fn sync_sprites(
 
     let existing = sprite_query
         .iter()
-        .map(|(entity, node)| (node.0.as_str(), entity))
+        .map(|(entity, node, material)| (node.0.as_str(), (entity, material)))
         .collect::<HashMap<_, _>>();
     let mut sprites = state.sprites.iter().collect::<Vec<_>>();
     sprites.sort_by(|(_, left), (_, right)| left.position.y.total_cmp(&right.position.y));
 
     for (index, (id, data)) in sprites.into_iter().enumerate() {
-        let handle: Handle<Image> = asset_server.load(format!("figure/{}", data.image));
-        let texture_aspect = dimensions.aspect(&handle).unwrap_or(0.7);
+        let handle: Handle<Image> = render.asset_server.load(format!("figure/{}", data.image));
+        let texture_aspect = render.dimensions.aspect(&handle).unwrap_or(0.7);
 
         let base_height = config.layout.sprite_height;
         let base_width = base_height * texture_aspect;
@@ -68,7 +77,7 @@ pub fn sync_sprites(
         let z = 0.1 + data.z_index as f32 * 0.001 + index as f32 * 0.000_001;
 
         let sprite = Sprite {
-            image: handle,
+            image: handle.clone(),
             custom_size: Some(Vec2::new(
                 width * viewport.scale,
                 base_height * transform.scale_y * viewport.scale,
@@ -78,19 +87,63 @@ pub fn sync_sprites(
         };
         let entity_transform = Transform::from_translation(world_position.extend(z))
             .with_rotation(Quat::from_rotation_z(transform.rotation));
+        let mut filter = data.filter;
+        filter.blur += transform.blur;
+        let animation = animation_uniform(data.animation.as_ref());
+        let uses_material =
+            data.blend != BlendMode::Alpha || !filter.is_identity() || animation.z > 0.0;
 
-        if let Some(&entity) = existing.get(id.as_str()) {
-            commands
-                .entity(entity)
-                .insert((sprite, entity_transform, RenderLayers::layer(0)));
+        if let Some(&(entity, existing_material)) = existing.get(id.as_str()) {
+            if uses_material {
+                let material = StageMaterial::new(handle, alpha, filter, data.blend, animation);
+                let material_handle = if let Some(existing_material) = existing_material {
+                    if let Some(mut current) = render.materials.get_mut(&existing_material.0) {
+                        *current = material;
+                    }
+                    existing_material.0.clone()
+                } else {
+                    render.materials.add(material)
+                };
+                let mesh_transform = entity_transform.with_scale(Vec3::new(
+                    width * viewport.scale,
+                    base_height * transform.scale_y * viewport.scale,
+                    1.0,
+                ));
+                commands.entity(entity).remove::<Sprite>().insert((
+                    Mesh2d(render.quad.0.clone()),
+                    MeshMaterial2d(material_handle),
+                    mesh_transform,
+                    RenderLayers::layer(0),
+                ));
+            } else {
+                commands
+                    .entity(entity)
+                    .remove::<Mesh2d>()
+                    .remove::<MeshMaterial2d<StageMaterial>>()
+                    .insert((sprite, entity_transform, RenderLayers::layer(0)));
+            }
         } else {
-            commands.spawn((
+            let mut entity = commands.spawn((
                 Name::new(format!("sprite::{id}")),
                 SpriteNode(id.clone()),
-                sprite,
-                entity_transform,
                 RenderLayers::layer(0),
             ));
+            if uses_material {
+                let material = render.materials.add(StageMaterial::new(
+                    handle, alpha, filter, data.blend, animation,
+                ));
+                entity.insert((
+                    Mesh2d(render.quad.0.clone()),
+                    MeshMaterial2d(material),
+                    entity_transform.with_scale(Vec3::new(
+                        width * viewport.scale,
+                        base_height * transform.scale_y * viewport.scale,
+                        1.0,
+                    )),
+                ));
+            } else {
+                entity.insert((sprite, entity_transform));
+            }
         }
     }
 }

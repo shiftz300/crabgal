@@ -1,0 +1,43 @@
+; Phase 5 presentation acceptance. All effects use existing local art.
+
+intro:PHASE 5|演出控制器 -hold
+changeBg:bg.webp -transition=dissolve -duration=650
+filmMode:enable
+小夜:上下电影遮幅已经启用；下一步会等待 0.8 秒后自动继续。 -next
+wait:800
+filmMode:none
+
+setTransition: -target=hero-p5 -enter=enter-from-left -exit=exit -duration=500
+changeFigure:stand.webp -left -id=hero-p5 -zIndex=2
+小夜:立绘使用持久 transition rule 入场，脚本会等待动画结束。
+setAnimation:shake -target=hero-p5 -duration=420
+setAnimation:move-front-and-back -target=hero-p5 -duration=520
+setAnimation:blur -target=hero-p5 -duration=600
+setFilter:{"blur":3,"brightness":92,"contrast":112,"saturation":75} -target=hero-p5
+小夜:当前立绘使用 GPU 局部模糊、亮度、对比度和饱和度过滤。
+setFilter:none -target=hero-p5
+
+changeFigure:thinking.webp -left -id=blend-add -blend=add -transform={"alpha":0.72,"scale":{"x":0.72,"y":0.72}}
+changeFigure:thinking.webp -center -id=blend-multiply -blend=multiply -transform={"alpha":0.72,"scale":{"x":0.72,"y":0.72}}
+changeFigure:thinking.webp -right -id=blend-screen -blend=screen -transform={"alpha":0.72,"scale":{"x":0.72,"y":0.72}}
+小夜:从左到右分别是 add、multiply、screen 的真实 GPU blend。
+changeFigure:none -left -id=blend-add
+changeFigure:none -id=blend-multiply
+changeFigure:none -right -id=blend-screen
+
+setAnimation:oldFilm -target=bg-main -duration=900
+setTempAnimation:glitchFilm -target=bg-main -duration=700
+setComplexAnimation:rgbFilm -target=bg-main -duration=700
+小夜:预制、临时和复杂动画共用同一条帧率无关时间线。
+
+changeBg:WebGAL_New_Enter_Image.webp -transition=wipe -duration=800
+changeBg:WebGalEnter.webp -transition=dissolve -duration=800
+小夜:刚才依次完成了不拉伸纹理的 wipe 和噪声 dissolve。
+
+pixiPerform:rain
+小夜:轻量 Bevy 演出层正在显示雨粒子；它不会创建 PixiJS 或 Web 运行时。
+pixiPerform:sakura
+小夜:粒子效果已经原位切换为樱花。
+pixiInit
+小夜:pixiInit 已清空演出层。继续后退出规则会让立绘淡出并返回主场景。
+changeFigure:none -left -id=hero-p5

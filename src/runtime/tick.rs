@@ -72,14 +72,33 @@ pub fn tick(mut context: TickContext) {
     {
         log::error!("failed to persist skip mode: {error:#}");
     }
+    let presentation_was_blocked = context.state.presentation_blocked();
+    let presentation_advance = advance_requested(
+        &context.keys,
+        &context.mouse,
+        &context.buttons,
+        context.toggles.hide,
+    );
+    state_changed |= update_transitions(
+        context.state.bypass_change_detection(),
+        delta_seconds as f32,
+        presentation_advance,
+    );
+    if presentation_was_blocked {
+        context.toggles.skip = false;
+        if !context.state.presentation_blocked() {
+            step::step(context.state.bypass_change_detection());
+            state_changed = true;
+        }
+        if state_changed {
+            context.state.set_changed();
+        }
+        return;
+    }
     if context.toggles.skip {
         state_changed |= skip_once(
             context.state.bypass_change_detection(),
             &mut context.toggles,
-        );
-        state_changed |= update_transitions(
-            context.state.bypass_change_detection(),
-            delta_seconds as f32,
         );
         if state_changed {
             context.state.set_changed();
@@ -112,10 +131,6 @@ pub fn tick(mut context: TickContext) {
         *context.auto_timer = 0.0;
     }
 
-    state_changed |= update_transitions(
-        context.state.bypass_change_detection(),
-        delta_seconds as f32,
-    );
     if state_changed {
         context.state.set_changed();
     }
@@ -351,8 +366,25 @@ fn advance_once(state: &mut State) -> bool {
     true
 }
 
-fn update_transitions(state: &mut State, delta_seconds: f32) -> bool {
+fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool) -> bool {
     let mut changed = false;
+    if state.wait_remaining > 0.0 {
+        state.wait_remaining = (state.wait_remaining - delta_seconds).max(0.0);
+        changed = true;
+    }
+    if let Some(intro) = &mut state.intro {
+        intro.elapsed += delta_seconds;
+        changed = true;
+        let advance = advance_intro || (!intro.hold && intro.elapsed >= 1.6);
+        if advance {
+            if intro.page + 1 < intro.pages.len() {
+                intro.page += 1;
+                intro.elapsed = 0.0;
+            } else {
+                state.intro = None;
+            }
+        }
+    }
     for sprite in state.sprites.values_mut() {
         if let Some(animation) = &mut sprite.transform_animation {
             changed = true;
@@ -363,6 +395,27 @@ fn update_transitions(state: &mut State, delta_seconds: f32) -> bool {
             sprite.transform = animation.from.lerp(animation.to, progress);
             if animation.elapsed >= animation.duration {
                 sprite.transform_animation = None;
+            }
+        }
+        if let Some(animation) = &mut sprite.animation {
+            changed = true;
+            animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
+            let progress = (animation.elapsed / animation.duration).clamp(0.0, 1.0);
+            sprite.transform = sample_preset(animation.base, &animation.preset, progress);
+            if animation.elapsed >= animation.duration {
+                let exiting = animation.remove_on_finish;
+                sprite.transform = if exiting {
+                    let mut transform = animation.base;
+                    transform.alpha = 0.0;
+                    transform
+                } else {
+                    animation.base
+                };
+                sprite.animation = None;
+                if exiting {
+                    sprite.entering = false;
+                    sprite.transition_progress = 0.0;
+                }
             }
         }
         let delta = sprite
@@ -414,6 +467,21 @@ fn update_transitions(state: &mut State, delta_seconds: f32) -> bool {
         }
     }
 
+    if let Some(animation) = &mut state.bg_animation {
+        changed = true;
+        animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
+        let progress = (animation.elapsed / animation.duration).clamp(0.0, 1.0);
+        state.bg_transform = sample_preset(animation.base, &animation.preset, progress);
+        if animation.elapsed >= animation.duration {
+            let exiting = animation.remove_on_finish;
+            state.bg_transform = animation.base;
+            state.bg_animation = None;
+            if exiting {
+                state.bg = None;
+            }
+        }
+    }
+
     let avatar_delta = delta_seconds * 3.0;
     if state.mini_avatar.is_some() {
         if state.mini_avatar_progress < 1.0 {
@@ -427,6 +495,66 @@ fn update_transitions(state: &mut State, delta_seconds: f32) -> bool {
         }
     }
     changed
+}
+
+fn sample_preset(
+    base: crabgal_core::SpriteTransform,
+    preset: &crabgal_core::AnimationPreset,
+    progress: f32,
+) -> crabgal_core::SpriteTransform {
+    use crabgal_core::AnimationPreset;
+    let mut result = base;
+    let eased = 1.0 - (1.0 - progress).powi(3);
+    match preset {
+        AnimationPreset::Enter => result.alpha *= eased,
+        AnimationPreset::Exit => result.alpha *= 1.0 - progress * progress,
+        AnimationPreset::EnterFromBottom => {
+            result.offset_y += 180.0 * (1.0 - eased);
+            result.alpha *= eased;
+        }
+        AnimationPreset::EnterFromLeft => {
+            result.offset_x -= 220.0 * (1.0 - eased);
+            result.alpha *= eased;
+        }
+        AnimationPreset::EnterFromRight => {
+            result.offset_x += 220.0 * (1.0 - eased);
+            result.alpha *= eased;
+        }
+        AnimationPreset::Shake => {
+            result.offset_x +=
+                (progress * std::f32::consts::TAU * 8.0).sin() * (1.0 - progress) * 24.0;
+        }
+        AnimationPreset::MoveFrontAndBack => {
+            let scale = 1.0 + (progress * std::f32::consts::PI).sin() * 0.08;
+            result.scale_x *= scale;
+            result.scale_y *= scale;
+        }
+        AnimationPreset::Blur => {
+            result.blur += (progress * std::f32::consts::PI).sin() * 12.0;
+        }
+        AnimationPreset::ShockwaveIn | AnimationPreset::ShockwaveOut => {
+            let wave = (progress * std::f32::consts::PI).sin();
+            let direction = if matches!(preset, AnimationPreset::ShockwaveIn) {
+                -1.0
+            } else {
+                1.0
+            };
+            result.scale_x *= 1.0 + wave * 0.06 * direction;
+            result.scale_y *= 1.0 + wave * 0.06 * direction;
+            result.blur += wave * 5.0;
+        }
+        AnimationPreset::OldFilm
+        | AnimationPreset::DotFilm
+        | AnimationPreset::ReflectionFilm
+        | AnimationPreset::GlitchFilm
+        | AnimationPreset::RgbFilm
+        | AnimationPreset::GodrayFilm
+        | AnimationPreset::RemoveFilm
+        | AnimationPreset::Custom(_) => {
+            result.blur += (progress * std::f32::consts::PI).sin() * 2.0;
+        }
+    }
+    result
 }
 
 #[cfg(test)]

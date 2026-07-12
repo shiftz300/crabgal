@@ -70,6 +70,10 @@ pub enum Transition {
     SlideFromRight(f32),
     /// Crossfade between scenes over `duration` seconds.
     Crossfade(f32),
+    /// Reveal from left to right without stretching the source image.
+    Wipe(f32),
+    /// Noise-threshold dissolve over `duration` seconds.
+    Dissolve(f32),
 }
 
 impl Transition {
@@ -79,7 +83,62 @@ impl Transition {
             Self::Fade(duration)
             | Self::SlideFromLeft(duration)
             | Self::SlideFromRight(duration)
-            | Self::Crossfade(duration) => Some(duration),
+            | Self::Crossfade(duration)
+            | Self::Wipe(duration)
+            | Self::Dissolve(duration) => Some(duration),
+        }
+    }
+}
+
+/// Compact animation vocabulary shared by script adapters and presentation backends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AnimationPreset {
+    #[default]
+    Enter,
+    Exit,
+    Shake,
+    EnterFromBottom,
+    EnterFromLeft,
+    EnterFromRight,
+    MoveFrontAndBack,
+    Blur,
+    OldFilm,
+    DotFilm,
+    ReflectionFilm,
+    GlitchFilm,
+    RgbFilm,
+    GodrayFilm,
+    RemoveFilm,
+    ShockwaveIn,
+    ShockwaveOut,
+    Custom(String),
+}
+
+/// Per-image color processing. Values are deliberately backend-neutral.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VisualFilter {
+    pub blur: f32,
+    pub brightness: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+}
+
+impl VisualFilter {
+    pub fn is_identity(self) -> bool {
+        self.blur <= f32::EPSILON
+            && (self.brightness - 1.0).abs() <= f32::EPSILON
+            && (self.contrast - 1.0).abs() <= f32::EPSILON
+            && (self.saturation - 1.0).abs() <= f32::EPSILON
+    }
+}
+
+impl Default for VisualFilter {
+    fn default() -> Self {
+        Self {
+            blur: 0.0,
+            brightness: 1.0,
+            contrast: 1.0,
+            saturation: 1.0,
         }
     }
 }

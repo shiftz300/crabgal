@@ -20,7 +20,7 @@ changeBg:WebGAL_New_Enter_Image.webp -fade -duration=600 -transform={"scale":{"x
 {heroName}:上一句已经和本句在同一次执行中衔接。
 这一句会在打字完成后自动前进。 -notend
 
-choose:(showSecret)->隐藏选项:never|[enableLocked]->禁用选项:never|本场景标签:local_branch|调用子场景:callScene(phase1_sub.txt)|Phase 4 音频:callScene(phase4_audio.txt)|切换场景:phase1_end.txt
+choose:(showSecret)->隐藏选项:never|[enableLocked]->禁用选项:never|本场景标签:local_branch|调用子场景:callScene(phase1_sub.txt)|Phase 4 音频:callScene(phase4_audio.txt)|Phase 5 演出:callScene(phase5_presentation.txt)|切换场景:phase1_end.txt
 
 jumpLabel:after_choice
 

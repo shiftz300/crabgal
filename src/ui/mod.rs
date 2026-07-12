@@ -78,6 +78,7 @@ fn add_startup_systems(app: &mut App) {
             textbox::setup_textbox,
             loading::setup_loading,
             performance::setup_performance_overlay,
+            overlays::presentation::setup,
         )
             .chain(),
     );
@@ -109,6 +110,7 @@ fn add_stage_systems(app: &mut App) {
             control_bar::sync_toggle_highlights,
             control_bar::update_lock_icon,
             loading::update_loading,
+            overlays::presentation::sync,
             text_style::apply_text_shadows,
             (
                 choice::sync_choice,

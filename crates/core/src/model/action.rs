@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{BlendMode, Easing, Position, SpriteTransform, Transition};
+use crate::types::{
+    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, VisualFilter,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SayOptions {
@@ -124,6 +126,34 @@ pub enum Action {
         duration: f32,
         easing: Easing,
     },
+
+    // ── Presentation ──
+    /// Play a built-in or adapter-defined animation on a stage target.
+    Animate {
+        target: String,
+        preset: AnimationPreset,
+        duration: f32,
+    },
+    /// Configure the enter/exit animation used by later image changes.
+    SetTransition {
+        target: String,
+        enter: Option<AnimationPreset>,
+        exit: Option<AnimationPreset>,
+        duration: f32,
+    },
+    /// Apply image-local filtering without changing its logical transform.
+    SetFilter {
+        target: String,
+        filter: VisualFilter,
+    },
+    /// Block script execution for a real-time duration.
+    Wait { seconds: f32 },
+    /// Fullscreen black narration pages.
+    Intro { pages: Vec<String>, hold: bool },
+    /// Toggle cinematic letterbox bars.
+    FilmMode { enabled: bool },
+    /// Start or clear the lightweight Bevy effects layer.
+    Particle { effect: Option<String> },
 }
 
 /// A single choice in a menu.

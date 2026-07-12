@@ -18,6 +18,7 @@ crabgal/
 │   ├── main.rs                    最小桌面 binary 入口
 │   ├── runtime/                   App bootstrap、系统阶段、资源、viewport、帧推进
 │   ├── scene/                     ScenePlugin、资源/音频/背景/立绘
+│   │   └── effects/               特殊 blend/filter 材质与有界粒子层
 │   ├── storage/                   StoragePlugin、存档、设置和已读历史
 │   ├── render/                    Blur pipeline 和 WGSL
 │   └── ui/                        GameUiPlugin 与固定 MainCore UI
@@ -50,7 +51,7 @@ crabgal/
 ## Plugin ownership
 
 - `RuntimePlugin`: 游戏输入、脚本推进、窗口布局。
-- `ScenePlugin`: 资源预取、背景/立绘同步、vocal。
+- `ScenePlugin`: 资源预取、背景/立绘同步、vocal 与轻量演出层。
 - `StoragePlugin`: 已读历史持久化；存档 API 位于同模块。
 - `GameUiPlugin`: Textbox、控制栏、Choice、Dialog、Backlog、Save/Load、Title。
 - `BlurPlugin`: RenderApp pipeline、区域规划和 WGSL 后处理。

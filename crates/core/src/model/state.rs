@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::Action;
 use crate::action::ChoiceTarget;
-use crate::types::{BlendMode, Easing, Position, SpriteTransform, Transition, Value};
+use crate::types::{
+    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, Value, VisualFilter,
+};
 
 /// The complete game state at any point in time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -32,6 +34,8 @@ pub struct State {
     pub bg_transition: Option<BgTransition>,
     pub bg_transform: SpriteTransform,
     pub bg_transform_animation: Option<TransformAnimation>,
+    pub bg_filter: VisualFilter,
+    pub bg_animation: Option<PresetAnimation>,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
     /// Current dialogue text (if any).
@@ -42,6 +46,14 @@ pub struct State {
     pub mini_avatar: Option<String>,
     /// Mini avatar enter/exit transition progress (0→1).
     pub mini_avatar_progress: f32,
+
+    // ── Presentation state ──
+    pub wait_remaining: f32,
+    pub wait_blocking: bool,
+    pub intro: Option<IntroState>,
+    pub film_mode: bool,
+    pub particle_effect: Option<String>,
+    pub transition_rules: HashMap<String, TransitionRule>,
 
     // ── Audio state ──
     pub bgm: BgmState,
@@ -134,9 +146,13 @@ pub struct RollbackSnapshot {
     pub scene_stack: Vec<SceneFrame>,
     pub bg: Option<String>,
     pub bg_transform: SpriteTransform,
+    pub bg_filter: VisualFilter,
     pub sprites: HashMap<String, Sprite>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
+    pub film_mode: bool,
+    pub particle_effect: Option<String>,
+    pub transition_rules: HashMap<String, TransitionRule>,
     pub bgm: BgmState,
     pub looping_effects: HashMap<String, EffectState>,
     pub vars: HashMap<String, Value>,
@@ -182,12 +198,41 @@ pub struct Sprite {
     ///
     /// This field keeps its original serialization position for save compatibility.
     pub transition_offset_x: f32,
+    pub transition_blocking: bool,
     /// Transform applied on top of base position (offset, alpha, scale, etc).
     #[serde(default)]
     pub transform: SpriteTransform,
     pub transform_animation: Option<TransformAnimation>,
+    pub filter: VisualFilter,
+    pub animation: Option<PresetAnimation>,
     pub z_index: i32,
     pub blend: BlendMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresetAnimation {
+    pub preset: AnimationPreset,
+    pub base: SpriteTransform,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub blocking: bool,
+    pub remove_on_finish: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransitionRule {
+    pub enter: Option<AnimationPreset>,
+    pub exit: Option<AnimationPreset>,
+    pub duration: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IntroState {
+    pub pages: Vec<String>,
+    pub page: usize,
+    pub elapsed: f32,
+    pub hold: bool,
+    pub blocking: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -197,6 +242,7 @@ pub struct TransformAnimation {
     pub elapsed: f32,
     pub duration: f32,
     pub easing: Easing,
+    pub blocking: bool,
 }
 
 /// Background transition state.
@@ -210,6 +256,7 @@ pub struct BgTransition {
     pub progress: f32,
     /// Transition kind.
     pub kind: Transition,
+    pub blocking: bool,
 }
 
 /// Current dialogue being displayed.
@@ -250,9 +297,13 @@ impl State {
                 scene_stack: self.scene_stack.clone(),
                 bg: self.bg.clone(),
                 bg_transform: self.bg_transform,
+                bg_filter: self.bg_filter,
                 sprites: self.sprites.clone(),
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
+                film_mode: self.film_mode,
+                particle_effect: self.particle_effect.clone(),
+                transition_rules: self.transition_rules.clone(),
                 bgm: self.bgm.clone(),
                 looping_effects: self.looping_effects.clone(),
                 vars: self.vars.clone(),
@@ -295,7 +346,9 @@ impl State {
         self.bg = snapshot.bg;
         self.bg_transition = None;
         self.bg_transform = snapshot.bg_transform;
+        self.bg_filter = snapshot.bg_filter;
         self.bg_transform_animation = None;
+        self.bg_animation = None;
         self.sprites = snapshot.sprites;
         self.dialogue = Some(snapshot.dialogue);
         self.previous_dialogue = None;
@@ -309,9 +362,47 @@ impl State {
         self.global_vars = snapshot.global_vars;
         self.labels = snapshot.labels;
         self.menu = None;
+        self.wait_remaining = 0.0;
+        self.wait_blocking = false;
+        self.intro = None;
+        self.film_mode = snapshot.film_mode;
+        self.particle_effect = snapshot.particle_effect;
+        self.transition_rules = snapshot.transition_rules;
         self.ended = false;
         self.backlog.truncate(index + 1);
         true
+    }
+
+    pub fn presentation_blocked(&self) -> bool {
+        (self.wait_blocking && self.wait_remaining > 0.0)
+            || self.intro.as_ref().is_some_and(|intro| intro.blocking)
+            || self
+                .bg_animation
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
+            || self.sprites.values().any(|sprite| {
+                sprite
+                    .animation
+                    .as_ref()
+                    .is_some_and(|animation| animation.blocking)
+            })
+            || self
+                .bg_transition
+                .as_ref()
+                .is_some_and(|transition| transition.blocking)
+            || self
+                .bg_transform_animation
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
+            || self.sprites.values().any(|sprite| {
+                sprite
+                    .transform_animation
+                    .as_ref()
+                    .is_some_and(|animation| animation.blocking)
+                    || (sprite.transition_blocking
+                        && ((sprite.entering && sprite.transition_progress < 1.0)
+                            || (!sprite.entering && sprite.transition_progress > 0.0)))
+            })
     }
 }
 
