@@ -46,7 +46,7 @@
 - [x] callScene/changeScene 一跳资源预取，避免首次进入子场景时同步等待
 
 验收入口：`projects/test-project/scripts/start.txt`。详细步骤见
-[`12-phase1-acceptance.md`](12-phase1-acceptance.md)。实际富文本 span/ruby 排版与
+[`12-phase1-acceptance.md`](acceptance/12-phase1-acceptance.md)。实际富文本 span/ruby 排版与
 multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成，分别留在 Phase 6/5。
 
 ## Phase 2 — 控制栏 (DONE)
@@ -118,7 +118,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] Replay — 控制栏当前语音重播与 Backlog 任意语音重播
 - [x] 主音量/BGM/vocal/SE 分总线实时更新；淡入生命周期保持事件驱动调度活跃
 
-验收入口与逐步预期见 [`14-phase4-acceptance.md`](14-phase4-acceptance.md)。
+验收入口与逐步预期见 [`14-phase4-acceptance.md`](acceptance/14-phase4-acceptance.md)。
 
 ## Phase 5 — 演出
 
@@ -166,15 +166,17 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 
 | 文档 | 内容 |
 |------|------|
-| [01-language-and-stack.md](01-language-and-stack.md) | 语言与技术栈选型 |
-| [02-ecs-architecture.md](02-ecs-architecture.md) | ECS 架构设计（历史参考） |
-| [03-render-pipeline.md](03-render-pipeline.md) | 渲染管线 |
-| [04-rollback-and-save.md](04-rollback-and-save.md) | 存档与回溯 |
-| [05-bevy-architecture.md](05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
+| [01-language-and-stack.md](architecture/01-language-and-stack.md) | 语言与技术栈选型 |
+| [02-ecs-architecture.md](architecture/02-ecs-architecture.md) | ECS 架构设计（历史参考） |
+| [03-render-pipeline.md](architecture/03-render-pipeline.md) | 渲染管线 |
+| [04-rollback-and-save.md](architecture/04-rollback-and-save.md) | 存档与回溯 |
+| [05-bevy-architecture.md](architecture/05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
+| [06-hexz-packaging.md](architecture/06-hexz-packaging.md) | 资源打包设计（延期） |
 | `crates/script/src/language.rs` | 可注册语言适配器边界 |
-| [07-references.md](07-references.md) | 业界引擎参考 |
-| [09-webgal-script-reference.md](09-webgal-script-reference.md) | WebGAL 脚本参考 |
-| [10-webgal-k-gap-analysis.md](10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
-| [11-engine-advantages.md](11-engine-advantages.md) | crabgal 的差异化、优势支柱与量化验收标准 |
-| [12-phase1-acceptance.md](12-phase1-acceptance.md) | Phase 1 桌面端手工验收提纲与预期结果 |
-| [14-phase4-acceptance.md](14-phase4-acceptance.md) | Phase 4 音频总线、淡入淡出、音效与 Replay 验收步骤 |
+| [07-references.md](reference/07-references.md) | 业界引擎参考 |
+| [09-webgal-script-reference.md](reference/09-webgal-script-reference.md) | WebGAL 脚本参考 |
+| [10-webgal-k-gap-analysis.md](reference/10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
+| [11-engine-advantages.md](reference/11-engine-advantages.md) | crabgal 的差异化、优势支柱与量化验收标准 |
+| [12-phase1-acceptance.md](acceptance/12-phase1-acceptance.md) | Phase 1 桌面端手工验收提纲与预期结果 |
+| [13-phase3-acceptance.md](acceptance/13-phase3-acceptance.md) | Phase 3 状态 UI 手工验收提纲 |
+| [14-phase4-acceptance.md](acceptance/14-phase4-acceptance.md) | Phase 4 音频总线、淡入淡出、音效与 Replay 验收步骤 |

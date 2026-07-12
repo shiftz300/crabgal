@@ -1,19 +1,14 @@
-pub(crate) mod activity;
-pub mod backlog;
-pub mod choice;
-pub mod control_bar;
-pub mod dialog;
-pub(crate) mod foundation;
-pub(crate) mod input_scope;
-pub mod loading;
-pub(crate) mod locale;
-pub(crate) mod menu;
-pub mod performance;
-pub mod save_load;
-pub mod settings_panel;
-pub mod text_style;
-pub mod textbox;
-pub mod title;
+mod overlays;
+mod screens;
+mod stage;
+mod support;
+
+pub use overlays::{backlog, dialog};
+pub(crate) use screens::menu;
+pub use screens::{save_load, settings_panel, title};
+pub use stage::{choice, control_bar, textbox};
+pub(crate) use support::{activity, foundation, input_scope, locale};
+pub use support::{loading, performance, text_style};
 
 use bevy::prelude::*;
 

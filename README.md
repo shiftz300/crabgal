@@ -65,8 +65,8 @@ my-game/
 ## Implementation Phases
 
 See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
-[WebGAL_K gap audit](dev/docs/10-webgal-k-gap-analysis.md) records actual compatibility, and
-[engine advantages](dev/docs/11-engine-advantages.md) defines the product and technical strategy.
+[WebGAL_K gap audit](dev/docs/reference/10-webgal-k-gap-analysis.md) records actual compatibility, and
+[engine advantages](dev/docs/reference/11-engine-advantages.md) defines the product and technical strategy.
 
 | Phase | Status | Focus |
 |-------|--------|-------|
