@@ -58,12 +58,14 @@ fn init_resources(app: &mut App) {
         .init_resource::<control_bar::AutoHideTiming>()
         .init_resource::<control_bar::QuickSavePreview>()
         .init_resource::<textbox::TextboxOverlayFade>()
+        .init_resource::<textbox::InitialTextboxFade>()
         .init_resource::<backlog::BacklogUiState>()
         .init_resource::<save_load::SaveLoadUi>()
         .init_resource::<save_load::SavePreviewCache>()
         .init_resource::<save_load::SaveLoadPageTransition>()
         .init_resource::<menu::MenuRouteTransition>()
         .init_resource::<settings_panel::SettingsUi>()
+        .init_resource::<settings_panel::SettingsPageTransition>()
         .init_resource::<settings_panel::PendingWindowMode>()
         .init_resource::<settings_panel::ActiveSettingSlider>()
         .init_resource::<input_scope::UiInputScope>()
@@ -93,6 +95,7 @@ fn add_stage_systems(app: &mut App) {
                 textbox::update_textbox,
                 textbox::update_mini_avatar,
                 textbox::animate_overlay_fade,
+                textbox::animate_initial_fade,
                 textbox::apply_hide_toggle,
             )
                 .chain(),
@@ -206,18 +209,19 @@ fn add_menu_systems(app: &mut App) {
             (
                 save_load::poll_preview_tasks,
                 settings_panel::sync_settings,
+                settings_panel::begin_settings_entry,
                 menu::sync_tabs,
                 settings_panel::update_setting_visuals.run_if(settings_panel::settings_open),
                 settings_panel::update_setting_bubbles.run_if(settings_panel::settings_open),
                 settings_panel::update_setting_preview.run_if(settings_panel::settings_open),
                 settings_panel::update_settings_pages.run_if(settings_panel::settings_open),
                 settings_panel::animate_watermark,
-                settings_panel::fade_settings_visuals,
                 save_load::animate_save_load_grid_track.run_if(save_load::save_load_open),
                 save_load::animate_save_load_pages.run_if(save_load::save_load_open),
                 save_load::animate_save_load_slots.run_if(save_load::save_load_open),
                 save_load::animate_save_load_content,
                 menu::animate,
+                settings_panel::fade_settings_visuals,
                 menu::animate_route_transition,
             )
                 .chain(),

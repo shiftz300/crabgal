@@ -20,7 +20,3 @@ crc32fast = { workspace = true }
 bincode = { workspace = true }
 hexz_k = { workspace = true }
 hexz-ops = { workspace = true, optional = true }
-
-[[bench]]
-name = "hexz_loader"
-harness = false

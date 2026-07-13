@@ -11,7 +11,9 @@ use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::ProjectRoot;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, SkipMode, ToggleStates, UiBlurSource};
-use crate::ui::foundation::{UiFonts, exp_lerp, fill_node, smoothstep, text_weight};
+use crate::ui::foundation::{
+    UiFonts, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text_weight,
+};
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
     PersistentMenu, active_route, root_node, spawn_header, surface_transform,
@@ -67,6 +69,9 @@ impl Default for SettingsUi {
 
 #[derive(Component)]
 pub(crate) struct SettingsRoot;
+
+#[derive(Component)]
+pub(crate) struct SettingsEntryPending;
 
 #[derive(Component)]
 pub(crate) struct SettingsContent;
@@ -176,6 +181,43 @@ pub(crate) enum SettingsPage {
     Audio,
 }
 
+impl SettingsPage {
+    const fn index(self) -> i8 {
+        match self {
+            Self::System => 0,
+            Self::Display => 1,
+            Self::Audio => 2,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct SettingsPageTransition {
+    from: Option<SettingsPage>,
+    to: Option<SettingsPage>,
+    elapsed: f32,
+}
+
+impl SettingsPageTransition {
+    const SECONDS: f32 = 0.3;
+
+    fn begin(&mut self, from: SettingsPage, to: SettingsPage) {
+        self.from = Some(from);
+        self.to = Some(to);
+        self.elapsed = 0.0;
+    }
+
+    fn reset(&mut self) {
+        self.from = None;
+        self.to = None;
+        self.elapsed = 0.0;
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.from.is_some() && self.to.is_some()
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct SettingsPageButton(pub(crate) SettingsPage);
 
@@ -206,13 +248,6 @@ impl SettingsPageButtonVisual {
 #[derive(Component)]
 pub(crate) struct SettingsPagePanel {
     page: SettingsPage,
-    progress: f32,
-}
-
-impl SettingsPagePanel {
-    pub(crate) fn is_animating(&self, active: SettingsPage) -> bool {
-        self.page == active && self.progress < 1.0
-    }
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -393,7 +428,6 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
     save_roots:
         Query<'w, 's, (Entity, &'static mut Visibility), With<crate::ui::save_load::SaveLoadRoot>>,
     save_proxies: Query<'w, 's, Entity, With<crate::ui::save_load::SaveLoadBlurProxy>>,
-    panels: Query<'w, 's, &'static mut SettingsPagePanel>,
     route_transition: Res<'w, MenuRouteTransition>,
 }
 
@@ -404,6 +438,7 @@ pub fn toggle_settings(
     mut ui: ResMut<SettingsUi>,
     mut save_load: ResMut<SaveLoadUi>,
     mut route_transition: ResMut<MenuRouteTransition>,
+    mut page_transition: ResMut<SettingsPageTransition>,
 ) {
     let previous_route = active_route(&save_load, &ui);
     if controls.iter().any(|(interaction, action)| {
@@ -428,6 +463,9 @@ pub fn toggle_settings(
     {
         ui.open = false;
     }
+    if !ui.open {
+        page_transition.reset();
+    }
 }
 
 pub fn settings_open(ui: Res<SettingsUi>) -> bool {
@@ -437,9 +475,11 @@ pub fn settings_open(ui: Res<SettingsUi>) -> bool {
 pub fn handle_settings_page(
     buttons: Query<(&Interaction, &SettingsPageButton), Changed<Interaction>>,
     mut ui: ResMut<SettingsUi>,
+    mut transition: ResMut<SettingsPageTransition>,
 ) {
     for (interaction, page) in &buttons {
         if *interaction == Interaction::Pressed && ui.page != page.0 {
+            transition.begin(ui.page, page.0);
             ui.page = page.0;
         }
     }
@@ -478,11 +518,6 @@ pub fn sync_settings(
     }
     if !context.roots.is_empty() {
         let switching = context.route_transition.is_animating();
-        if switching {
-            for mut panel in &mut context.panels {
-                panel.progress = if panel.page == ui.page { 0.0 } else { 1.0 };
-            }
-        }
         if !switching {
             for (_, mut visibility) in &mut context.save_roots {
                 *visibility = Visibility::Hidden;
@@ -541,7 +576,16 @@ pub fn sync_settings(
                     0.0
                 }),
                 fill_node(),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, crate::ui::MENU_BACKDROP_ALPHA)),
+                BackgroundColor(Color::srgba(
+                    0.0,
+                    0.0,
+                    0.0,
+                    if switching {
+                        crate::ui::MENU_BACKDROP_ALPHA
+                    } else {
+                        0.0
+                    },
+                )),
                 GlobalZIndex(179),
                 UiTargetCamera(blur_camera),
                 RenderLayers::layer(1),
@@ -568,6 +612,7 @@ pub fn sync_settings(
         .spawn((
             Name::new("system_settings"),
             SettingsRoot,
+            SettingsEntryPending,
             MenuSurface::config(),
             PersistentMenu,
             if switching {
@@ -582,11 +627,34 @@ pub fn sync_settings(
             GlobalZIndex(180),
             UiTargetCamera(camera),
             RenderLayers::layer(2),
+            Visibility::Hidden,
         ))
         .with_children(|root| {
             spawn_header(root, MenuHeaderActive::Config, &font, &icon_font);
             spawn_options_content(root, &ui, &settings, &font);
         });
+}
+
+pub fn begin_settings_entry(
+    mut commands: Commands,
+    mut roots: Query<
+        (
+            Entity,
+            &mut Visibility,
+            &mut MenuFade,
+            &MenuSurface,
+            &mut UiTransform,
+        ),
+        With<SettingsEntryPending>,
+    >,
+) {
+    for (entity, mut visibility, mut fade, surface, mut transform) in &mut roots {
+        fade.current = 0.0;
+        fade.target = 1.0;
+        *transform = surface_transform(surface, false);
+        *visibility = Visibility::Inherited;
+        commands.entity(entity).remove::<SettingsEntryPending>();
+    }
 }
 
 fn spawn_options_content(
@@ -632,6 +700,7 @@ fn spawn_options_content(
                     flex_grow: 1.0,
                     height: Val::Percent(100.0),
                     padding: UiRect::left(Val::Px(48.0)),
+                    overflow: Overflow::clip(),
                     ..default()
                 },))
                     .with_children(|content| {
@@ -705,6 +774,11 @@ pub fn fade_settings_visuals(
     let fading =
         (!ui.open && !route_transition.involves(MenuHeaderActive::Config)) || fade.current < 0.999;
     let alpha = smoothstep(fade.current);
+    let text_alpha = if fade.target > fade.current {
+        smoothstep(fade.current.powf(0.72))
+    } else {
+        alpha
+    };
 
     if fading {
         if cache.settled {
@@ -719,7 +793,7 @@ pub fn fade_settings_visuals(
                     .text_alpha
                     .entry(entity)
                     .or_insert_with(|| color.0.alpha());
-                color.0 = color.0.with_alpha(base * alpha);
+                color.0 = color.0.with_alpha(base * text_alpha);
             }
         }
         for (entity, mut background) in &mut context.backgrounds {
@@ -833,10 +907,7 @@ fn spawn_settings_page(
     let active = ui.page == page;
     parent
         .spawn((
-            SettingsPagePanel {
-                page,
-                progress: 0.0,
-            },
+            SettingsPagePanel { page },
             UiTransform::default(),
             Node {
                 position_type: PositionType::Absolute,
@@ -1524,6 +1595,7 @@ fn choice_is_selected(settings: &RuntimeSettings, action: SettingAction) -> bool
 pub fn update_settings_pages(
     time: Res<Time>,
     ui: Res<SettingsUi>,
+    mut transition: ResMut<SettingsPageTransition>,
     mut buttons: Query<(
         &Interaction,
         &SettingsPageButton,
@@ -1555,26 +1627,52 @@ pub fn update_settings_pages(
         }
     }
 
-    for (mut panel, mut node, mut transform) in &mut panels {
-        if panel.page != ui.page {
-            if panel.progress != 0.0 {
-                panel.progress = 0.0;
-            }
-            if node.display != Display::None {
-                node.display = Display::None;
-            }
-            continue;
+    let (Some(from), Some(to)) = (transition.from, transition.to) else {
+        for (panel, mut node, mut transform) in &mut panels {
+            node.display = if panel.page == ui.page {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            transform.translation = Val2::ZERO;
+            transform.scale = Vec2::ONE;
         }
-        if panel.progress >= 1.0 {
-            continue;
-        }
-        if node.display == Display::None {
+        return;
+    };
+
+    transition.elapsed =
+        (transition.elapsed + time.delta_secs()).min(SettingsPageTransition::SECONDS);
+    let progress = transition.elapsed / SettingsPageTransition::SECONDS;
+    let eased = ease_in_out_cubic(progress);
+    let direction = (to.index() - from.index()).signum() as f32;
+
+    for (panel, mut node, mut transform) in &mut panels {
+        let offset = if panel.page == from {
+            Some(-direction * 100.0 * eased)
+        } else if panel.page == to {
+            Some(direction * 100.0 * (1.0 - eased))
+        } else {
+            None
+        };
+        if let Some(offset) = offset {
             node.display = Display::Flex;
-            panel.progress = 0.0;
+            transform.translation = Val2::percent(0.0, offset);
+            transform.scale = Vec2::ONE;
+        } else {
+            node.display = Display::None;
+            transform.translation = Val2::ZERO;
         }
-        panel.progress = (panel.progress + time.delta_secs() / 0.2).min(1.0);
-        let eased = smoothstep(panel.progress);
-        transform.translation = Val2::px(-140.0 * (1.0 - eased), 0.0);
-        transform.scale = Vec2::ONE;
+    }
+
+    if transition.elapsed >= SettingsPageTransition::SECONDS {
+        transition.reset();
+        for (panel, mut node, mut transform) in &mut panels {
+            node.display = if panel.page == ui.page {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            transform.translation = Val2::ZERO;
+        }
     }
 }

@@ -699,6 +699,7 @@ pub fn auto_hide_apply(
     timing: Res<AutoHideTiming>,
     toggles: Res<ToggleStates>,
     overlay: Res<crate::ui::textbox::TextboxOverlayFade>,
+    initial_fade: Res<crate::ui::textbox::InitialTextboxFade>,
     mut normal_q: Query<
         (&mut TextColor, &AutoHideText, Option<&mut TextShadow>),
         Without<HideButtonText>,
@@ -709,12 +710,12 @@ pub fn auto_hide_apply(
     >,
     mut last: Local<Option<(f32, f32)>>,
 ) {
-    let a = timing.alpha.clamp(0.0, 1.0) * overlay.alpha;
+    let a = timing.alpha.clamp(0.0, 1.0) * overlay.alpha * initial_fade.alpha;
     // When hide is on, all other buttons vanish instantly; otherwise follow auto-hide timer.
     let normal_a = if toggles.hide { 0.0 } else { a };
     // Hide button: when hide is ON, follows idle timer ignoring lock. Otherwise normal.
     let hide_a = if toggles.hide {
-        timing.hide_btn_alpha
+        timing.hide_btn_alpha * initial_fade.alpha
     } else {
         a
     };

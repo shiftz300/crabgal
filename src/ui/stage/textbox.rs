@@ -27,9 +27,7 @@ pub(crate) struct DialogueGlyph {
     reveal_at: usize,
 }
 #[derive(Component)]
-pub(crate) struct DialogueBaseGlyph {
-    scale: f32,
-}
+pub(crate) struct DialogueBaseGlyph;
 #[derive(Component)]
 pub(crate) struct DialogueRubyGlyph;
 #[derive(Component)]
@@ -43,6 +41,9 @@ pub(crate) struct MiniAvatarNode;
 #[derive(Component)]
 pub(crate) struct QuickPreviewLayer;
 
+const RUBY_FONT_SCALE: f32 = 0.44;
+const RUBY_COLLISION_PADDING: f32 = 6.0;
+
 #[derive(Resource)]
 pub(crate) struct TextboxOverlayFade {
     pub(crate) alpha: f32,
@@ -51,6 +52,39 @@ pub(crate) struct TextboxOverlayFade {
 impl Default for TextboxOverlayFade {
     fn default() -> Self {
         Self { alpha: 1.0 }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum InitialTextboxFadePhase {
+    #[default]
+    Waiting,
+    Fading,
+    Complete,
+}
+
+#[derive(Resource)]
+pub(crate) struct InitialTextboxFade {
+    pub(crate) alpha: f32,
+    phase: InitialTextboxFadePhase,
+    elapsed: f32,
+}
+
+impl Default for InitialTextboxFade {
+    fn default() -> Self {
+        Self {
+            alpha: 0.0,
+            phase: InitialTextboxFadePhase::Waiting,
+            elapsed: 0.0,
+        }
+    }
+}
+
+impl InitialTextboxFade {
+    const SECONDS: f32 = 0.16;
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.phase == InitialTextboxFadePhase::Fading
     }
 }
 
@@ -246,7 +280,10 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
                 flex_wrap: FlexWrap::Wrap,
                 align_items: AlignItems::FlexEnd,
                 align_content: AlignContent::FlexStart,
-                row_gap: Val::Px(8.0),
+                // Ruby is overlaid inside each base glyph's line box. This gap
+                // only keeps annotations on adjacent wrapped lines apart; it
+                // does not create a separate ruby line.
+                row_gap: Val::Px(14.0),
                 ..default()
             },
         ));
@@ -545,8 +582,6 @@ pub fn update_textbox(
     mut speaker_text: Query<&mut Text, (With<SpeakerText>, Without<DialogueText>)>,
     dialogue_root: Query<Entity, With<DialogueText>>,
     mut glyphs: Query<(&DialogueGlyph, &mut Visibility)>,
-    mut base_fonts: Query<(&DialogueBaseGlyph, &mut TextFont), Without<DialogueRubyGlyph>>,
-    mut ruby_fonts: Query<&mut TextFont, (With<DialogueRubyGlyph>, Without<DialogueBaseGlyph>)>,
     mut name_bar: Query<&mut Node, NameBarFilter>,
     mut text_box: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), TextBoxFilter>,
 ) {
@@ -632,7 +667,10 @@ pub fn update_textbox(
         _ => 1.0,
     };
     let dialogue_size = config.fonts.dialogue_size * scale;
-    if dialogue_changed && let Ok(root) = dialogue_root.single() {
+    let dialogue_size_changed = cache.dialogue_size != Some(dialogue_size);
+    if (dialogue_changed || dialogue_size_changed)
+        && let Ok(root) = dialogue_root.single()
+    {
         commands.entity(root).despawn_related::<Children>();
         spawn_rich_dialogue(
             &mut commands,
@@ -649,14 +687,6 @@ pub fn update_textbox(
             } else {
                 Visibility::Hidden
             };
-        }
-    }
-    if cache.dialogue_size != Some(dialogue_size) {
-        for (glyph, mut font) in &mut base_fonts {
-            font.font_size = FontSize::Px(dialogue_size * glyph.scale);
-        }
-        for mut font in &mut ruby_fonts {
-            font.font_size = FontSize::Px(dialogue_size * 0.44);
         }
     }
     cache.speaker = speaker;
@@ -771,7 +801,7 @@ fn spawn_plain_cluster(
             glyph_visibility(reveal_at, visible_chars),
         ))
         .with_child((
-            DialogueBaseGlyph { scale: style.scale },
+            DialogueBaseGlyph,
             Text::new(value.to_string()),
             TextFont {
                 font: font.clone().into(),
@@ -798,10 +828,13 @@ fn spawn_ruby_cluster(
     font: &Handle<Font>,
 ) {
     let alpha = style.color.alpha();
+    let cluster_width = ruby_cluster_width(&base, &ruby, font_size, style.scale);
     content
         .spawn((
             DialogueGlyph { reveal_at },
             Node {
+                min_width: Val::Px(cluster_width),
+                flex_shrink: 0.0,
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::FlexEnd,
@@ -812,10 +845,19 @@ fn spawn_ruby_cluster(
         .with_children(|cluster| {
             cluster.spawn((
                 DialogueRubyGlyph,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(50.0),
+                    // Keep ruby in the base line's upper leading instead of
+                    // letting it increase the flex line height.
+                    bottom: Val::Percent(80.0),
+                    ..default()
+                },
+                UiTransform::from_xy(Val::Percent(-50.0), Val::Px(-2.0)),
                 Text::new(ruby),
                 TextFont {
                     font: font.clone().into(),
-                    font_size: FontSize::Px(font_size * 0.44),
+                    font_size: FontSize::Px(font_size * RUBY_FONT_SCALE),
                     weight: FontWeight::MEDIUM,
                     ..default()
                 },
@@ -824,7 +866,7 @@ fn spawn_ruby_cluster(
                 HideContentText::new(alpha * 0.88),
             ));
             cluster.spawn((
-                DialogueBaseGlyph { scale: style.scale },
+                DialogueBaseGlyph,
                 Text::new(base),
                 TextFont {
                     font: font.clone().into(),
@@ -838,6 +880,28 @@ fn spawn_ruby_cluster(
                 HideContentText::new(alpha),
             ));
         });
+}
+
+fn ruby_cluster_width(base: &str, ruby: &str, font_size: f32, base_scale: f32) -> f32 {
+    let base_width = estimated_text_width(base) * font_size * base_scale;
+    let ruby_width = estimated_text_width(ruby) * font_size * RUBY_FONT_SCALE;
+    base_width.max(ruby_width) + RUBY_COLLISION_PADDING
+}
+
+fn estimated_text_width(text: &str) -> f32 {
+    text.chars()
+        .map(|value| {
+            if value.is_ascii_whitespace() {
+                0.34
+            } else if value.is_ascii_punctuation() {
+                0.52
+            } else if value.is_ascii() {
+                0.62
+            } else {
+                1.0
+            }
+        })
+        .sum()
 }
 
 fn glyph_visibility(reveal_at: usize, visible_chars: usize) -> Visibility {
@@ -975,12 +1039,12 @@ fn parse_hex_color(value: &str) -> Option<Color> {
 
 pub fn animate_overlay_fade(
     time: Res<Time>,
-    overlays: Query<&Visibility, TextboxOverlayFilter>,
+    overlays: Query<(&Visibility, &Node), TextboxOverlayFilter>,
     mut fade: ResMut<TextboxOverlayFade>,
 ) {
     let target = if overlays
         .iter()
-        .any(|visibility| *visibility != Visibility::Hidden)
+        .any(|(visibility, node)| overlay_is_displayed(*visibility, node.display))
     {
         0.0
     } else {
@@ -992,6 +1056,33 @@ pub fn animate_overlay_fade(
     }
 }
 
+pub fn animate_initial_fade(
+    time: Res<Time>,
+    state: Res<GameState>,
+    mut fade: ResMut<InitialTextboxFade>,
+) {
+    if fade.phase == InitialTextboxFadePhase::Waiting {
+        if state.ended || state.textbox_hidden || state.dialogue.is_none() {
+            return;
+        }
+        fade.phase = InitialTextboxFadePhase::Fading;
+    }
+    if fade.phase != InitialTextboxFadePhase::Fading {
+        return;
+    }
+    fade.elapsed = (fade.elapsed + time.delta_secs()).min(InitialTextboxFade::SECONDS);
+    let progress = fade.elapsed / InitialTextboxFade::SECONDS;
+    fade.alpha = 1.0 - (1.0 - progress).powi(3);
+    if fade.elapsed >= InitialTextboxFade::SECONDS {
+        fade.alpha = 1.0;
+        fade.phase = InitialTextboxFadePhase::Complete;
+    }
+}
+
+fn overlay_is_displayed(visibility: Visibility, display: Display) -> bool {
+    visibility != Visibility::Hidden && display != Display::None
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the hide pass updates independent text, background, and image component families"
@@ -999,6 +1090,7 @@ pub fn animate_overlay_fade(
 pub fn apply_hide_toggle(
     timing: Res<AutoHideTiming>,
     overlay: Res<TextboxOverlayFade>,
+    initial_fade: Res<InitialTextboxFade>,
     state: Res<GameState>,
     mut text_query: Query<(&mut TextColor, &HideContentText, Option<&mut TextShadow>)>,
     mut background_query: Query<(&mut BackgroundColor, &HideContentBg)>,
@@ -1006,7 +1098,7 @@ pub fn apply_hide_toggle(
     added_text: Query<(), Added<HideContentText>>,
     mut last: Local<Option<(f32, f32)>>,
 ) {
-    let alpha = timing.hide_alpha * overlay.alpha;
+    let alpha = timing.hide_alpha * overlay.alpha * initial_fade.alpha;
     let current = (alpha, state.mini_avatar_progress);
     if added_text.is_empty()
         && last.is_some_and(|last| {
@@ -1050,5 +1142,19 @@ mod rich_text_tests {
     fn rejects_invalid_color_without_panicking() {
         assert!(parse_hex_color("#xyz").is_none());
         assert!(parse_hex_color("#12345").is_none());
+    }
+
+    #[test]
+    fn ignores_overlay_roots_hidden_by_display() {
+        assert!(!overlay_is_displayed(Visibility::Inherited, Display::None));
+        assert!(!overlay_is_displayed(Visibility::Hidden, Display::Flex));
+        assert!(overlay_is_displayed(Visibility::Inherited, Display::Flex));
+    }
+
+    #[test]
+    fn ruby_cluster_reserves_horizontal_collision_space() {
+        let base_only = estimated_text_width("物") * 60.0;
+        let cluster = ruby_cluster_width("物", "ものがたり", 60.0, 1.0);
+        assert!(cluster > base_only);
     }
 }
