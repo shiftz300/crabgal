@@ -26,7 +26,7 @@ crabgal/
 ├── src/                  Final engine, Bevy runtime, UI and rendering
 ├── crates/
 │   ├── core/             crabgal-core: state machine and domain model
-│   └── script/           crabgal-script: language adapters and project loading
+│   └── loader/           crabgal-loader: asset/source/script adapters
 └── dev/docs/             Architecture docs + TODO tracking
 ```
 
@@ -45,6 +45,10 @@ crabgal/
 - **Local asset pipeline** — parser-generated manifests and bounded Bevy `AssetServer` prefetch
 - **Local vocal playback** — WebGAL vocal shorthand and per-line volume
 - **Auto / Skip modes** — A for auto-advance, Ctrl for skip
+- **Rich dialogue** — styled spans, ruby/furigana, concatenation and player input
+- **Unified input** — keyboard, mouse, touch and gamepad actions behind one runtime API
+- **Native packaging** — standalone engine binary, `.hxz` projects and macOS app bundles
+- **Layered content** — ordered development filesystem and Hexz sources behind one adapter API
 
 ## Tech Stack
 
@@ -62,6 +66,22 @@ my-game/
 └── config.yaml     title, font and layout configuration
 ```
 
+Multiple content roots can be layered in `config.yaml`; later sources override
+earlier assets and scene names:
+
+```yaml
+adapter:
+  asset:
+    - path: "."
+      format: fs
+    - path: "content/shared"
+      format: fs
+    - path: "packs/route.hxz"
+      format: hexz
+  script: webgal
+  store: crabgal
+```
+
 ## Implementation Phases
 
 See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
@@ -76,7 +96,11 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | 3 — Stateful UI | Done; awaiting acceptance | Backlog/read history/rollback, save slots and settings |
 | 4 — Audio | Done; awaiting acceptance | BGM fades, vocal/replay, effects and volume buses |
 | 5 — Presentation | Done; awaiting acceptance | Timelines, filters, blend modes, transitions and particles |
-| 6+ — Production | Planned | Richer text, tooling and packaging |
+| 6 — Text | Done; awaiting acceptance | Rich spans, ruby/furigana, concatenation and player input |
+| 7 — Engineering | Core done; awaiting acceptance | Unified input, gallery unlocks, Hexz, app bundle and CI |
+
+Phase 7 keeps video, Live2D, Spine and Steam as explicit optional adapters. They are not linked into
+the default engine until a backend and its distribution/licensing policy are selected.
 
 ## Credits
 

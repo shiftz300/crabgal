@@ -325,10 +325,12 @@ pub fn handle_button_click(
 
 pub fn load_quick_save_preview(
     project_root: Res<ProjectRoot>,
+    store: Res<crate::runtime::resources::StoreCodec>,
     mut images: ResMut<Assets<Image>>,
     mut preview: ResMut<QuickSavePreview>,
 ) {
-    preview.state = crate::storage::save::load_game(QUICK_SAVE_SLOT, &project_root).ok();
+    preview.state =
+        crate::storage::save::load_game(store.0.as_ref(), QUICK_SAVE_SLOT, &project_root).ok();
     let path = crate::storage::save::preview_path(&project_root, QUICK_SAVE_SLOT);
     preview.image = std::fs::read(&path)
         .map_err(anyhow::Error::from)

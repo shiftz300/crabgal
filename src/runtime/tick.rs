@@ -1,14 +1,13 @@
-use std::path::Path;
-
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crabgal_core::State;
 use crabgal_core::step;
-use crabgal_script::{DiagnosticLevel, load_scenes};
+use crabgal_loader::DiagnosticLevel;
 
+use crate::runtime::input::InputActions;
 use crate::runtime::resources::{
-    AssetLoadingGate, GameState, LocalAssetManifest, LocalSceneAssets, ProjectRoot,
-    ScriptWatcherResource,
+    AssetLoadingGate, ContentProjectResource, GameState, LocalAssetManifest, LocalSceneAssets,
+    ProjectRoot, ScriptLanguages, ScriptWatcherResource,
 };
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, SkipMode, ToggleStates};
@@ -27,8 +26,9 @@ pub struct TickContext<'w, 's> {
     state: ResMut<'w, GameState>,
     settings: ResMut<'w, RuntimeSettings>,
     project_root: Res<'w, ProjectRoot>,
-    keys: Res<'w, ButtonInput<KeyCode>>,
-    mouse: Res<'w, ButtonInput<MouseButton>>,
+    content: Res<'w, ContentProjectResource>,
+    languages: Res<'w, ScriptLanguages>,
+    actions: Res<'w, InputActions>,
     watcher: Option<Res<'w, ScriptWatcherResource>>,
     asset_manifest: ResMut<'w, LocalAssetManifest>,
     toggles: ResMut<'w, ToggleStates>,
@@ -44,7 +44,8 @@ pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
     let mut state_changed = reload_scripts_if_changed(
         &context.watcher,
-        &context.project_root,
+        &context.content,
+        &context.languages,
         context.state.bypass_change_detection(),
         &mut context.asset_manifest,
     );
@@ -63,7 +64,7 @@ pub fn tick(mut context: TickContext) {
         return;
     }
     if update_toggle_shortcuts(
-        &context.keys,
+        &context.actions,
         &mut context.toggles,
         &mut context.settings,
         &mut context.auto_timer,
@@ -73,12 +74,8 @@ pub fn tick(mut context: TickContext) {
         log::error!("failed to persist skip mode: {error:#}");
     }
     let presentation_was_blocked = context.state.presentation_blocked();
-    let presentation_advance = advance_requested(
-        &context.keys,
-        &context.mouse,
-        &context.buttons,
-        context.toggles.hide,
-    );
+    let presentation_advance =
+        advance_requested(&context.actions, &context.buttons, context.toggles.hide);
     state_changed |= update_transitions(
         context.state.bypass_change_detection(),
         delta_seconds as f32,
@@ -121,12 +118,7 @@ pub fn tick(mut context: TickContext) {
         &mut context.auto_timer,
     );
 
-    if advance_requested(
-        &context.keys,
-        &context.mouse,
-        &context.buttons,
-        context.toggles.hide,
-    ) {
+    if advance_requested(&context.actions, &context.buttons, context.toggles.hide) {
         state_changed |= advance_once(context.state.bypass_change_detection());
         *context.auto_timer = 0.0;
     }
@@ -148,24 +140,24 @@ fn update_notend(state: &mut State) -> bool {
 }
 
 fn update_toggle_shortcuts(
-    keys: &ButtonInput<KeyCode>,
+    actions: &InputActions,
     toggles: &mut ToggleStates,
     settings: &mut RuntimeSettings,
     auto_timer: &mut f64,
 ) -> bool {
     let mut settings_changed = false;
-    if keys.just_pressed(KeyCode::ControlLeft) || keys.just_pressed(KeyCode::ControlRight) {
+    if actions.skip_pressed {
         toggles.skip = true;
     }
-    if keys.just_released(KeyCode::ControlLeft) || keys.just_released(KeyCode::ControlRight) {
+    if actions.skip_released {
         toggles.skip = false;
     }
-    if keys.just_pressed(KeyCode::KeyA) {
+    if actions.toggle_auto {
         toggles.auto = !toggles.auto;
         *auto_timer = 0.0;
     }
-    if keys.just_pressed(KeyCode::KeyS) {
-        if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+    if actions.toggle_skip || actions.toggle_skip_mode {
+        if actions.toggle_skip_mode {
             toggles.skip_mode = match toggles.skip_mode {
                 SkipMode::Read => SkipMode::All,
                 SkipMode::All => SkipMode::Read,
@@ -183,7 +175,8 @@ fn update_toggle_shortcuts(
 
 fn reload_scripts_if_changed(
     watcher: &Option<Res<ScriptWatcherResource>>,
-    project_root: &Path,
+    content: &crabgal_loader::ContentProject,
+    languages: &crabgal_loader::ScriptLanguageRegistry,
     state: &mut State,
     asset_manifest: &mut LocalAssetManifest,
 ) -> bool {
@@ -199,9 +192,8 @@ fn reload_scripts_if_changed(
         return false;
     }
 
-    let script_dir = project_root.join("scripts");
-    let Ok(scenes) = load_scenes(&script_dir) else {
-        log::error!("failed to reload scripts from {}", script_dir.display());
+    let Ok(scenes) = crabgal_loader::load_scenes_with(content, languages) else {
+        log::error!("failed to reload scripts from configured content sources");
         return false;
     };
     asset_manifest.clear();
@@ -335,18 +327,13 @@ fn update_auto_mode(
 }
 
 fn advance_requested(
-    keys: &ButtonInput<KeyCode>,
-    mouse: &ButtonInput<MouseButton>,
+    actions: &InputActions,
     buttons: &Query<(&Interaction, Option<&ButtonAction>), With<Button>>,
     content_hidden: bool,
 ) -> bool {
-    if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
-        return true;
-    }
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !actions.advance {
         return false;
     }
-
     !buttons.iter().any(|(interaction, action)| {
         matches!(interaction, Interaction::Pressed)
             && (!content_hidden || matches!(action, Some(ButtonAction::Hide)))
@@ -570,6 +557,7 @@ mod tests {
         state.dialogue = Some(Dialogue {
             speaker: String::new(),
             text: "abcdefghij".into(),
+            markup: "abcdefghij".into(),
             visible_chars: 0,
             vocal: None,
             volume: 1.0,

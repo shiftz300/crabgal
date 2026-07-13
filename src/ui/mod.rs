@@ -79,6 +79,7 @@ fn add_startup_systems(app: &mut App) {
             loading::setup_loading,
             performance::setup_performance_overlay,
             overlays::presentation::setup,
+            overlays::user_input::setup,
         )
             .chain(),
     );
@@ -111,6 +112,8 @@ fn add_stage_systems(app: &mut App) {
             control_bar::update_lock_icon,
             loading::update_loading,
             overlays::presentation::sync,
+            overlays::user_input::sync,
+            overlays::user_input::handle,
             text_style::apply_text_shadows,
             (
                 choice::sync_choice,

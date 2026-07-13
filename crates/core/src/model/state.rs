@@ -46,6 +46,9 @@ pub struct State {
     pub mini_avatar: Option<String>,
     /// Mini avatar enter/exit transition progress (0→1).
     pub mini_avatar_progress: f32,
+    pub textbox_hidden: bool,
+    pub textbox_auto_hidden: bool,
+    pub user_input: Option<UserInputState>,
 
     // ── Presentation state ──
     pub wait_remaining: f32,
@@ -83,6 +86,8 @@ pub struct State {
     pub backlog: Vec<BacklogEntry>,
     /// Stable script positions already presented to the player.
     pub read_dialogues: HashSet<DialogueKey>,
+    pub unlocked_cg: HashMap<String, String>,
+    pub unlocked_bgm: HashMap<String, String>,
 }
 
 pub const DEFAULT_BACKLOG_CAPACITY: usize = 200;
@@ -150,6 +155,8 @@ pub struct RollbackSnapshot {
     pub sprites: HashMap<String, Sprite>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
+    pub textbox_hidden: bool,
+    pub textbox_auto_hidden: bool,
     pub film_mode: bool,
     pub particle_effect: Option<String>,
     pub transition_rules: HashMap<String, TransitionRule>,
@@ -235,6 +242,14 @@ pub struct IntroState {
     pub blocking: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserInputState {
+    pub variable: String,
+    pub title: String,
+    pub button: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TransformAnimation {
     pub from: SpriteTransform,
@@ -266,6 +281,8 @@ pub struct Dialogue {
     pub speaker: String,
     /// Full text content.
     pub text: String,
+    /// Interpolated source preserving WebGAL style/ruby markup for the UI backend.
+    pub markup: String,
     /// Number of visible characters (typewriter effect).
     pub visible_chars: usize,
     pub vocal: Option<String>,
@@ -301,6 +318,8 @@ impl State {
                 sprites: self.sprites.clone(),
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
+                textbox_hidden: self.textbox_hidden,
+                textbox_auto_hidden: self.textbox_auto_hidden,
                 film_mode: self.film_mode,
                 particle_effect: self.particle_effect.clone(),
                 transition_rules: self.transition_rules.clone(),
@@ -353,6 +372,9 @@ impl State {
         self.dialogue = Some(snapshot.dialogue);
         self.previous_dialogue = None;
         self.mini_avatar = snapshot.mini_avatar;
+        self.textbox_hidden = snapshot.textbox_hidden;
+        self.textbox_auto_hidden = snapshot.textbox_auto_hidden;
+        self.user_input = None;
         self.mini_avatar_progress = 1.0;
         self.bgm = snapshot.bgm;
         self.bgm.revision = self.bgm.revision.wrapping_add(1);
@@ -414,6 +436,7 @@ mod tests {
         Dialogue {
             speaker: "MainCore".into(),
             text: text.into(),
+            markup: text.into(),
             visible_chars: 0,
             vocal: None,
             volume: 1.0,

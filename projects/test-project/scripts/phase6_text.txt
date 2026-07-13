@@ -1,0 +1,21 @@
+; Phase 6 rich text and input acceptance.
+
+小夜:普通文字、[樱花色](color=#ffb7c5,bold)、[放大文字](size=1.25)和[斜体](italic)。
+小夜:日文注音：[蟹](かに)、[桜](さくら)、[物語](ものがたり)。注音应位于正文上方。
+小夜:第一行<br>第二行包含[学校](がっこう)，换行后仍应保持基线整齐。
+
+小夜:这句显示完会自动执行 shake。 -notend
+setAnimation:shake -target=hero -duration=350
+小夜:前半句 -next
+小夜:与后半句合并。 -concat
+
+setTextbox:hide
+wait:700
+setTextbox:show
+小夜:显式隐藏持续到 show；接下来测试单句自动隐藏。
+:
+wait:500
+小夜:新对话出现时，冒号简写隐藏应自动恢复。
+
+getUserInput:playerName -title="请输入你的名字" -buttonText="确认"
+小夜:输入成功，你的名字是 {playerName}。

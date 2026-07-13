@@ -23,6 +23,16 @@ pub(crate) struct SpeakerText;
 #[derive(Component)]
 pub(crate) struct DialogueText;
 #[derive(Component)]
+pub(crate) struct DialogueGlyph {
+    reveal_at: usize,
+}
+#[derive(Component)]
+pub(crate) struct DialogueBaseGlyph {
+    scale: f32,
+}
+#[derive(Component)]
+pub(crate) struct DialogueRubyGlyph;
+#[derive(Component)]
 pub(crate) struct TextBoxRoot;
 #[derive(Component)]
 pub(crate) struct NameBarRoot;
@@ -59,17 +69,12 @@ type TextBoxFilter = (
     Without<NameBarRoot>,
     Without<ContentRoot>,
 );
-type DialogueTextQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static mut Text, &'static mut TextFont),
-    (With<DialogueText>, Without<SpeakerText>),
->;
 type TextboxOverlayFilter = Or<(
     With<crate::ui::dialog::DialogRoot>,
     With<crate::ui::backlog::BacklogRoot>,
     With<crate::ui::save_load::SaveLoadRoot>,
     With<crate::ui::settings_panel::SettingsRoot>,
+    With<crate::ui::overlays::user_input::UserInputRoot>,
 )>;
 
 #[derive(SystemParam)]
@@ -79,13 +84,15 @@ pub(crate) struct TextboxUpdateResources<'w> {
     settings: Res<'w, RuntimeSettings>,
     auto_hide: Res<'w, AutoHideTiming>,
     overlay: Res<'w, TextboxOverlayFade>,
+    fonts: Res<'w, UiFonts>,
 }
 
 #[derive(Default)]
 pub(crate) struct TextboxRenderCache {
-    ended: Option<bool>,
+    content_hidden: Option<bool>,
     speaker: String,
     dialogue: String,
+    visible_chars: usize,
     left: Option<f32>,
     textbox_alpha: Option<f32>,
     dialogue_size: Option<f32>,
@@ -233,16 +240,13 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
         text_box.spawn((
             Name::new("dialogue"),
             DialogueText,
-            Text::new(""),
-            TextFont {
-                font: assets.text.clone().into(),
-                font_size: FontSize::from(config.fonts.dialogue_size),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-            HideContentText::new(1.0),
             Node {
                 width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::FlexEnd,
+                align_content: AlignContent::FlexStart,
+                row_gap: Val::Px(8.0),
                 ..default()
             },
         ));
@@ -529,34 +533,44 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
         });
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "independent ECS queries keep overlapping UI component access explicit"
+)]
 pub fn update_textbox(
     resources: TextboxUpdateResources,
     mut cache: Local<TextboxRenderCache>,
+    mut commands: Commands,
     mut content_root: Query<&mut Node, ContentRootFilter>,
     mut speaker_text: Query<&mut Text, (With<SpeakerText>, Without<DialogueText>)>,
-    mut dialogue_text: DialogueTextQuery,
+    dialogue_root: Query<Entity, With<DialogueText>>,
+    mut glyphs: Query<(&DialogueGlyph, &mut Visibility)>,
+    mut base_fonts: Query<(&DialogueBaseGlyph, &mut TextFont), Without<DialogueRubyGlyph>>,
+    mut ruby_fonts: Query<&mut TextFont, (With<DialogueRubyGlyph>, Without<DialogueBaseGlyph>)>,
     mut name_bar: Query<&mut Node, NameBarFilter>,
     mut text_box: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), TextBoxFilter>,
 ) {
     let state = &resources.state;
     let config = &resources.config;
-    if cache.ended != Some(state.ended)
+    let content_hidden = state.ended || state.textbox_hidden;
+    if cache.content_hidden != Some(content_hidden)
         && let Ok(mut root) = content_root.single_mut()
     {
-        root.display = if state.ended {
+        root.display = if content_hidden {
             Display::None
         } else {
             Display::Flex
         };
-        cache.ended = Some(state.ended);
+        cache.content_hidden = Some(content_hidden);
     }
 
-    let (speaker, dialogue) = state.dialogue.as_ref().map_or_else(
-        || (String::new(), String::new()),
+    let (speaker, markup, visible_chars) = state.dialogue.as_ref().map_or_else(
+        || (String::new(), String::new(), 0),
         |dialogue| {
             (
                 dialogue.speaker.clone(),
-                dialogue.text.chars().take(dialogue.visible_chars).collect(),
+                dialogue.markup.clone(),
+                dialogue.visible_chars,
             )
         },
     );
@@ -573,7 +587,8 @@ pub fn update_textbox(
     };
     let width = 100.0 - left;
     let speaker_changed = cache.speaker != speaker;
-    let dialogue_changed = cache.dialogue != dialogue;
+    let dialogue_changed = cache.dialogue != markup;
+    let visibility_changed = cache.visible_chars != visible_chars;
     let layout_changed = cache.left != Some(left);
     if layout_changed || speaker_changed {
         for mut node in &mut name_bar {
@@ -617,19 +632,345 @@ pub fn update_textbox(
         _ => 1.0,
     };
     let dialogue_size = config.fonts.dialogue_size * scale;
-    if let Ok((mut text, mut font)) = dialogue_text.single_mut() {
-        if dialogue_changed {
-            text.0.clone_from(&dialogue);
+    if dialogue_changed && let Ok(root) = dialogue_root.single() {
+        commands.entity(root).despawn_related::<Children>();
+        spawn_rich_dialogue(
+            &mut commands,
+            root,
+            &markup,
+            visible_chars,
+            dialogue_size,
+            &resources.fonts.text,
+        );
+    } else if visibility_changed {
+        for (glyph, mut visibility) in &mut glyphs {
+            *visibility = if glyph.reveal_at <= visible_chars {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
-        if cache.dialogue_size != Some(dialogue_size) {
-            font.font_size = FontSize::from(dialogue_size);
+    }
+    if cache.dialogue_size != Some(dialogue_size) {
+        for (glyph, mut font) in &mut base_fonts {
+            font.font_size = FontSize::Px(dialogue_size * glyph.scale);
+        }
+        for mut font in &mut ruby_fonts {
+            font.font_size = FontSize::Px(dialogue_size * 0.44);
         }
     }
     cache.speaker = speaker;
-    cache.dialogue = dialogue;
+    cache.dialogue = markup;
+    cache.visible_chars = visible_chars;
     cache.left = Some(left);
     cache.textbox_alpha = Some(textbox_alpha);
     cache.dialogue_size = Some(dialogue_size);
+}
+
+#[derive(Clone)]
+struct RichStyle {
+    color: Color,
+    scale: f32,
+    weight: FontWeight,
+    font_style: FontStyle,
+}
+
+impl Default for RichStyle {
+    fn default() -> Self {
+        Self {
+            color: Color::WHITE,
+            scale: 1.0,
+            weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+        }
+    }
+}
+
+struct RichRun {
+    base: String,
+    ruby: Option<String>,
+    style: RichStyle,
+}
+
+fn spawn_rich_dialogue(
+    commands: &mut Commands,
+    root: Entity,
+    markup: &str,
+    visible_chars: usize,
+    font_size: f32,
+    font: &Handle<Font>,
+) {
+    let runs = parse_rich_markup(markup);
+    commands.entity(root).with_children(|content| {
+        let mut character_index = 0;
+        for run in runs {
+            if run.base == "\n" {
+                character_index += 1;
+                content.spawn((
+                    DialogueGlyph {
+                        reveal_at: character_index,
+                    },
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(0.0),
+                        ..default()
+                    },
+                    glyph_visibility(character_index, visible_chars),
+                ));
+                continue;
+            }
+            if let Some(ruby) = run.ruby {
+                character_index += run.base.chars().count();
+                spawn_ruby_cluster(
+                    content,
+                    run.base,
+                    ruby,
+                    run.style,
+                    character_index,
+                    visible_chars,
+                    font_size,
+                    font,
+                );
+            } else {
+                for value in run.base.chars() {
+                    character_index += 1;
+                    spawn_plain_cluster(
+                        content,
+                        value,
+                        run.style.clone(),
+                        character_index,
+                        visible_chars,
+                        font_size,
+                        font,
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_plain_cluster(
+    content: &mut ChildSpawnerCommands,
+    value: char,
+    style: RichStyle,
+    reveal_at: usize,
+    visible_chars: usize,
+    font_size: f32,
+    font: &Handle<Font>,
+) {
+    let alpha = style.color.alpha();
+    content
+        .spawn((
+            DialogueGlyph { reveal_at },
+            Node {
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
+                ..default()
+            },
+            glyph_visibility(reveal_at, visible_chars),
+        ))
+        .with_child((
+            DialogueBaseGlyph { scale: style.scale },
+            Text::new(value.to_string()),
+            TextFont {
+                font: font.clone().into(),
+                font_size: FontSize::Px(font_size * style.scale),
+                weight: style.weight,
+                style: style.font_style,
+                ..default()
+            },
+            TextColor(style.color),
+            TextLayout::no_wrap(),
+            HideContentText::new(alpha),
+        ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_ruby_cluster(
+    content: &mut ChildSpawnerCommands,
+    base: String,
+    ruby: String,
+    style: RichStyle,
+    reveal_at: usize,
+    visible_chars: usize,
+    font_size: f32,
+    font: &Handle<Font>,
+) {
+    let alpha = style.color.alpha();
+    content
+        .spawn((
+            DialogueGlyph { reveal_at },
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
+                ..default()
+            },
+            glyph_visibility(reveal_at, visible_chars),
+        ))
+        .with_children(|cluster| {
+            cluster.spawn((
+                DialogueRubyGlyph,
+                Text::new(ruby),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: FontSize::Px(font_size * 0.44),
+                    weight: FontWeight::MEDIUM,
+                    ..default()
+                },
+                TextColor(style.color.with_alpha(alpha * 0.88)),
+                TextLayout::no_wrap(),
+                HideContentText::new(alpha * 0.88),
+            ));
+            cluster.spawn((
+                DialogueBaseGlyph { scale: style.scale },
+                Text::new(base),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: FontSize::Px(font_size * style.scale),
+                    weight: style.weight,
+                    style: style.font_style,
+                    ..default()
+                },
+                TextColor(style.color),
+                TextLayout::no_wrap(),
+                HideContentText::new(alpha),
+            ));
+        });
+}
+
+fn glyph_visibility(reveal_at: usize, visible_chars: usize) -> Visibility {
+    if reveal_at <= visible_chars {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
+}
+
+fn parse_rich_markup(source: &str) -> Vec<RichRun> {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut runs = Vec::new();
+    let mut plain = String::new();
+    let mut cursor = 0;
+    while cursor < chars.len() {
+        if chars[cursor] == '\n' {
+            push_plain(&mut runs, &mut plain);
+            runs.push(RichRun {
+                base: "\n".into(),
+                ruby: None,
+                style: RichStyle::default(),
+            });
+            cursor += 1;
+            continue;
+        }
+        if chars[cursor] != '[' {
+            plain.push(chars[cursor]);
+            cursor += 1;
+            continue;
+        }
+        let Some(label_offset) = chars[cursor + 1..].iter().position(|value| *value == ']') else {
+            plain.push(chars[cursor]);
+            cursor += 1;
+            continue;
+        };
+        let label_end = cursor + 1 + label_offset;
+        if chars.get(label_end + 1) != Some(&'(') {
+            plain.push(chars[cursor]);
+            cursor += 1;
+            continue;
+        }
+        let Some(argument_offset) = chars[label_end + 2..]
+            .iter()
+            .position(|value| *value == ')')
+        else {
+            plain.push(chars[cursor]);
+            cursor += 1;
+            continue;
+        };
+        push_plain(&mut runs, &mut plain);
+        let argument_end = label_end + 2 + argument_offset;
+        let base = chars[cursor + 1..label_end].iter().collect::<String>();
+        let argument = chars[label_end + 2..argument_end]
+            .iter()
+            .collect::<String>();
+        let styled = argument.contains('=')
+            || matches!(argument.as_str(), "bold" | "italic" | "bold,italic");
+        runs.push(RichRun {
+            base,
+            ruby: (!styled && !argument.is_empty()).then_some(argument.clone()),
+            style: if styled {
+                parse_rich_style(&argument)
+            } else {
+                RichStyle::default()
+            },
+        });
+        cursor = argument_end + 1;
+    }
+    push_plain(&mut runs, &mut plain);
+    runs
+}
+
+fn push_plain(runs: &mut Vec<RichRun>, plain: &mut String) {
+    if plain.is_empty() {
+        return;
+    }
+    runs.push(RichRun {
+        base: std::mem::take(plain),
+        ruby: None,
+        style: RichStyle::default(),
+    });
+}
+
+fn parse_rich_style(source: &str) -> RichStyle {
+    let mut style = RichStyle::default();
+    for part in source.split([',', ';']) {
+        let part = part.trim();
+        let (key, value) = part.split_once('=').unwrap_or((part, "true"));
+        match key.trim() {
+            "color" => {
+                if let Some(color) = parse_hex_color(value.trim()) {
+                    style.color = color;
+                }
+            }
+            "size" | "fontSize" => {
+                let value = value.trim().trim_end_matches("px");
+                if let Ok(value) = value.parse::<f32>() {
+                    style.scale = if value > 4.0 { value / 60.0 } else { value };
+                    style.scale = style.scale.clamp(0.5, 2.0);
+                }
+            }
+            "weight" if value.eq_ignore_ascii_case("bold") => style.weight = FontWeight::BOLD,
+            "bold" => style.weight = FontWeight::BOLD,
+            "italic" | "style"
+                if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("italic") =>
+            {
+                style.font_style = FontStyle::Italic;
+            }
+            "opacity" | "alpha" => {
+                if let Ok(alpha) = value.parse::<f32>() {
+                    style.color = style.color.with_alpha(alpha.clamp(0.0, 1.0));
+                }
+            }
+            _ => {}
+        }
+    }
+    style
+}
+
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    let parse = |range| u8::from_str_radix(&value[range], 16).ok();
+    match value.len() {
+        6 => Some(Color::srgb_u8(parse(0..2)?, parse(2..4)?, parse(4..6)?)),
+        8 => Some(Color::srgba_u8(
+            parse(0..2)?,
+            parse(2..4)?,
+            parse(4..6)?,
+            parse(6..8)?,
+        )),
+        _ => None,
+    }
 }
 
 pub fn animate_overlay_fade(
@@ -651,6 +992,10 @@ pub fn animate_overlay_fade(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the hide pass updates independent text, background, and image component families"
+)]
 pub fn apply_hide_toggle(
     timing: Res<AutoHideTiming>,
     overlay: Res<TextboxOverlayFade>,
@@ -658,13 +1003,16 @@ pub fn apply_hide_toggle(
     mut text_query: Query<(&mut TextColor, &HideContentText, Option<&mut TextShadow>)>,
     mut background_query: Query<(&mut BackgroundColor, &HideContentBg)>,
     mut avatars: Query<&mut ImageNode, With<MiniAvatarNode>>,
+    added_text: Query<(), Added<HideContentText>>,
     mut last: Local<Option<(f32, f32)>>,
 ) {
     let alpha = timing.hide_alpha * overlay.alpha;
     let current = (alpha, state.mini_avatar_progress);
-    if last.is_some_and(|last| {
-        (last.0 - current.0).abs() < 0.001 && (last.1 - current.1).abs() < 0.001
-    }) {
+    if added_text.is_empty()
+        && last.is_some_and(|last| {
+            (last.0 - current.0).abs() < 0.001 && (last.1 - current.1).abs() < 0.001
+        })
+    {
         return;
     }
     *last = Some(current);
@@ -680,5 +1028,27 @@ pub fn apply_hide_toggle(
     }
     for mut avatar in &mut avatars {
         avatar.color = avatar.color.with_alpha(state.mini_avatar_progress * alpha);
+    }
+}
+
+#[cfg(test)]
+mod rich_text_tests {
+    use super::*;
+
+    #[test]
+    fn separates_ruby_and_style_without_polluting_plain_text() {
+        let runs = parse_rich_markup("読む[蟹](かに)と[桜](color=#ffb7c5,bold)");
+        assert_eq!(runs.len(), 4);
+        assert_eq!(runs[1].base, "蟹");
+        assert_eq!(runs[1].ruby.as_deref(), Some("かに"));
+        assert_eq!(runs[3].base, "桜");
+        assert!(runs[3].ruby.is_none());
+        assert_eq!(runs[3].style.weight, FontWeight::BOLD);
+    }
+
+    #[test]
+    fn rejects_invalid_color_without_panicking() {
+        assert!(parse_hex_color("#xyz").is_none());
+        assert!(parse_hex_color("#12345").is_none());
     }
 }

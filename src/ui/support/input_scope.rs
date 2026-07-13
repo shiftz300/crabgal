@@ -9,6 +9,7 @@ use crate::ui::settings_panel::SettingsUi;
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum UiInputScope {
     Loading,
+    UserInput,
     Dialog,
     Menu,
     Backlog,
@@ -28,6 +29,8 @@ pub(crate) fn sync(
 ) {
     *scope = if loading.blocked {
         UiInputScope::Loading
+    } else if state.user_input.is_some() {
+        UiInputScope::UserInput
     } else if dialog.is_some() {
         UiInputScope::Dialog
     } else if settings.open || save_load.mode.is_some() {

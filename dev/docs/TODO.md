@@ -9,7 +9,7 @@
 
 1. **Phase 3 视觉验收** — Backlog、SAVE / LOAD、CONFIG、TITLE 的最终人工验收
 2. **Phase 5 演出视觉验收** — 按验收清单确认动画、filter、blend 与粒子
-3. **Phase 6 文本增强** — 富文本 span、ruby 与注音布局
+3. **Phase 6/7 验收** — 富文本、输入、鉴赏、Hexz、bundle 与跨平台 CI
 
 ## Phase 0 — Bevy 引擎基础 (DONE)
 
@@ -66,11 +66,11 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] 背景和立绘改为增量同步，避免每帧全量重建实体
 - [x] 项目加载顺序稳定，并拒绝重复场景名
 - [x] ScriptWatcher 持有 watcher 生命周期，脚本修改后真实重载
-- [x] 三 crate 按稳定职责重组：core `model/runtime`、script `adapter/workspace`、Bevy `runtime/scene/storage/ui`
-- [x] 根 package 直接产出 `crabgal` 引擎二进制，内部库目录收敛为 `crates/core` 与 `crates/script`
+- [x] 三 crate 按稳定职责重组：core `model/runtime`、loader `adapter/loader`、Bevy `runtime/scene/storage/ui`
+- [x] 根 package 直接产出 `crabgal` 引擎二进制，内部库目录收敛为 `crates/core` 与 `crates/loader`
 - [x] 验收项目收敛为唯一、自包含的 `projects/test-project`，移除旧空壳、无效脚本、生成物和未使用配置/依赖
-- [x] WebGAL 语法、语言类型与解析实现集中到 `crates/script/src/adapter/`
-- [x] 合并短生命周期模块：core transition math、script watcher、Bevy plugin/runtime 注册
+- [x] WebGAL 语法、语言类型与解析实现集中到 `crates/loader/src/adapter/`
+- [x] 合并短生命周期模块：core transition math、loader watcher、Bevy plugin/runtime 注册
 - [x] 文本框系统按职责拆分，Dialog 模糊、专用样式与键盘操作完成实际交互验证
 - [x] 存档 API 返回 `Result`，使用临时文件 + rename 原子替换
 - [x] Rust 2024、格式检查、严格 Clippy 与 51 个测试全部通过
@@ -135,32 +135,44 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 
 验收入口与逐步预期见 [`15-phase5-acceptance.md`](acceptance/15-phase5-acceptance.md)。
 
-## Phase 6 — 文本增强
+## Phase 6 — 文本增强 (DONE — 待用户验收)
 
-- [ ] -notend / -concat — 对话中插演出
-- [ ] 文本拓展语法 (style/ruby)
-- [ ] 注音 (furigana)
-- [ ] getUserInput — 玩家输入
+- [x] -notend / -concat — 对话中插阻塞演出并保持 speaker/markup
+- [x] 文本拓展语法 — glyph cluster style、颜色、字号、粗体与斜体
+- [x] ruby / furigana — 正文上方独立排版、同步打字与自动换行
+- [x] getUserInput — 设计视口模态输入、Unicode/删除/非空确认与变量回写
 
-## Phase 7 — 工程化
+验收步骤见 [`16-phase6-acceptance.md`](acceptance/16-phase6-acceptance.md)。
 
-- [ ] setTextbox — 隐藏/显示文本框
+## Phase 7 — 工程化核心 (DONE — 待用户验收)
+
+- [x] setTextbox — 持久 hide/show 与 `:` 单句自动恢复
 - [x] `;` 全行注释与 `//` 行内注释
-- [ ] `comment:` 显式命令（当前会误解析成对话）
+- [x] `comment:` 显式 no-op，不再误解析成对话
 - [ ] playVideo
-- [ ] GIF / Live2D / Spine
-- [ ] unlockCg / unlockBgm — 鉴赏解锁
-- [ ] Extra CG/BGM / Flowchart
+- [ ] GIF / Spine
+- [x] unlockCg / unlockBgm — 解析、资源扫描与独立原子持久化
+- [x] Title EXTRA — 持久 CG/BGM 解锁计数入口（Flowchart 仍待内容 UI）
 - [x] 本地资源清单、当前场景/子场景前看预取、标题页入口资源预热与加载状态
   （Bevy `AssetServer`）
+- [x] `crabgal-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
+- [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
+- [ ] Live2D — 用户决定暂缓，不纳入当前默认二进制
 - [ ] MainCore 固定 UI 的完整本地化（主题/运行时换肤明确不做）
 - [ ] 编辑器预览同步 / Steam 集成
-- [ ] 统一 InputAction 层（鼠标、触控、键盘、手柄）
+- [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
 - [ ] SafeArea、横竖屏和响应式 UI 断点
 - [ ] 桌面、Android、iOS、Web 编译矩阵与设备验收
-- [ ] .hxz 打包（当前明确延期；不纳入 Phase 1 本地加载链）
-- [ ] macOS .app bundle
-- [ ] CI/CD
+- [x] `hexz_k` 标准加密 `.hxz`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
+- [x] macOS .app bundle 脚本
+- [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
+- [ ] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
+  `CRABGAL_HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
+  artifact 不泄露密钥
+
+Phase 7 已完成不依赖第三方专有 SDK 的工程主线。视频、Live2D、Spine、Steam 和完整
+Extra/Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖冒充完成。逐步验收见
+[`17-phase7-acceptance.md`](acceptance/17-phase7-acceptance.md)。
 
 ---
 
@@ -173,8 +185,9 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 | [03-render-pipeline.md](architecture/03-render-pipeline.md) | 渲染管线 |
 | [04-rollback-and-save.md](architecture/04-rollback-and-save.md) | 存档与回溯 |
 | [05-bevy-architecture.md](architecture/05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
-| [06-hexz-packaging.md](architecture/06-hexz-packaging.md) | 资源打包设计（延期） |
-| `crates/script/src/language.rs` | 可注册语言适配器边界 |
+| [06-hexz-packaging.md](architecture/06-hexz-packaging.md) | Hexz 标准打包、校验与挂载 |
+| [07-content-loader.md](architecture/07-content-loader.md) | 内容来源、adapter、多根覆盖与 Hexz 加载契约 |
+| `crates/loader/src/language.rs` | 可注册语言适配器边界 |
 | [07-references.md](reference/07-references.md) | 业界引擎参考 |
 | [09-webgal-script-reference.md](reference/09-webgal-script-reference.md) | WebGAL 脚本参考 |
 | [10-webgal-k-gap-analysis.md](reference/10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 代码对照与缺口基线 |
@@ -183,3 +196,5 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 | [13-phase3-acceptance.md](acceptance/13-phase3-acceptance.md) | Phase 3 状态 UI 手工验收提纲 |
 | [14-phase4-acceptance.md](acceptance/14-phase4-acceptance.md) | Phase 4 音频总线、淡入淡出、音效与 Replay 验收步骤 |
 | [15-phase5-acceptance.md](acceptance/15-phase5-acceptance.md) | Phase 5 演出控制器、blend、转场与粒子验收步骤 |
+| [16-phase6-acceptance.md](acceptance/16-phase6-acceptance.md) | Phase 6 富文本、注音与玩家输入验收步骤 |
+| [17-phase7-acceptance.md](acceptance/17-phase7-acceptance.md) | Phase 7 输入、鉴赏、Hexz、bundle 与 CI 验收步骤 |

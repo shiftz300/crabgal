@@ -1,16 +1,12 @@
-//! Project-level script discovery and hot reload.
+//! Multi-source script hot reload.
 
-mod loader;
-
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 
 use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::ScriptLanguageRegistry;
-
-pub use loader::{LoadedScene, load_scenes, load_scenes_with};
+use crate::{ContentProject, ScriptLanguageRegistry};
 
 /// Owns the notification backend and filters changes through the registered
 /// source-language adapters.
@@ -20,12 +16,15 @@ pub struct ScriptWatcher {
 }
 
 impl ScriptWatcher {
-    pub fn start(script_dir: &Path) -> Result<Self> {
-        Self::start_with_languages(script_dir, ScriptLanguageRegistry::default())
+    pub fn start(project: &ContentProject) -> Result<Self> {
+        Self::start_with_languages(
+            &project.watched_script_roots(),
+            ScriptLanguageRegistry::default(),
+        )
     }
 
     pub fn start_with_languages(
-        script_dir: &Path,
+        script_dirs: &[PathBuf],
         languages: ScriptLanguageRegistry,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
@@ -50,7 +49,9 @@ impl ScriptWatcher {
                 }
             }
         })?;
-        watcher.watch(script_dir, RecursiveMode::Recursive)?;
+        for script_dir in script_dirs.iter().filter(|path| path.is_dir()) {
+            watcher.watch(script_dir, RecursiveMode::Recursive)?;
+        }
 
         Ok(Self {
             receiver,

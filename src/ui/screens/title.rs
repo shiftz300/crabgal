@@ -22,6 +22,7 @@ pub enum TitleAction {
     Start,
     Continue,
     Load,
+    Extra,
     Options,
     Exit,
 }
@@ -152,6 +153,7 @@ pub struct TitleInputContext<'w, 's> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     state: ResMut<'w, GameState>,
     project_root: Res<'w, ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
     time: Res<'w, Time>,
     pending: Option<ResMut<'w, PendingTitleAction>>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
@@ -253,7 +255,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                         spawn_disabled_button(menu, "CONTINUE", &font);
                     }
                     spawn_title_button(menu, "LOAD", Some(TitleAction::Load), &font, None);
-                    spawn_disabled_button(menu, "EXTRA", &font);
+                    spawn_title_button(menu, "EXTRA", Some(TitleAction::Extra), &font, None);
                     spawn_title_button(menu, "OPTIONS", Some(TitleAction::Options), &font, None);
                     spawn_title_button(menu, "EXIT", Some(TitleAction::Exit), &font, None);
                 });
@@ -449,6 +451,7 @@ pub fn handle_title_input(mut context: TitleInputContext) {
     match action {
         Some(TitleAction::Continue) => {
             if let Ok(loaded) = crate::storage::save::load_game(
+                context.store.0.as_ref(),
                 crate::storage::save::QUICK_SAVE_SLOT,
                 &context.project_root,
             ) {
@@ -477,6 +480,16 @@ pub fn handle_title_input(mut context: TitleInputContext) {
         Some(TitleAction::Options) => {
             context.save_load.mode = None;
             context.settings.open = true;
+        }
+        Some(TitleAction::Extra) => {
+            let message = format!(
+                "EXTRA  ·  {} CG  ·  {} BGM",
+                context.state.unlocked_cg.len(),
+                context.state.unlocked_bgm.len()
+            );
+            context
+                .commands
+                .insert_resource(DialogRequest::confirmation(message, DialogAction::Noop));
         }
         Some(TitleAction::Start) => start_game(&mut context.state),
         _ => {}

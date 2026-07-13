@@ -91,6 +91,13 @@ fn collect_references(
             file: Some(file), ..
         } => resource(file, ResourceKind::Effect),
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
+        Action::Unlock { kind, file, .. } => resource(
+            file,
+            match kind {
+                crabgal_core::UnlockKind::Cg => ResourceKind::Background,
+                crabgal_core::UnlockKind::Bgm => ResourceKind::Bgm,
+            },
+        ),
         Action::ChangeScene(scene) | Action::CallScene(scene) => {
             report.sub_scenes.push(SceneRef {
                 scene: scene.clone(),

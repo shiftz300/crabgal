@@ -8,7 +8,25 @@ use crabgal_core::types::{
     AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, VisualFilter,
 };
 
+use crate::ScriptLanguage;
 use crate::report::{Diagnostic, DiagnosticLevel, ParseReport, SourceSpan};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WebGalLanguage;
+
+impl ScriptLanguage for WebGalLanguage {
+    fn name(&self) -> &'static str {
+        "WebGAL"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["txt"]
+    }
+
+    fn parse(&self, source: &str) -> ParseReport {
+        parse_webgal_report(source)
+    }
+}
 
 pub fn parse_webgal(input: &str) -> Vec<Action> {
     parse_webgal_report(input).actions
@@ -81,14 +99,56 @@ fn parse_webgal_line(raw: &str) -> Option<Action> {
 
 fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
     // Skip non-action commands
-    if cmd.starts_with("unlock")
-        || cmd.starts_with("getUserInput")
-        || cmd.starts_with("setTextbox")
-        || cmd.starts_with("playVideo")
-        || cmd.starts_with("unlockBgm")
-        || cmd.starts_with("unlockCg")
-    {
+    if cmd.starts_with("playVideo") {
         return None;
+    }
+
+    if let Some((rest, kind)) = cmd
+        .strip_prefix("unlockCg:")
+        .map(|value| (value, crabgal_core::UnlockKind::Cg))
+        .or_else(|| {
+            cmd.strip_prefix("unlockBgm:")
+                .map(|value| (value, crabgal_core::UnlockKind::Bgm))
+        })
+    {
+        let file = rest.split_whitespace().next().unwrap_or("").to_owned();
+        if !file.is_empty() {
+            return Some(Action::Unlock {
+                kind,
+                name: args.get("name").cloned().unwrap_or_else(|| file.clone()),
+                file,
+            });
+        }
+    }
+
+    if cmd == ":" {
+        return Some(Action::SetTextbox {
+            visible: false,
+            auto: true,
+        });
+    }
+    if let Some(rest) = cmd.strip_prefix("setTextbox:") {
+        let mode = rest.split_whitespace().next().unwrap_or("show");
+        return Some(Action::SetTextbox {
+            visible: !matches!(mode, "hide" | "none" | "off" | "false"),
+            auto: false,
+        });
+    }
+    if let Some(rest) = cmd.strip_prefix("getUserInput:") {
+        let variable = rest.split_whitespace().next().unwrap_or("").to_owned();
+        if !variable.is_empty() {
+            return Some(Action::UserInput {
+                variable,
+                title: args.get("title").cloned().unwrap_or_else(|| "INPUT".into()),
+                button: args
+                    .get("buttonText")
+                    .cloned()
+                    .unwrap_or_else(|| "OK".into()),
+            });
+        }
+    }
+    if cmd == "comment" || cmd.starts_with("comment:") {
+        return Some(Action::Comment);
     }
 
     if let Some(rest) = cmd
@@ -449,13 +509,14 @@ fn split_command_args(input: &str) -> (String, ScriptArgs) {
 
     let (content, raw_args) = split.map_or((input, ""), |offset| input.split_at(offset));
     let mut args = ScriptArgs::default();
-    for raw in raw_args.split_whitespace() {
+    for token in split_flag_tokens(raw_args) {
+        let raw = token.as_str();
         let Some(raw) = raw.strip_prefix('-') else {
             continue;
         };
         if let Some((key, value)) = raw.split_once('=') {
             args.0
-                .insert(key.to_owned(), value.trim_matches('"').to_owned());
+                .insert(key.to_owned(), value.trim_matches(['"', '\'']).to_owned());
         } else if raw.contains('.') && !matches!(raw, "left" | "right" | "center") {
             args.0.insert("vocal".into(), raw.to_owned());
         } else {
@@ -463,6 +524,46 @@ fn split_command_args(input: &str) -> (String, ScriptArgs) {
         }
     }
     (content.trim().to_owned(), args)
+}
+
+fn split_flag_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    let mut depth = 0_u32;
+    for value in input.chars() {
+        if let Some(active) = quote {
+            token.push(value);
+            if value == active {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' => {
+                quote = Some(value);
+                token.push(value);
+            }
+            '{' | '[' | '(' => {
+                depth += 1;
+                token.push(value);
+            }
+            '}' | ']' | ')' => {
+                depth = depth.saturating_sub(1);
+                token.push(value);
+            }
+            value if value.is_whitespace() && depth == 0 => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+            }
+            _ => token.push(value),
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    tokens
 }
 
 fn transition_from_args(args: &ScriptArgs) -> Transition {
@@ -886,5 +987,32 @@ mod tests {
             Action::SetFilter { filter, .. } if filter.blur == 6.0 && filter.brightness == 0.9
         ));
         assert!(matches!(report.actions[8], Action::Flow { next: true, .. }));
+    }
+
+    #[test]
+    fn parses_text_input_comments_and_gallery_unlocks() {
+        let report = parse_webgal_report(
+            ":;\nsetTextbox:show;\ncomment:note;\n\
+             getUserInput:name -title=\"Your name\" -buttonText=\"Confirm\";\n\
+             unlockCg:cg.webp -name=\"Spring scene\";",
+        );
+        assert!(report.diagnostics.is_empty());
+        assert!(matches!(
+            report.actions[0],
+            Action::SetTextbox {
+                visible: false,
+                auto: true
+            }
+        ));
+        assert!(matches!(report.actions[2], Action::Comment));
+        assert!(matches!(
+            &report.actions[3],
+            Action::UserInput { title, button, .. }
+                if title == "Your name" && button == "Confirm"
+        ));
+        assert!(matches!(
+            &report.actions[4],
+            Action::Unlock { name, .. } if name == "Spring scene"
+        ));
     }
 }

@@ -24,6 +24,8 @@ pub enum StepResult {
     AwaitChoice,
     /// Engine is waiting for a timed presentation action to finish.
     AwaitPresentation,
+    /// Engine is waiting for text input confirmation.
+    AwaitInput,
     /// No more actions in this scene.
     EndOfScene,
     /// Forward execution exceeded the deterministic safety limit.
@@ -37,6 +39,9 @@ const MAX_FORWARD_ACTIONS: usize = 1024;
 pub fn step(state: &mut State) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
+    }
+    if state.user_input.is_some() {
+        return StepResult::AwaitInput;
     }
     if state.presentation_blocked() {
         return StepResult::AwaitPresentation;
@@ -301,9 +306,15 @@ pub fn step(state: &mut State) -> StepResult {
                 text,
                 options,
             } => {
+                if state.textbox_auto_hidden {
+                    state.textbox_hidden = false;
+                    state.textbox_auto_hidden = false;
+                }
                 let mut speaker = resolve_speaker(&speaker, state);
-                let mut text =
-                    compile_rich_text(&interpolate(&text, &state.vars, &state.global_vars));
+                let mut markup = interpolate(&text, &state.vars, &state.global_vars)
+                    .replace("<br/>", "\n")
+                    .replace("<br>", "\n");
+                let mut text = compile_rich_text(&markup);
                 if options.inherit_speaker
                     && let Some(previous) =
                         state.dialogue.as_ref().or(state.previous_dialogue.as_ref())
@@ -315,6 +326,7 @@ pub fn step(state: &mut State) -> StepResult {
                         state.dialogue.as_ref().or(state.previous_dialogue.as_ref())
                 {
                     text = previous.text.clone() + &text;
+                    markup = previous.markup.clone() + &markup;
                     if speaker.is_empty() {
                         speaker.clone_from(&previous.speaker);
                     }
@@ -323,6 +335,7 @@ pub fn step(state: &mut State) -> StepResult {
                 state.dialogue = Some(Dialogue {
                     speaker,
                     text,
+                    markup,
                     visible_chars: 0,
                     vocal: options
                         .vocal
@@ -548,6 +561,36 @@ pub fn step(state: &mut State) -> StepResult {
                 state.particle_effect =
                     effect.map(|effect| interpolate(&effect, &state.vars, &state.global_vars));
             }
+            Action::SetTextbox { visible, auto } => {
+                state.textbox_hidden = !visible;
+                state.textbox_auto_hidden = !visible && auto;
+            }
+            Action::UserInput {
+                variable,
+                title,
+                button,
+            } => {
+                state.user_input = Some(crate::state::UserInputState {
+                    variable: interpolate(&variable, &state.vars, &state.global_vars),
+                    title: interpolate(&title, &state.vars, &state.global_vars),
+                    button: interpolate(&button, &state.vars, &state.global_vars),
+                    value: String::new(),
+                });
+                return StepResult::AwaitInput;
+            }
+            Action::Comment => {}
+            Action::Unlock { kind, file, name } => {
+                let file = interpolate(&file, &state.vars, &state.global_vars);
+                let name = interpolate(&name, &state.vars, &state.global_vars);
+                match kind {
+                    crate::types::UnlockKind::Cg => {
+                        state.unlocked_cg.insert(file, name);
+                    }
+                    crate::types::UnlockKind::Bgm => {
+                        state.unlocked_bgm.insert(file, name);
+                    }
+                }
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
@@ -642,6 +685,9 @@ pub fn end_game(state: &mut State) {
     state.bg_filter = Default::default();
     state.sprites.clear();
     state.mini_avatar = None;
+    state.textbox_hidden = false;
+    state.textbox_auto_hidden = false;
+    state.user_input = None;
     state.wait_remaining = 0.0;
     state.wait_blocking = false;
     state.intro = None;
@@ -656,6 +702,16 @@ pub fn end_game(state: &mut State) {
     state.vars.clear();
     state.cursor = state.scenes.get(&state.current_scene).map_or(0, Vec::len);
     state.ended = true;
+}
+
+pub fn submit_user_input(state: &mut State) -> bool {
+    let Some(input) = state.user_input.take() else {
+        return false;
+    };
+    state
+        .vars
+        .insert(input.variable, crate::Value::Str(input.value));
+    true
 }
 
 /// Handle user selecting a menu choice.
@@ -724,7 +780,6 @@ fn resolve_speaker(source: &str, state: &State) -> String {
 }
 
 fn compile_rich_text(source: &str) -> String {
-    let source = source.replace("<br/>", "\n").replace("<br>", "\n");
     let chars = source.chars().collect::<Vec<_>>();
     let mut output = String::new();
     let mut cursor = 0;
@@ -755,15 +810,7 @@ fn compile_rich_text(source: &str) -> String {
         };
         let argument_end = label_end + 2 + argument_end;
         let label = chars[cursor + 1..label_end].iter().collect::<String>();
-        let argument = chars[label_end + 2..argument_end]
-            .iter()
-            .collect::<String>();
         output.push_str(&label);
-        if !argument.contains('=') && !argument.is_empty() {
-            output.push('（');
-            output.push_str(&argument);
-            output.push('）');
-        }
         cursor = argument_end + 1;
     }
     output
@@ -1229,5 +1276,35 @@ mod tests {
         assert!(state.film_mode);
         assert_eq!(state.particle_effect.as_deref(), Some("rain"));
         assert_eq!(state.wait_remaining, 0.5);
+    }
+
+    #[test]
+    fn rich_text_input_and_textbox_commands_share_runtime_state() {
+        let mut state = state_with(vec![
+            Action::SetTextbox {
+                visible: false,
+                auto: true,
+            },
+            Action::Say {
+                speaker: "A".into(),
+                text: "[蟹](かに)[色](color=#fff)".into(),
+                options: SayOptions::default(),
+            },
+            Action::UserInput {
+                variable: "name".into(),
+                title: "Name".into(),
+                button: "OK".into(),
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        let dialogue = state.dialogue.as_ref().unwrap();
+        assert_eq!(dialogue.text, "蟹色");
+        assert_eq!(dialogue.markup, "[蟹](かに)[色](color=#fff)");
+        assert!(!state.textbox_hidden);
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitInput);
+        state.user_input.as_mut().unwrap().value = "小夜".into();
+        assert!(submit_user_input(&mut state));
+        assert_eq!(state.vars["name"], crate::Value::Str("小夜".into()));
     }
 }

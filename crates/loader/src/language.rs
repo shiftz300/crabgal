@@ -51,6 +51,19 @@ impl ScriptLanguageRegistry {
         self.languages.push(Arc::new(language));
     }
 
+    pub(crate) fn register_shared(&mut self, language: Arc<dyn ScriptLanguage>) {
+        self.languages.push(language);
+    }
+
+    pub(crate) fn select(&self, name: &str) -> Option<Self> {
+        self.languages
+            .iter()
+            .find(|language| language.name().eq_ignore_ascii_case(name))
+            .map(|language| Self {
+                languages: vec![language.clone()],
+            })
+    }
+
     pub fn language_for(&self, path: &Path) -> Option<&dyn ScriptLanguage> {
         self.languages
             .iter()

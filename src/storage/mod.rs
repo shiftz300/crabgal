@@ -1,3 +1,4 @@
+pub(crate) mod gallery;
 pub(crate) mod read_history;
 pub(crate) mod save;
 pub(crate) mod settings;
@@ -13,7 +14,7 @@ impl Plugin for StoragePlugin {
         app.add_systems(Startup, settings::load_settings);
         app.add_systems(
             Update,
-            read_history::persist_read_history.in_set(GameSystemSet::Sync),
+            (read_history::persist_read_history, gallery::persist).in_set(GameSystemSet::Sync),
         );
     }
 }

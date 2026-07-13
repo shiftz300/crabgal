@@ -98,6 +98,7 @@ impl SavePreviewCache {
 struct SaveContentContext<'a> {
     font: &'a Handle<Font>,
     project_root: &'a ProjectRoot,
+    store: &'a dyn crabgal_loader::StoreAdapter,
     preview_cache: &'a mut SavePreviewCache,
 }
 
@@ -246,6 +247,7 @@ pub(crate) struct SaveLoadSyncContext<'w, 's> {
     blur_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
     project_root: Res<'w, ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
     preview_cache: ResMut<'w, SavePreviewCache>,
     fades: Query<'w, 's, &'static mut MenuFade>,
     watermarks: Query<
@@ -270,6 +272,16 @@ pub(crate) struct SaveLoadFadeContext<'w, 's> {
     backgrounds: Query<'w, 's, (Entity, &'static mut BackgroundColor)>,
     borders: Query<'w, 's, (Entity, &'static mut BorderColor)>,
     images: Query<'w, 's, (Entity, &'static mut ImageNode)>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct SaveSlotContext<'w, 's> {
+    project_root: Res<'w, ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
+    state: Res<'w, crate::runtime::resources::GameState>,
+    windows: Query<'w, 's, &'static Window>,
+    images: ResMut<'w, Assets<Image>>,
+    commands: Commands<'w, 's>,
 }
 
 pub fn toggle_save_load(
@@ -422,6 +434,7 @@ pub fn sync_save_load(
                 &mut SaveContentContext {
                     font: &context.fonts.text,
                     project_root: &context.project_root,
+                    store: context.store.0.as_ref(),
                     preview_cache: &mut context.preview_cache,
                 },
             );
@@ -523,6 +536,7 @@ pub fn sync_save_load(
                 &mut SaveContentContext {
                     font: &font,
                     project_root: &context.project_root,
+                    store: context.store.0.as_ref(),
                     preview_cache: &mut context.preview_cache,
                 },
             );
@@ -620,6 +634,7 @@ fn spawn_slot_grid(
                     mode,
                     context.font,
                     context.project_root,
+                    context.store,
                     preview,
                 );
             }
@@ -866,11 +881,12 @@ fn spawn_slot(
     mode: SaveLoadMode,
     font: &Handle<Font>,
     project_root: &ProjectRoot,
+    store: &dyn crabgal_loader::StoreAdapter,
     preview: Option<Handle<Image>>,
 ) {
     use crate::storage::save::SlotStatus;
 
-    let status = crate::storage::save::inspect_slot(slot, project_root);
+    let status = crate::storage::save::inspect_slot(store, slot, project_root);
     let empty = matches!(status, SlotStatus::Empty);
     let preview = matches!(status, SlotStatus::Ready(_))
         .then_some(preview)
@@ -1228,11 +1244,7 @@ fn format_utc(timestamp: u64) -> String {
 pub fn handle_save_load_slot(
     interactions: Query<(&Interaction, &SaveLoadSlot), Changed<Interaction>>,
     mut ui: ResMut<SaveLoadUi>,
-    project_root: Res<ProjectRoot>,
-    state: Res<crate::runtime::resources::GameState>,
-    windows: Query<&Window>,
-    mut images: ResMut<Assets<Image>>,
-    mut commands: Commands,
+    mut context: SaveSlotContext,
 ) {
     let Some(mode) = ui.mode else { return };
     let Some(slot) = interactions
@@ -1241,21 +1253,27 @@ pub fn handle_save_load_slot(
     else {
         return;
     };
-    let status = crate::storage::save::inspect_slot(slot, &project_root);
-    if mode == SaveLoadMode::Save && state.ended {
+    let status =
+        crate::storage::save::inspect_slot(context.store.0.as_ref(), slot, &context.project_root);
+    if mode == SaveLoadMode::Save && context.state.ended {
         return;
     }
     if mode == SaveLoadMode::Load && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
         return;
     }
     if mode == SaveLoadMode::Save && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
-        match crate::storage::save::save_game(&state, slot, &project_root) {
+        match crate::storage::save::save_game(
+            context.store.0.as_ref(),
+            &context.state,
+            slot,
+            &context.project_root,
+        ) {
             Ok(()) => {
                 ui.set_changed();
-                if let Ok(window) = windows.single() {
+                if let Ok(window) = context.windows.single() {
                     crate::ui::dialog::capture_save_preview(
-                        &mut commands,
-                        &mut images,
+                        &mut context.commands,
+                        &mut context.images,
                         Vec2::new(window.width(), window.height()),
                         slot,
                     );
@@ -1275,7 +1293,9 @@ pub fn handle_save_load_slot(
             DialogAction::LoadSlot(slot),
         ),
     };
-    commands.insert_resource(DialogRequest::confirmation(title, action));
+    context
+        .commands
+        .insert_resource(DialogRequest::confirmation(title, action));
 }
 
 pub fn handle_save_delete(
@@ -1283,6 +1303,7 @@ pub fn handle_save_delete(
     slots: Query<(&Interaction, &SaveLoadSlot)>,
     ui: Res<SaveLoadUi>,
     project_root: Res<ProjectRoot>,
+    store: Res<crate::runtime::resources::StoreCodec>,
     mut commands: Commands,
 ) {
     if ui.mode.is_none() || !mouse.just_pressed(MouseButton::Right) {
@@ -1295,7 +1316,7 @@ pub fn handle_save_delete(
         return;
     };
     if !matches!(
-        crate::storage::save::inspect_slot(slot, &project_root),
+        crate::storage::save::inspect_slot(store.0.as_ref(), slot, &project_root),
         crate::storage::save::SlotStatus::Ready(_)
     ) {
         return;

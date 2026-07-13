@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
-use crabgal_script::ResourceKind;
+use crabgal_loader::ResourceKind;
 
 use crate::runtime::resources::{
     AssetLoadingGate, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,

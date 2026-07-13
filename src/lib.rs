@@ -4,4 +4,4 @@ mod scene;
 mod storage;
 mod ui;
 
-pub use runtime::run;
+pub use runtime::{run, run_with_loader};

@@ -4,13 +4,13 @@
 
 | 层 | 技术 | 理由 |
 |----|------|------|
-| 核心引擎 | Rust (crabgal-core, crabgal-script) | 确定性执行、可序列化状态、零成本抽象 |
+| 核心引擎 | Rust (crabgal-core, crabgal-loader) | 确定性执行、可序列化状态、零成本抽象 |
 | 游戏引擎 | Bevy 0.19 | 成熟 ECS、跨平台渲染、Plugin 架构、bevy_ui |
 | GPU 渲染 | wgpu (via Bevy) | 跨平台 Vulkan/Metal/DX12 |
 | UI | bevy_ui | Node 布局、Interaction 系统、Bootstrap Icons 字体图标 |
 | 音频 | 待定 (rodio / Bevy audio) | -- |
 | 桌面壳 | 原生 winit (via Bevy) | 无 WebView 开销 |
-| 资源打包 | hexz (.hxz) 待集成 | AES-256-GCM、zstd、O(1) 随机访问 |
+| 资源打包 | hexz_k / Hexz (.hxz) | AES-256-GCM、zstd、O(1) 随机访问 |
 | 存档序列化 | bincode | ECS World 差分快照 |
 | 脚本 | 可注册语言适配器（内置 WebGAL `.txt`） | 各语法统一编译为 `Action` IR |
 

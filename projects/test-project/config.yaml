@@ -2,6 +2,17 @@
 title: "crabgal Demo"
 title_background: "bg.webp"
 
+# Sources are layered from low to high priority. The shared asset layer proves
+# that scripts and media no longer need to live under one physical root.
+adapter:
+  asset:
+    - path: "."
+      format: fs
+    - path: "content/shared"
+      format: fs
+  script: webgal
+  store: crabgal
+
 assets:
   bgm:
     v16.wav: "vocal/v16.wav"

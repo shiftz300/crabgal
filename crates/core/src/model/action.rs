@@ -42,7 +42,9 @@ pub enum Action {
         transform: SpriteTransform,
     },
     /// Remove the current background.
-    HideBg { transition: Transition },
+    HideBg {
+        transition: Transition,
+    },
     /// Show a sprite (character / effect).
     ShowSprite {
         id: String,
@@ -54,7 +56,10 @@ pub enum Action {
         blend: BlendMode,
     },
     /// Remove a sprite.
-    HideSprite { id: String, transition: Transition },
+    HideSprite {
+        id: String,
+        transition: Transition,
+    },
 
     // ── Dialogue ──
     /// Display dialogue text (triggers click-to-continue).
@@ -99,7 +104,9 @@ pub enum Action {
 
     // ── UI ──
     /// Show mini avatar beside the text box.
-    MiniAvatar { image: String },
+    MiniAvatar {
+        image: String,
+    },
     /// Hide the mini avatar.
     HideMiniAvatar,
     /// Evaluate an expression and set a local or persistent variable.
@@ -147,13 +154,39 @@ pub enum Action {
         filter: VisualFilter,
     },
     /// Block script execution for a real-time duration.
-    Wait { seconds: f32 },
+    Wait {
+        seconds: f32,
+    },
     /// Fullscreen black narration pages.
-    Intro { pages: Vec<String>, hold: bool },
+    Intro {
+        pages: Vec<String>,
+        hold: bool,
+    },
     /// Toggle cinematic letterbox bars.
-    FilmMode { enabled: bool },
+    FilmMode {
+        enabled: bool,
+    },
     /// Start or clear the lightweight Bevy effects layer.
-    Particle { effect: Option<String> },
+    Particle {
+        effect: Option<String>,
+    },
+
+    // ── Text and interaction ──
+    SetTextbox {
+        visible: bool,
+        auto: bool,
+    },
+    UserInput {
+        variable: String,
+        title: String,
+        button: String,
+    },
+    Comment,
+    Unlock {
+        kind: crate::types::UnlockKind,
+        file: String,
+        name: String,
+    },
 }
 
 /// A single choice in a menu.

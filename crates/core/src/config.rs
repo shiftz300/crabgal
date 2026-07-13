@@ -16,6 +16,10 @@ pub struct GameConfig {
     #[serde(default = "default_title_background")]
     pub title_background: String,
 
+    /// Independently selected parser/codec categories.
+    #[serde(default)]
+    pub adapter: AdapterConfig,
+
     /// Asset path mappings (key → relative path under assets/).
     #[serde(default)]
     pub assets: AssetMap,
@@ -31,6 +35,70 @@ pub struct GameConfig {
     /// Layout settings (anchor offsets, dodge, etc).
     #[serde(default)]
     pub layout: LayoutConfig,
+}
+
+/// One resource source consumed through an asset adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetSourceConfig {
+    /// Adapter-specific location. Built-in local adapters resolve it relative
+    /// to the directory containing `config.yaml`.
+    #[serde(default = "default_source_path")]
+    pub path: String,
+    /// Asset adapter option selected from `adapter/asset/*`.
+    #[serde(default = "default_asset_adapter")]
+    pub format: String,
+}
+
+fn default_source_path() -> String {
+    ".".into()
+}
+
+fn default_asset_adapter() -> String {
+    "fs".into()
+}
+
+fn default_asset_sources() -> Vec<AssetSourceConfig> {
+    vec![AssetSourceConfig::default()]
+}
+
+impl Default for AssetSourceConfig {
+    fn default() -> Self {
+        Self {
+            path: default_source_path(),
+            format: default_asset_adapter(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterConfig {
+    /// Ordered asset layers. Later sources override earlier logical paths.
+    #[serde(default = "default_asset_sources")]
+    pub asset: Vec<AssetSourceConfig>,
+    /// Script syntax selected from `adapter/script/*`.
+    #[serde(default = "default_script_adapter")]
+    pub script: String,
+    /// Save-state codec selected from `adapter/store/*`.
+    #[serde(default = "default_store_adapter")]
+    pub store: String,
+}
+
+fn default_script_adapter() -> String {
+    "webgal".into()
+}
+
+fn default_store_adapter() -> String {
+    "crabgal".into()
+}
+
+impl Default for AdapterConfig {
+    fn default() -> Self {
+        Self {
+            asset: default_asset_sources(),
+            script: default_script_adapter(),
+            store: default_store_adapter(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +248,7 @@ impl Default for GameConfig {
         Self {
             title: default_title(),
             title_background: default_title_background(),
+            adapter: AdapterConfig::default(),
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
             styles: StyleConfig::default(),
@@ -210,10 +279,15 @@ impl Default for StyleConfig {
 }
 
 impl GameConfig {
+    /// Parse project configuration from an arbitrary content source.
+    pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+
     /// Load from a YAML file, falling back to defaults.
     pub fn load(path: &Path) -> Self {
         match fs::read_to_string(path) {
-            Ok(yaml) => serde_yaml::from_str(&yaml).unwrap_or_else(|error| {
+            Ok(yaml) => Self::from_yaml(&yaml).unwrap_or_else(|error| {
                 log::error!("invalid config {}: {error}; using defaults", path.display());
                 Self::default()
             }),
@@ -282,6 +356,7 @@ mod tests {
         let cfg = GameConfig::default();
         assert_eq!(cfg.title, "crabgal");
         assert_eq!(cfg.styles.typewriter_speed, 45.0);
+        assert_eq!(cfg.adapter, AdapterConfig::default());
     }
 
     #[test]
@@ -294,5 +369,28 @@ styles:
         let cfg: GameConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.title, "Test Game");
         assert_eq!(cfg.styles.typewriter_speed, 60.0);
+        assert_eq!(cfg.adapter, AdapterConfig::default());
+    }
+
+    #[test]
+    fn parses_adapter_options_and_ordered_asset_sources() {
+        let yaml = r#"
+adapter:
+  asset:
+    - path: "."
+      format: fs
+    - path: "packs/voices"
+      format: fs
+    - path: "packs/route.hxz"
+      format: hexz
+  script: webgal
+  store: crabgal
+"#;
+        let cfg: GameConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.adapter.asset.len(), 3);
+        assert_eq!(cfg.adapter.asset[1].format, "fs");
+        assert_eq!(cfg.adapter.asset[2].format, "hexz");
+        assert_eq!(cfg.adapter.script, "webgal");
+        assert_eq!(cfg.adapter.store, "crabgal");
     }
 }

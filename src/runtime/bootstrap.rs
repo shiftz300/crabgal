@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use bevy::asset::AssetPlugin;
+use anyhow::{Context, Result};
+use bevy::asset::io::AssetSourceId;
+use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::camera::visibility::RenderLayers;
 use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::log::LogPlugin;
@@ -10,55 +12,126 @@ use bevy::window::WindowResolution;
 use crabgal_core::config::GameConfig;
 use crabgal_core::step;
 use crabgal_core::{Action, State};
-use crabgal_script::{DiagnosticLevel, ScriptWatcher, load_scenes};
+use crabgal_loader::{
+    ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_hexz_project_from_archive,
+    load_project_with, load_scenes_with,
+};
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
 use crate::runtime::resources::{
-    GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest, LocalSceneAssets,
-    ProjectRoot, ScriptWatcherResource,
+    ContentProjectResource, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,
+    LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
 
 pub fn run() {
-    let project_root = project_root_from_args(std::env::args_os().skip(1));
-    let config = GameConfig::load(&project_root.join("config.yaml"));
-    let assets_path = project_root.join("assets");
+    run_with_loader(LoaderRegistry::default());
+}
+
+pub fn run_with_loader(loader: LoaderRegistry) {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|value| value == "pack") {
+        let Some(project) = args.get(1).map(PathBuf::from) else {
+            eprintln!("usage: crabgal pack <project> <output.hxz>");
+            return;
+        };
+        let output = args
+            .get(2)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| project.with_extension("hxz"));
+        if let Err(error) = crabgal_loader::pack_hexz(&project, &output) {
+            eprintln!("failed to package project: {error:#}");
+        }
+        return;
+    }
+    let project_path = project_root_from_args(args.into_iter());
+    let (project_root, config, content) = match open_project(&project_path, &loader) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("failed to open project: {error:#}");
+            return;
+        }
+    };
+    let languages = match loader.languages(&config.adapter.script) {
+        Ok(languages) => languages,
+        Err(error) => {
+            eprintln!("failed to select script adapter: {error:#}");
+            return;
+        }
+    };
+    let store = match loader.store(&config.adapter.store) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("failed to select store adapter: {error:#}");
+            return;
+        }
+    };
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
 
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .build()
-                .set(AssetPlugin {
-                    file_path: assets_path.to_string_lossy().into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: config.title.clone(),
-                        resolution: WindowResolution::new(1280, 720),
-                        resizable: true,
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(ImagePlugin::default())
-                .set(LogPlugin {
-                    filter: "info".into(),
+    let mut app = App::new();
+    app.register_asset_source(
+        AssetSourceId::Default,
+        crate::runtime::asset_reader::overlay_source(content.asset_mounts()),
+    );
+    app.add_plugins(
+        DefaultPlugins
+            .build()
+            .set(AssetPlugin::default())
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: config.title.clone(),
+                    resolution: WindowResolution::new(1280, 720),
+                    resizable: true,
                     ..default()
                 }),
-        )
-        .add_plugins((
-            webp,
-            GamePlugin,
-            BlurPlugin,
-            FrameTimeDiagnosticsPlugin::default(),
-            EntityCountDiagnosticsPlugin::default(),
-        ))
-        .insert_resource(ProjectRoot(project_root))
-        .insert_resource(GameConfigResource(config))
-        .add_systems(PreStartup, bootstrap_project)
-        .run();
+                ..default()
+            })
+            .set(ImagePlugin::default())
+            .set(LogPlugin {
+                filter: "info".into(),
+                ..default()
+            }),
+    )
+    .add_plugins((
+        webp,
+        GamePlugin,
+        BlurPlugin,
+        FrameTimeDiagnosticsPlugin::default(),
+        EntityCountDiagnosticsPlugin::default(),
+    ))
+    .insert_resource(ProjectRoot(project_root))
+    .insert_resource(ContentProjectResource(content))
+    .insert_resource(ScriptLanguages(languages))
+    .insert_resource(StoreCodec(store))
+    .insert_resource(GameConfigResource(config))
+    .add_systems(PreStartup, bootstrap_project)
+    .run();
+}
+
+fn open_project(
+    project_path: &Path,
+    loader: &LoaderRegistry,
+) -> Result<(PathBuf, GameConfig, ContentProject)> {
+    if project_path.extension().and_then(|value| value.to_str()) == Some("hxz") {
+        let archive = crabgal_loader::mount_hexz(project_path)?;
+        let yaml = archive.read(Path::new("config.yaml"))?;
+        let yaml = std::str::from_utf8(&yaml).context("Hexz config.yaml is not UTF-8")?;
+        let config = GameConfig::from_yaml(yaml).context("invalid Hexz config.yaml")?;
+        let content = load_hexz_project_from_archive(archive, &config.adapter.asset)?;
+        let writable_root = project_path
+            .canonicalize()
+            .unwrap_or_else(|_| project_path.to_owned())
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_owned();
+        return Ok((writable_root, config, content));
+    }
+
+    let script_dir = project_path.join("scripts");
+    create_project_directories(project_path, &script_dir);
+    let config = GameConfig::load(&project_path.join("config.yaml"));
+    let content = load_project_with(project_path, &config.adapter.asset, loader)?;
+    Ok((content.root.clone(), config, content))
 }
 
 fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
@@ -77,17 +150,20 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
         .join(relative)
 }
 
-fn bootstrap_project(mut commands: Commands, project_root: Res<ProjectRoot>) {
+fn bootstrap_project(
+    mut commands: Commands,
+    project_root: Res<ProjectRoot>,
+    content: Res<ContentProjectResource>,
+    languages: Res<ScriptLanguages>,
+) {
     spawn_cameras(&mut commands);
 
-    let script_dir = project_root.join("scripts");
-    create_project_directories(&project_root, &script_dir);
-
     let mut state = State::new();
+    crate::storage::gallery::load(&mut state, &project_root);
     state.read_dialogues = crate::storage::read_history::load(&project_root);
     let read_history_count = state.read_dialogues.len();
     let mut manifest = LocalAssetManifest::default();
-    match load_scenes(&script_dir) {
+    match load_scenes_with(&content, &languages) {
         Ok(scenes) => {
             for scene in scenes {
                 for diagnostic in &scene.diagnostics {
@@ -125,7 +201,8 @@ fn bootstrap_project(mut commands: Commands, project_root: Res<ProjectRoot>) {
     commands.insert_resource(manifest);
     commands.insert_resource(LocalAssetCache::default());
 
-    match ScriptWatcher::start(&script_dir) {
+    match ScriptWatcher::start_with_languages(&content.watched_script_roots(), languages.0.clone())
+    {
         Ok(watcher) => {
             commands.insert_resource(ScriptWatcherResource(Mutex::new(watcher)));
         }

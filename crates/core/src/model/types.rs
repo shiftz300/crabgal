@@ -258,6 +258,12 @@ pub enum BlendMode {
     Screen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnlockKind {
+    Cg,
+    Bgm,
+}
+
 impl Easing {
     pub fn sample(self, progress: f32) -> f32 {
         let progress = progress.clamp(0.0, 1.0);

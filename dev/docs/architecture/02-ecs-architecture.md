@@ -59,11 +59,11 @@ Update 是事件驱动的 `step_until_interactive()`，Render 是固定的 vsync
 ```
 crabgal/
 ├── core/               # package crabgal-core
-├── script/             # package crabgal-script
+├── loader/             # package crabgal-loader；统一 asset/script/store adapter
+│   └── adapter/asset/  # fs、auto、hexz_k 标准 Hexz 资源包
 ├── crabgal-render/     # wgpu 渲染后端 + Displayable trait
 ├── crabgal-audio/      # rodio 音频
 ├── crabgal-rollback/   # 差分快照 + 回退
-├── crabgal-hexz/       # hexz 资源加载（封装 hexz_k）
 ├── crabgal-editor/     # Tauri + Svelte 编辑器
 │   ├── src-tauri/      # Rust: Tauri commands + EditorSync
 │   └── src/            # Svelte: 编辑器 UI + 调试面板

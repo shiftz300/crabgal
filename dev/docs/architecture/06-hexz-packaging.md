@@ -1,63 +1,53 @@
-# 资源打包 (hexz)
+# Hexz 打包与挂载
 
-> 状态：延期。本阶段运行时只从项目本地目录通过 Bevy `AssetServer` 加载资源，
-> Phase 1 不接入、不扩展也不重写 hexz。本文仅保留未来打包设计草案，不能视为现有能力。
+> 状态：已集成 `maincoretech/hexz_k`。Crabgal 不再定义私有容器协议。
 
-未来可评估使用 hexz_k 作为发布资源打包层，但只有在本地资源清单、预取、存档兼容和
-各平台 I/O 基准稳定后才决定归档格式；运行时领域层不应依赖归档实现。
+## 边界
 
-## .hxz 归档格式
+- `hexz_k::ResourcePack` 负责标准 `.hxz` 的索引、校验、解压、解密信息和随机读取。
+- `hexz-ops` 负责 zstd 与 AES-256-GCM 分块打包；Crabgal 不复制 magic、header、block 或 CRC 语义。
+- `crabgal-loader::adapter::asset::hexz` 只负责配置适配、安全路径检查和 loader mount。
+- Hexz 不进入 core、ECS、UI 或脚本解析。
 
-```
-┌─ Header (16 bytes) ──────────────────────┐
-│  magic: "HXZ!" (4)                        │
-│  version: u16 (2)                         │
-│  encryption: Option<AesGcmHeader>          │
-│  index_offset: u64                        │
-├─ Data Section (zstd/lz4 压缩) ────────────┤
-│  [block, block, ...]                      │
-├─ Index Section ───────────────────────────┤
-│  [(path_hash, offset, size, original_size)]│
-└───────────────────────────────────────────┘
-```
-
-## 开发目录
-
-```
-game/
-├── project.toml
-│   [game]
-│   name = "My Game"
-│   resolution = [1600, 900]
-├── scripts/
-│   ├── start.txt
-│   └── scene01.txt
-├── assets/
-│   ├── bg/alley.png
-│   ├── chr/eileen/happy.png
-│   ├── bgm/title.ogg
-│   └── se/click.ogg
-└── fonts/
-    └── noto-sans.ttf
-```
-
-## CLI
+## 打包
 
 ```bash
-crabgal new my-game          # 脚手架
-crabgal dev                  # 开发模式（热重载 + 编辑器）
-crabgal build --release      # 构建发布包
-crabgal pack ./game dist.hxz # 打包为 hexz 归档
-crabgal check                # 语法检查（对标 ayaka-check）
+cargo run --release --features hexz-pack -- pack <project> <output.hxz>
 ```
 
-## 编辑器开发模式
+`hexz-ops` 是开发工具 feature，不进入默认发布引擎二进制。默认使用 64 KiB block、zstd 和
+AES-256-GCM 分块加密；加密路径由 Hexz 顺序生成唯一 nonce。文件排除交给 Hexz 标准的 `.gitignore`、
+`.ignore` 或 `.hexzignore`；项目必须排除 `saves/` 与生成缓存。
 
+默认编译期资源密钥只用于防止资源被直接解压，属于弱保护而不是 DRM。发行方可在构建打包工具和
+引擎时同时设置 `CRABGAL_HEXZ_PASSWORD` 覆盖默认值；客户端内置密钥始终可能被逆向获得。
+
+## 读取
+
+1. 使用 `ResourcePackOptions::memory_constrained()` 打开，限制解压 block cache。
+2. 归档与 O(1) clone 的索引句柄在整个游戏生命周期内保持打开。
+3. 配置和脚本通过统一 `ContentMount` 按需读取，不写入临时目录。
+4. 图片、音频和字体由 Bevy `AssetReader` 打开 `ResourceFile`，按 loader 请求流式读取。
+5. reader 支持 seek，解码器无需先复制完整文件；entry 名仍经过相对路径安全检查。
+
+运行归档不会创建 staging、ready marker 或明文资源缓存。完整项目包暴露 `assets/` 与
+`scripts/`；纯资源包只暴露 asset root。
+
+## Loader benchmark
+
+```bash
+cargo bench -p crabgal-loader --bench hexz_loader -- "$PWD/target/test-project.hxz"
 ```
-crabgal dev 启动后:
-  ├── watcher 监听 scripts/ 变更 → 重新解析 → Action 列表更新
-  ├── watcher 监听 assets/ 变更 → 重载纹理/音频
-  ├── Tauri WebView 提供编辑器 UI (Svelte)
-  ├── WebSocket 提供编辑器预览协议
-  └── wgpu Canvas 渲染游戏画面
-```
+
+2026-07-13 在 release benchmark 与真实 test-project 加密包上的结果：
+
+| 操作 | 原实现/直接读取 | 优化后 |
+|---|---:|---:|
+| 文件命中与未命中 | 180.7 ns/op | 117.8 ns/op |
+| 目录判断与列举 | 约 518 ns/op | 约 518 ns/op |
+| 加密 entry 顺序读取 4 KiB | 76.8 µs/op | 11.1 µs/op |
+| 打开、PBKDF2 与索引 | 约 140 ms | 约 140 ms |
+
+优化采用无重复排序的 `HashSet` 文件/目录索引，以及仅对加密 entry 启用的 64 KiB reader
+私有 read-ahead。打开耗时主要来自密钥派生且每个归档生命周期只执行一次，因此不降低加密参数；
+未加密包保持直接读取，不承担 read-ahead 复制成本。

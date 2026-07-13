@@ -113,6 +113,7 @@ struct SavePreviewCapture {
 pub(crate) struct QuickSaveContext<'w, 's> {
     state: ResMut<'w, crate::runtime::resources::GameState>,
     project_root: Res<'w, crate::runtime::resources::ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
     preview: ResMut<'w, QuickSavePreview>,
     images: ResMut<'w, Assets<Image>>,
     windows: Query<'w, 's, &'static Window>,
@@ -359,6 +360,7 @@ pub fn handle_dialog_click(
         match &req.action {
             DialogAction::QuickSave => {
                 if let Err(error) = crate::storage::save::save_game(
+                    context.store.0.as_ref(),
                     &context.state,
                     QUICK_SAVE_SLOT,
                     &context.project_root,
@@ -379,7 +381,11 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::QuickLoad => {
-                match crate::storage::save::load_game(QUICK_SAVE_SLOT, &context.project_root) {
+                match crate::storage::save::load_game(
+                    context.store.0.as_ref(),
+                    QUICK_SAVE_SLOT,
+                    &context.project_root,
+                ) {
                     Ok(loaded) => **context.state = loaded,
                     Err(error) => log::error!("quick load failed: {error:#}"),
                 }
@@ -391,9 +397,12 @@ pub fn handle_dialog_click(
                 context.backlog_ui.open = false;
             }
             DialogAction::SaveSlot(slot) => {
-                if let Err(error) =
-                    crate::storage::save::save_game(&context.state, *slot, &context.project_root)
-                {
+                if let Err(error) = crate::storage::save::save_game(
+                    context.store.0.as_ref(),
+                    &context.state,
+                    *slot,
+                    &context.project_root,
+                ) {
                     log::error!("save slot {slot} failed: {error:#}");
                 } else {
                     context.save_load.set_changed();
@@ -404,7 +413,11 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::LoadSlot(slot) => {
-                match crate::storage::save::load_game(*slot, &context.project_root) {
+                match crate::storage::save::load_game(
+                    context.store.0.as_ref(),
+                    *slot,
+                    &context.project_root,
+                ) {
                     Ok(loaded) => {
                         **context.state = loaded;
                         context.save_load.mode = None;
@@ -413,7 +426,11 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::DeleteSlot(slot) => {
-                match crate::storage::save::delete_game(*slot, &context.project_root) {
+                match crate::storage::save::delete_game(
+                    context.store.0.as_ref(),
+                    *slot,
+                    &context.project_root,
+                ) {
                     Ok(()) => context.save_load.set_changed(),
                     Err(error) => log::error!("delete slot {slot} failed: {error:#}"),
                 }
