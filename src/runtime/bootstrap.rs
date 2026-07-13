@@ -30,20 +30,6 @@ pub fn run() {
 
 pub fn run_with_loader(loader: LoaderRegistry) {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if args.first().is_some_and(|value| value == "pack") {
-        let Some(project) = args.get(1).map(PathBuf::from) else {
-            eprintln!("usage: crabgal pack <project> <output.hxz>");
-            return;
-        };
-        let output = args
-            .get(2)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| project.with_extension("hxz"));
-        if let Err(error) = crabgal_loader::pack_hexz(&project, &output) {
-            eprintln!("failed to package project: {error:#}");
-        }
-        return;
-    }
     let project_path = project_root_from_args(args.into_iter());
     let (project_root, config, content) = match open_project(&project_path, &loader) {
         Ok(project) => project,

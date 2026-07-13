@@ -11,10 +11,6 @@ version.workspace = true
 edition.workspace = true
 description = "A dedicated visual-novel engine with WebGAL script compatibility"
 
-[features]
-default = []
-hexz-pack = ["crabgal-loader/hexz-pack"]
-
 [workspace.package]
 version = "0.6.0"
 edition = "2024"
@@ -39,7 +35,6 @@ crc32fast = "1"
 notify = "7"
 serde_yaml = "0.9"
 hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "4cf5287", default-features = false }
-hexz-ops = { version = "0.8", default-features = false, features = ["compression-zstd", "encryption"] }
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"
@@ -49,7 +44,6 @@ crabgal-core = { workspace = true }
 crabgal-loader = { workspace = true }
 log = { workspace = true }
 bincode = { workspace = true }
-crc32fast = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 libwebp-sys = { workspace = true }

@@ -5,22 +5,19 @@
 ## 边界
 
 - `hexz_k::ResourcePack` 负责标准 `.hxz` 的索引、校验、解压、解密信息和随机读取。
-- `hexz-ops` 负责 zstd 与 AES-256-GCM 分块打包；Crabgal 不复制 magic、header、block 或 CRC 语义。
+- 发布 CI 调用 Hexz 官方工具负责 zstd 与 AES-256-GCM 分块打包；运行时不依赖
+  `hexz-ops`，也不复制 magic、header、block 或 CRC 语义。
 - `crabgal-loader::adapter::asset::hexz` 只负责配置适配、安全路径检查和 loader mount。
 - Hexz 不进入 core、ECS、UI 或脚本解析。
 
 ## 打包
 
-```bash
-cargo run --release --features hexz-pack -- pack <project> <output.hxz>
-```
-
-`hexz-ops` 是开发工具 feature，不进入默认发布引擎二进制。默认使用 64 KiB block、zstd 和
-AES-256-GCM 分块加密；加密路径由 Hexz 顺序生成唯一 nonce。文件排除交给 Hexz 标准的 `.gitignore`、
-`.ignore` 或 `.hexzignore`；项目必须排除 `saves/` 与生成缓存。
+打包属于发布流水线，不属于引擎或 loader API。CI 使用 Hexz 官方 CLI 生成标准 `.hxz`，
+默认采用 64 KiB block、zstd 和 AES-256-GCM 分块加密。文件排除交给 Hexz 标准的
+`.gitignore`、`.ignore` 或 `.hexzignore`；项目必须排除 `saves/` 与生成缓存。
 
 默认编译期资源密钥只用于防止资源被直接解压，属于弱保护而不是 DRM。发行方可在构建打包工具和
-引擎时同时设置 `CRABGAL_HEXZ_PASSWORD` 覆盖默认值；客户端内置密钥始终可能被逆向获得。
+引擎时使用同一个 `CRABGAL_HEXZ_PASSWORD`；客户端内置密钥始终可能被逆向获得。
 
 ## 读取
 

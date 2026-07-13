@@ -4,10 +4,6 @@ version.workspace = true
 edition.workspace = true
 description = "Unified asset/source and script adapters with hot reload"
 
-[features]
-default = []
-hexz-pack = ["dep:hexz-ops"]
-
 [dependencies]
 crabgal-core = { workspace = true }
 anyhow = { workspace = true }
@@ -15,8 +11,6 @@ log = { workspace = true }
 notify = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
 crc32fast = { workspace = true }
 bincode = { workspace = true }
 hexz_k = { workspace = true }
-hexz-ops = { workspace = true, optional = true }

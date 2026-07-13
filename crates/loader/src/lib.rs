@@ -7,7 +7,7 @@ mod report;
 
 pub use adapter::{
     CrabgalStore, FormatAdapter, LoaderRegistry, StoreAdapter, StoreMetadata, StoreStatus,
-    WebGalLanguage, mount_hexz, pack_hexz, parse_webgal, parse_webgal_report,
+    WebGalLanguage, mount_hexz, parse_webgal, parse_webgal_report,
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{

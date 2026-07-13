@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use crate::ScriptLanguageRegistry;
 use crate::loader::SourceMount;
 
-pub use asset::{mount_hexz, pack_hexz};
+pub use asset::mount_hexz;
 pub use script::{WebGalLanguage, parse_webgal, parse_webgal_report};
 pub use store::{CrabgalStore, StoreAdapter, StoreMetadata, StoreStatus};
 

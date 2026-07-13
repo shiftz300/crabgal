@@ -283,38 +283,4 @@ mod tests {
         assert_eq!(bytes, b"patch");
         let _ = fs::remove_dir_all(root);
     }
-
-    #[cfg(feature = "hexz-pack")]
-    #[test]
-    fn encrypted_hexz_assets_support_streaming_and_seek() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-reader-{nonce}"));
-        let package = root.with_extension("hxz");
-        fs::create_dir_all(root.join("assets")).unwrap();
-        fs::write(root.join("assets/sample.bin"), b"0123456789").unwrap();
-        fs::write(root.join("config.yaml"), "title: stream-test").unwrap();
-        crabgal_loader::pack_hexz(&root, &package).unwrap();
-
-        let archive = crabgal_loader::mount_hexz(&package).unwrap();
-        let reader = HexzAssetReader::new(archive, PathBuf::from("assets"));
-        let bytes = block_on(async {
-            let mut stream = reader.read(Path::new("sample.bin")).await.unwrap();
-            let seekable = Reader::seekable(&mut stream).unwrap();
-            futures_lite::io::AsyncSeekExt::seek(seekable, SeekFrom::Start(4))
-                .await
-                .unwrap();
-            let mut bytes = [0_u8; 3];
-            futures_lite::io::AsyncReadExt::read_exact(&mut stream, &mut bytes)
-                .await
-                .unwrap();
-            bytes
-        });
-        assert_eq!(&bytes, b"456");
-
-        let _ = fs::remove_dir_all(root);
-        let _ = fs::remove_file(package);
-    }
 }

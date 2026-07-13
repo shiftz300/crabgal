@@ -11,15 +11,15 @@
 ## Hexz
 
 ```bash
-cargo run --release --features hexz-pack -- pack projects/test-project target/test-project.hxz
-cargo run --release -- target/test-project.hxz
+HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" hexz pack projects/test-project target/test-project.hxz --encrypt
+CRABGAL_HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" cargo run --release -- target/test-project.hxz
 ```
 
 5. 打包文件生成并标记为 Hexz encrypted，且不包含 `saves/`、`imported_assets/`。
 6. 直接运行 `.hxz` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现
    staging、ready marker 或明文资源目录。截断或破坏归档后应由 `hexz_k` 校验拒绝启动。
-7. 执行 `cargo test --workspace --features hexz-pack`；seek 测试应从加密 entry 的偏移 4
-   直接读出 `456`，证明 Bevy reader 没有先复制或解包整份归档。
+7. 执行 `cargo test --workspace --all-targets`，并确认运行时通过 `hexz_k::ResourceFile`
+   直接 seek/read，不生成解包目录或完整文件副本。
 
 ## 桌面包与 CI
 
