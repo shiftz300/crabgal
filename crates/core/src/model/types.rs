@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Design resolution (fixed, everything is drawn in this space).
-pub const DESIGN_WIDTH: f32 = 2560.0;
-pub const DESIGN_HEIGHT: f32 = 1440.0;
+/// Native logical canvas used by scene layout, UI and render effects.
+pub const DESIGN_WIDTH: f32 = 1920.0;
+pub const DESIGN_HEIGHT: f32 = 1080.0;
 
 /// Position anchors, inspired by WebGAL's -left/-right/-center system.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

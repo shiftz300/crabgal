@@ -24,7 +24,9 @@ use bevy::{
 };
 use std::borrow::Cow;
 
-const MAX_BLUR_STRENGTH: f32 = 96.0;
+// Keep CPU scissor padding aligned with the shader clamp. Larger values used
+// to enlarge the processed area without producing a stronger visual result.
+const MAX_BLUR_STRENGTH: f32 = 48.0;
 
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]

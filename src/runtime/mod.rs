@@ -1,7 +1,9 @@
 pub(crate) mod asset_reader;
+pub(crate) mod audio;
 mod bootstrap;
 pub(crate) mod input;
 pub(crate) mod lifecycle;
+mod logging;
 pub(crate) mod resize;
 pub(crate) mod resources;
 pub(crate) mod tick;
@@ -50,6 +52,8 @@ impl Plugin for GamePlugin {
             )
                 .chain(),
         );
+        #[cfg(feature = "audio-opus")]
+        app.add_plugins(audio::OpusAudioPlugin);
         app.add_plugins((RuntimePlugin, ScenePlugin, StoragePlugin, GameUiPlugin));
     }
 }

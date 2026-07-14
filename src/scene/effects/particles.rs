@@ -76,11 +76,11 @@ pub(crate) fn animate(
         particle.position += velocity * delta;
         particle.position.x += (elapsed * 1.7 + particle.drift).sin() * 18.0 * delta;
         if particle.position.y < -40.0 {
-            particle.position.y = DESIGN_HEIGHT + 40.0;
+            particle.position.y = DESIGN_HEIGHT + 30.0;
         }
         if particle.position.x < -40.0 {
-            particle.position.x = DESIGN_WIDTH + 40.0;
-        } else if particle.position.x > DESIGN_WIDTH + 40.0 {
+            particle.position.x = DESIGN_WIDTH + 30.0;
+        } else if particle.position.x > DESIGN_WIDTH + 30.0 {
             particle.position.x = -40.0;
         }
         transform.translation = viewport.world_from_design(particle.position).extend(0.8);

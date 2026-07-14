@@ -82,13 +82,13 @@ pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load(project_root: &Path) -> Option<RuntimeSettings> {
+pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
     let bytes = fs::read(path(project_root)).ok()?;
     let file: SettingsFile = bincode::deserialize(&bytes).ok()?;
     (file.version == SETTINGS_VERSION).then_some(file.settings)
 }
 
-fn sanitize(settings: &mut RuntimeSettings) {
+pub(crate) fn sanitize(settings: &mut RuntimeSettings) {
     settings.master_volume = settings.master_volume.clamp(0.0, 1.0);
     settings.vocal_volume = settings.vocal_volume.clamp(0.0, 1.0);
     settings.bgm_volume = settings.bgm_volume.clamp(0.0, 1.0);

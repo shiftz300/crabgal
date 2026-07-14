@@ -43,7 +43,7 @@ PostUpdate after UiSystems::Layout:
 ```
 
 背景和立绘使用稳定 ECS 标识进行增量同步。`DesignViewport` 集中处理
-2560×1440 设计空间、letterbox offset 和 Bevy world 坐标转换。
+1920×1080 设计空间、letterbox offset 和 Bevy world 坐标转换。
 
 ## 三相机与模糊合成
 

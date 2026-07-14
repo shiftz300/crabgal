@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
@@ -11,16 +11,84 @@ use crate::ui::foundation::UiFonts;
 
 const LOOKAHEAD_ACTIONS: usize = 20;
 
+#[derive(Default)]
+pub(crate) struct PrefetchState {
+    initialized: bool,
+    scene: String,
+    cursor: usize,
+    ended: bool,
+    background: Option<String>,
+    sprites: HashMap<String, String>,
+    vocal: Option<String>,
+    bgm: Option<String>,
+    effects: HashMap<String, String>,
+}
+
+impl PrefetchState {
+    fn matches(&self, state: &GameState) -> bool {
+        self.initialized
+            && self.scene == state.current_scene
+            && self.cursor == state.cursor
+            && self.ended == state.ended
+            && self.background == state.bg
+            && self.vocal.as_ref()
+                == state
+                    .dialogue
+                    .as_ref()
+                    .and_then(|dialogue| dialogue.vocal.as_ref())
+            && self.bgm == state.bgm.file
+            && self.sprites.len() == state.sprites.len()
+            && state
+                .sprites
+                .iter()
+                .all(|(id, sprite)| self.sprites.get(id) == Some(&sprite.image))
+            && self.effects.len() == state.looping_effects.len()
+            && state
+                .looping_effects
+                .iter()
+                .all(|(id, effect)| self.effects.get(id) == Some(&effect.file))
+    }
+
+    fn capture(&mut self, state: &GameState) {
+        self.initialized = true;
+        self.scene.clone_from(&state.current_scene);
+        self.cursor = state.cursor;
+        self.ended = state.ended;
+        self.background.clone_from(&state.bg);
+        self.vocal = state
+            .dialogue
+            .as_ref()
+            .and_then(|dialogue| dialogue.vocal.clone());
+        self.bgm.clone_from(&state.bgm.file);
+        self.sprites.clear();
+        self.sprites.extend(
+            state
+                .sprites
+                .iter()
+                .map(|(id, sprite)| (id.clone(), sprite.image.clone())),
+        );
+        self.effects.clear();
+        self.effects.extend(
+            state
+                .looping_effects
+                .iter()
+                .map(|(id, effect)| (id.clone(), effect.file.clone())),
+        );
+    }
+}
+
 pub fn prefetch_local_assets(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
     manifest: Res<LocalAssetManifest>,
     asset_server: Res<AssetServer>,
     mut cache: ResMut<LocalAssetCache>,
+    mut previous: Local<PrefetchState>,
 ) {
-    if !state.is_changed() && !manifest.is_changed() {
+    if previous.matches(&state) && !manifest.is_changed() {
         return;
     }
+    previous.capture(&state);
     let mut desired = HashMap::new();
     // While the title is open, use otherwise idle time to warm the entry scene.
     // This also keeps its handles alive after returning from the game, instead
@@ -82,15 +150,17 @@ pub fn prefetch_local_assets(
         desired.insert(config.effect_path(&effect.file), ResourceKind::Effect);
     }
 
-    let desired_paths = desired.keys().cloned().collect::<HashSet<_>>();
-    cache.0.retain(|path, _| desired_paths.contains(path));
+    if cache.0.len() == desired.len() && desired.keys().all(|path| cache.0.contains_key(path)) {
+        return;
+    }
+    cache.0.retain(|path, _| desired.contains_key(path));
     for (path, kind) in desired {
         cache.0.entry(path.clone()).or_insert_with(|| match kind {
             ResourceKind::Background | ResourceKind::Figure | ResourceKind::MiniAvatar => {
                 asset_server.load::<Image>(path).untyped()
             }
             ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
-                asset_server.load::<AudioSource>(path).untyped()
+                crate::runtime::audio::load_untyped(&asset_server, path)
             }
         });
     }
@@ -102,6 +172,9 @@ pub fn update_loading_gate(
     fonts: Res<UiFonts>,
     mut gate: ResMut<AssetLoadingGate>,
 ) {
+    if !gate.blocked && !cache.is_changed() && !fonts.is_changed() {
+        return;
+    }
     let pending = |id| {
         matches!(
             asset_server.load_state(id),
@@ -120,5 +193,32 @@ fn resolve_path(kind: ResourceKind, path: &str, config: &GameConfigResource) -> 
         ResourceKind::Voice => config.voice_path(path),
         ResourceKind::Bgm => config.bgm_path(path),
         ResourceKind::Effect => config.effect_path(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typewriter_progress_does_not_rebuild_the_prefetch_set() {
+        let mut state = crabgal_core::State::new();
+        state.current_scene = "main".into();
+        state.dialogue = Some(crabgal_core::state::Dialogue {
+            speaker: "A".into(),
+            text: "hello".into(),
+            markup: "hello".into(),
+            visible_chars: 1,
+            vocal: Some("line.ogg".into()),
+            volume: 1.0,
+            auto_advance: false,
+        });
+        let mut previous = PrefetchState::default();
+        previous.capture(&GameState(state.clone()));
+
+        state.dialogue.as_mut().unwrap().visible_chars = 2;
+        assert!(previous.matches(&GameState(state.clone())));
+        state.cursor += 1;
+        assert!(!previous.matches(&GameState(state)));
     }
 }

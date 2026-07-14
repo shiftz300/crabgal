@@ -4,16 +4,22 @@ set -euo pipefail
 project="${1:-projects/test-project}"
 name="${2:-crabgal}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$root/dev/scripts/lib/audio-features.sh"
 bundle="$root/target/bundle/macos/$name.app"
+version="$(awk '
+    /^\[workspace.package\]$/ { workspace = 1; next }
+    /^\[/ { workspace = 0 }
+    workspace && /^version = / { gsub(/version = |"/, ""); print; exit }
+' "$root/Cargo.toml")"
 
 cd "$root"
-cargo build --release
+build_engine_for_project "$project" --release
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/project"
 cp target/release/crabgal "$bundle/Contents/MacOS/crabgal"
 cp -R "$project"/. "$bundle/Contents/Resources/project/"
 
-sed "s/__NAME__/$name/g" > "$bundle/Contents/Info.plist" <<'PLIST'
+sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -21,7 +27,7 @@ sed "s/__NAME__/$name/g" > "$bundle/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>dev.crabgal.__NAME__</string>
 <key>CFBundleName</key><string>__NAME__</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.0</string>
+<key>CFBundleShortVersionString</key><string>__VERSION__</string>
 </dict></plist>
 PLIST
 

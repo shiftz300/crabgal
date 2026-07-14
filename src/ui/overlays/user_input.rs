@@ -45,10 +45,10 @@ pub(crate) fn setup(
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: Val::Px(940.0),
-                    padding: UiRect::all(Val::Px(48.0)),
+                    width: Val::Px(705.0),
+                    padding: UiRect::all(Val::Px(36.0)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(28.0),
+                    row_gap: Val::Px(21.0),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.035, 0.04, 0.055, 0.94)),
@@ -59,7 +59,7 @@ pub(crate) fn setup(
                     Text::new("INPUT"),
                     TextFont {
                         font: fonts.text.clone().into(),
-                        font_size: FontSize::Px(38.0),
+                        font_size: FontSize::Px(28.5),
                         ..default()
                     },
                     TextColor(Color::srgba(1.0, 1.0, 1.0, 0.88)),
@@ -67,8 +67,8 @@ pub(crate) fn setup(
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
-                        min_height: Val::Px(92.0),
-                        padding: UiRect::axes(Val::Px(28.0), Val::Px(18.0)),
+                        min_height: Val::Px(69.0),
+                        padding: UiRect::axes(Val::Px(21.0), Val::Px(13.5)),
                         align_items: AlignItems::Center,
                         ..default()
                     },
@@ -78,7 +78,7 @@ pub(crate) fn setup(
                         Text::new(""),
                         TextFont {
                             font: fonts.text.clone().into(),
-                            font_size: FontSize::Px(40.0),
+                            font_size: FontSize::Px(30.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -89,8 +89,8 @@ pub(crate) fn setup(
                     Button,
                     Node {
                         align_self: AlignSelf::FlexEnd,
-                        min_width: Val::Px(210.0),
-                        padding: UiRect::axes(Val::Px(34.0), Val::Px(18.0)),
+                        min_width: Val::Px(157.5),
+                        padding: UiRect::axes(Val::Px(25.5), Val::Px(13.5)),
                         justify_content: JustifyContent::Center,
                         ..default()
                     },
@@ -99,7 +99,7 @@ pub(crate) fn setup(
                         Text::new("OK"),
                         TextFont {
                             font: fonts.text.clone().into(),
-                            font_size: FontSize::Px(30.0),
+                            font_size: FontSize::Px(22.5),
                             ..default()
                         },
                         TextColor(Color::WHITE),

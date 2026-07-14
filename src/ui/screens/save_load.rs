@@ -13,7 +13,7 @@ use crate::runtime::resources::ProjectRoot;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
-    UiFonts, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text, text_weight,
+    UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text, text_weight,
 };
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
@@ -92,6 +92,11 @@ impl SavePreviewCache {
                 handle,
             },
         );
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.ready.clear();
+        self.pending.clear();
     }
 }
 
@@ -565,7 +570,7 @@ fn spawn_save_content(
             .spawn((Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(7.0),
-                margin: UiRect::bottom(Val::Px(44.0)),
+                margin: UiRect::bottom(Val::Px(33.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -830,6 +835,7 @@ fn spawn_page_button(
     pages
         .spawn((
             Button,
+            UiSoundStyle::Switch,
             SaveLoadPage(page),
             SaveLoadPageVisual {
                 selected,
@@ -839,9 +845,9 @@ fn spawn_page_button(
             },
             UiTransform::default(),
             Node {
-                width: Val::Px(70.0),
-                height: Val::Px(78.0),
-                border: UiRect::bottom(Val::Px(6.0)),
+                width: Val::Px(60.0),
+                height: Val::Px(58.5),
+                border: UiRect::bottom(Val::Px(4.5)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -864,7 +870,7 @@ fn spawn_page_button(
             text_weight(
                 page.to_string(),
                 font,
-                32.0,
+                24.0,
                 if selected { 0.62 } else { 0.2 },
                 if selected {
                     FontWeight::BOLD
@@ -913,7 +919,7 @@ fn spawn_slot(
         Vec3::ZERO
     };
     let base_alpha = if empty {
-        0.075
+        0.045
     } else if enabled {
         0.11
     } else {
@@ -970,7 +976,7 @@ fn spawn_slot(
                     children![text_weight(
                         slot.to_string(),
                         font,
-                        29.0,
+                        21.75,
                         primary_text_alpha,
                         FontWeight::BOLD,
                     )]
@@ -979,7 +985,7 @@ fn spawn_slot(
                     Node {
                         width: Val::Percent(78.0),
                         height: Val::Percent(100.0),
-                        padding: UiRect::left(Val::Px(10.0)),
+                        padding: UiRect::left(Val::Px(7.5)),
                         align_items: AlignItems::Center,
                         ..default()
                     },
@@ -988,7 +994,7 @@ fn spawn_slot(
                     } else {
                         Color::srgba(0.0, 0.0, 0.0, 0.32)
                     }),
-                    children![text(slot_time(&status), font, 21.0, secondary_text_alpha,)]
+                    children![text(slot_time(&status), font, 15.75, secondary_text_alpha,)]
                 )
             ],
         ));
@@ -1006,9 +1012,9 @@ fn spawn_slot(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(40.0),
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(9.0)),
+                padding: UiRect::axes(Val::Px(10.5), Val::Px(6.75)),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(7.0),
+                row_gap: Val::Px(5.25),
                 ..default()
             },
             BackgroundColor(if empty {
@@ -1020,11 +1026,11 @@ fn spawn_slot(
                 text_weight(
                     slot_speaker(&status),
                     font,
-                    26.0,
+                    19.5,
                     primary_text_alpha,
                     FontWeight::BOLD,
                 ),
-                text(detail, font, 23.0, secondary_text_alpha)
+                text(detail, font, 17.25, secondary_text_alpha)
             ],
         ));
     });

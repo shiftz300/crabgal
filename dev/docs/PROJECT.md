@@ -78,7 +78,7 @@ crabgal/
 
 ## Design constraints
 
-- 设计空间固定为 2560×1440，由 viewport 和 letterbox 适配窗口。
+- 设计空间固定为 1920×1080，背景纹理解码上限与设计分辨率一致，由 viewport 和 letterbox 适配窗口。
 - 三相机职责固定：Scene、普通 UI、Dialog/Modal。
 - `crabgal-core` 不依赖 Bevy。
 - 内容来源按配置顺序分层，后声明来源覆盖前面的同路径资产和同名 scene。

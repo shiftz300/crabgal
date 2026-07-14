@@ -1,6 +1,8 @@
 # crabgal game configuration
 title: "crabgal Demo"
 title_background: "bg.webp"
+project:
+  description: "A compact crabgal feature and visual acceptance project."
 
 # Sources are layered from low to high priority. The shared asset layer proves
 # that scripts and media no longer need to live under one physical root.
@@ -15,13 +17,13 @@ adapter:
 
 assets:
   bgm:
-    v16.wav: "vocal/v16.wav"
+    v16.opus: "vocal/v16.opus"
 
 fonts:
-  speaker_size: 52.0
-  dialogue_size: 60.0
-  icon_size: 26.0
-  label_size: 24.0
+  speaker_size: 39.0
+  dialogue_size: 45.0
+  icon_size: 19.5
+  label_size: 18.0
 
 styles:
   textbox_alpha: 0.72
@@ -29,8 +31,8 @@ styles:
   auto_delay: 2.0
 
 layout:
-  anchor_offset: 40
-  sprite_height: 1100
+  anchor_offset: 30
+  sprite_height: 825
   textbox_left: 7.0
   textbox_dodge_left: 10.0
   textbox_bottom: 1.0

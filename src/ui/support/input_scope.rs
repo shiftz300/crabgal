@@ -1,8 +1,10 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::runtime::resources::{AssetLoadingGate, GameState};
 use crate::ui::backlog::BacklogUiState;
 use crate::ui::dialog::DialogRequest;
+use crate::ui::extra::ExtraUi;
 use crate::ui::save_load::SaveLoadUi;
 use crate::ui::settings_panel::SettingsUi;
 
@@ -13,31 +15,38 @@ pub(crate) enum UiInputScope {
     Dialog,
     Menu,
     Backlog,
+    Extra,
     Title,
     #[default]
     Stage,
 }
 
-pub(crate) fn sync(
-    loading: Res<AssetLoadingGate>,
-    dialog: Option<Res<DialogRequest>>,
-    settings: Res<SettingsUi>,
-    save_load: Res<SaveLoadUi>,
-    backlog: Res<BacklogUiState>,
-    state: Res<GameState>,
-    mut scope: ResMut<UiInputScope>,
-) {
-    *scope = if loading.blocked {
+#[derive(SystemParam)]
+pub(crate) struct InputScopeContext<'w> {
+    loading: Res<'w, AssetLoadingGate>,
+    dialog: Option<Res<'w, DialogRequest>>,
+    settings: Res<'w, SettingsUi>,
+    save_load: Res<'w, SaveLoadUi>,
+    backlog: Res<'w, BacklogUiState>,
+    extra: Res<'w, ExtraUi>,
+    state: Res<'w, GameState>,
+    scope: ResMut<'w, UiInputScope>,
+}
+
+pub(crate) fn sync(mut context: InputScopeContext) {
+    *context.scope = if context.loading.blocked {
         UiInputScope::Loading
-    } else if state.user_input.is_some() {
+    } else if context.state.user_input.is_some() {
         UiInputScope::UserInput
-    } else if dialog.is_some() {
+    } else if context.dialog.is_some() {
         UiInputScope::Dialog
-    } else if settings.open || save_load.mode.is_some() {
+    } else if context.settings.open || context.save_load.mode.is_some() {
         UiInputScope::Menu
-    } else if backlog.open {
+    } else if context.backlog.open {
         UiInputScope::Backlog
-    } else if state.ended {
+    } else if context.extra.open {
+        UiInputScope::Extra
+    } else if context.state.ended {
         UiInputScope::Title
     } else {
         UiInputScope::Stage

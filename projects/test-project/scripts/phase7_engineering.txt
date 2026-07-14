@@ -2,6 +2,6 @@
 
 comment:This line is an explicit no-op and must not become dialogue.
 unlockCg:bg.webp -name="樱花河道"
-unlockBgm:v16.wav -name="Phase 4 测试音频"
+unlockBgm:v16.opus -name="Phase 4 测试音频"
 小夜:CG 与 BGM 已写入持久鉴赏数据；结束后可在标题 EXTRA 查看计数。
 小夜:本场景也可用触控点击、手柄 South 推进，West 切换 Auto，右扳机切换 Skip。

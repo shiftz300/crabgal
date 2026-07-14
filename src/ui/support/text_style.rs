@@ -16,8 +16,8 @@ pub struct TextBackdrop;
 #[derive(Component)]
 pub(crate) struct NoTextShadow;
 
-/// Eight low-alpha glyph samples form a compact, diffuse drop shadow without
-/// duplicating UI text entities or paying for a full-screen blur pass.
+/// Four bilinear-filtered diagonal samples form a compact diffuse shadow while
+/// keeping global text geometry and extracted draw items bounded.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct SoftTextShadow {
     radius: f32,
@@ -60,8 +60,8 @@ pub fn apply_text_shadows(texts: Query<Entity, TextShadowTarget>, mut commands: 
         commands.entity(entity).insert((
             TextBackdrop,
             SoftTextShadow {
-                radius: 3.2,
-                color: Color::srgba(0.0, 0.0, 0.0, 0.26),
+                radius: 2.4,
+                color: Color::srgba(0.0, 0.0, 0.0, 0.38),
             },
         ));
     }
@@ -98,15 +98,12 @@ fn extract_soft_text_shadows(
             .color
             .with_alpha(shadow.color.alpha() * text_color.0.alpha());
         let radius = shadow.radius / node.inverse_scale_factor();
+        let diagonal = radius * 0.8;
         let offsets = [
-            Vec2::new(-radius, 0.0),
-            Vec2::new(radius, 0.0),
-            Vec2::new(0.0, -radius),
-            Vec2::new(0.0, radius),
-            Vec2::new(-radius * 0.707, -radius * 0.707),
-            Vec2::new(radius * 0.707, -radius * 0.707),
-            Vec2::new(-radius * 0.707, radius * 0.707),
-            Vec2::new(radius * 0.707, radius * 0.707),
+            Vec2::new(-diagonal, -diagonal),
+            Vec2::new(diagonal, -diagonal),
+            Vec2::new(-diagonal, diagonal),
+            Vec2::new(diagonal, diagonal),
         ];
         let clip = text_clip(node, global_transform, maybe_clip, text_scroll, radius);
 

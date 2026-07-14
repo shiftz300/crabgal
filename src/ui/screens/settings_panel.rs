@@ -8,11 +8,11 @@ use bevy::ui::FocusPolicy;
 use bevy::window::{MonitorSelection, WindowMode};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::resources::ProjectRoot;
+use crate::runtime::resources::{GameConfigResource, ProjectRoot};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, SkipMode, ToggleStates, UiBlurSource};
 use crate::ui::foundation::{
-    UiFonts, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text_weight,
+    UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text_weight,
 };
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
@@ -27,6 +27,43 @@ const OPTION_FILL_ALPHA: f32 = 0.188;
 const PAGE_TEXT_IDLE: f32 = 0.175;
 const PAGE_TEXT_HOVER: f32 = 0.5;
 const PAGE_TEXT_ACTIVE: f32 = 0.8;
+const SETTINGS_COLUMNS: u16 = 3;
+
+#[derive(Clone, Copy)]
+struct SettingsGridCell {
+    column: i16,
+    row: i16,
+    span: u16,
+}
+
+impl SettingsGridCell {
+    const fn at(column: i16, row: i16) -> Self {
+        Self {
+            column,
+            row,
+            span: 1,
+        }
+    }
+
+    const fn spanning(column: i16, row: i16, span: u16) -> Self {
+        Self { column, row, span }
+    }
+
+    const fn from_index(index: usize) -> Self {
+        Self::at(
+            (index % SETTINGS_COLUMNS as usize) as i16 + 1,
+            (index / SETTINGS_COLUMNS as usize) as i16 + 1,
+        )
+    }
+
+    fn column(self) -> GridPlacement {
+        GridPlacement::start_span(self.column, self.span)
+    }
+
+    fn row(self) -> GridPlacement {
+        GridPlacement::start(self.row)
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct SettingsUi {
@@ -127,8 +164,8 @@ pub(crate) fn spawn_menu_watermark(
         SettingsWatermark::entering(),
         Node {
             position_type: PositionType::Absolute,
-            right: Val::Px(52.0),
-            bottom: Val::Px(24.0),
+            right: Val::Px(39.0),
+            bottom: Val::Px(18.0),
             ..default()
         },
         FocusPolicy::Pass,
@@ -136,7 +173,7 @@ pub(crate) fn spawn_menu_watermark(
         Text::new(label),
         TextFont {
             font: font.clone().into(),
-            font_size: FontSize::from(320.0),
+            font_size: FontSize::from(240.0),
             weight: FontWeight::BOLD,
             ..default()
         },
@@ -179,6 +216,7 @@ pub(crate) enum SettingsPage {
     System,
     Display,
     Audio,
+    About,
 }
 
 impl SettingsPage {
@@ -187,6 +225,7 @@ impl SettingsPage {
             Self::System => 0,
             Self::Display => 1,
             Self::Audio => 2,
+            Self::About => 3,
         }
     }
 }
@@ -255,7 +294,11 @@ pub(crate) enum SettingAction {
     SetSkip(bool),
     SetFullscreen(bool),
     SetTextSize(u8),
-    Noop,
+    ClearSaves,
+    ResetSettings,
+    ClearAll,
+    ExportData,
+    ImportData,
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -370,6 +413,66 @@ pub(crate) struct SettingValueBubble(pub(crate) SettingKind);
 pub(crate) struct SettingChoice(pub(crate) SettingAction);
 
 #[derive(Component)]
+pub(crate) struct LanguageDropdownButton;
+
+#[derive(Component)]
+pub(crate) struct LanguageDropdownOption;
+
+#[derive(Component)]
+pub(crate) struct LanguageDropdownOptions;
+
+#[derive(Component)]
+pub(crate) struct LanguageDropdownIcon;
+
+#[derive(Component)]
+pub(crate) struct AboutRepositoryLink;
+
+#[derive(Component)]
+pub(crate) struct AboutRepositoryLabel;
+
+#[derive(Component)]
+pub(crate) struct AboutRepositoryUnderline;
+
+#[derive(Component)]
+pub(crate) struct AboutRepositoryVisual {
+    underline_width: f32,
+    text_alpha: f32,
+}
+
+impl AboutRepositoryVisual {
+    pub(crate) fn is_animating(&self, interaction: Interaction) -> bool {
+        let (underline, text) = about_repository_targets(interaction);
+        (self.underline_width - underline).abs() > 0.001 || (self.text_alpha - text).abs() > 0.001
+    }
+}
+
+type AboutRepositoryLinkQuery<'w, 's> =
+    Query<'w, 's, &'static Interaction, (With<AboutRepositoryLink>, Changed<Interaction>)>;
+
+type AboutRepositoryAnimationQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static mut AboutRepositoryVisual,
+        &'static Children,
+    ),
+    With<AboutRepositoryLink>,
+>;
+
+#[derive(Component)]
+pub(crate) struct LanguageDropdownAnimation {
+    progress: f32,
+    target: f32,
+}
+
+impl LanguageDropdownAnimation {
+    pub(crate) fn is_animating(&self) -> bool {
+        (self.progress - self.target).abs() > 0.001
+    }
+}
+
+#[derive(Component)]
 pub(crate) struct SettingChoiceVisual {
     selected: bool,
     hovered: bool,
@@ -423,6 +526,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
     camera: Query<'w, 's, Entity, With<DialogCamera>>,
     blur_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
+    config: Res<'w, GameConfigResource>,
     fades: Query<'w, 's, &'static mut MenuFade>,
     watermarks: Query<'w, 's, (&'static mut SettingsWatermark, &'static mut Text)>,
     save_roots:
@@ -631,7 +735,7 @@ pub fn sync_settings(
         ))
         .with_children(|root| {
             spawn_header(root, MenuHeaderActive::Config, &font, &icon_font);
-            spawn_options_content(root, &ui, &settings, &font);
+            spawn_options_content(root, &ui, &settings, &context.config, &font, &icon_font);
         });
 }
 
@@ -661,7 +765,9 @@ fn spawn_options_content(
     root: &mut ChildSpawnerCommands,
     ui: &SettingsUi,
     settings: &RuntimeSettings,
+    config: &GameConfigResource,
     font: &Handle<Font>,
+    icon_font: &Handle<Font>,
 ) {
     root.spawn((
         SettingsContent,
@@ -680,27 +786,28 @@ fn spawn_options_content(
             .spawn((Node {
                 width: Val::Percent(100.0),
                 flex_grow: 1.0,
-                padding: UiRect::axes(Val::Px(36.0), Val::Px(18.0)),
+                padding: UiRect::axes(Val::Px(27.0), Val::Px(13.5)),
                 ..default()
             },))
             .with_children(|body| {
                 body.spawn((Node {
                     width: Val::Percent(18.0),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
+                    row_gap: Val::Px(6.0),
                     ..default()
                 },))
                     .with_children(|pages| {
                         spawn_page_button(pages, "SYSTEM", SettingsPage::System, ui, font);
                         spawn_page_button(pages, "DISPLAY", SettingsPage::Display, ui, font);
                         spawn_page_button(pages, "AUDIO", SettingsPage::Audio, ui, font);
+                        spawn_page_button(pages, "ABOUT", SettingsPage::About, ui, font);
                     });
                 body.spawn((Node {
                     position_type: PositionType::Relative,
                     flex_grow: 1.0,
                     height: Val::Percent(100.0),
-                    padding: UiRect::left(Val::Px(48.0)),
-                    overflow: Overflow::clip(),
+                    padding: UiRect::left(Val::Px(36.0)),
+                    overflow: Overflow::visible(),
                     ..default()
                 },))
                     .with_children(|content| {
@@ -708,8 +815,11 @@ fn spawn_options_content(
                             SettingsPage::System,
                             SettingsPage::Display,
                             SettingsPage::Audio,
+                            SettingsPage::About,
                         ] {
-                            spawn_settings_page(content, page, ui, settings, font);
+                            spawn_settings_page(
+                                content, page, ui, settings, config, font, icon_font,
+                            );
                         }
                     });
             });
@@ -861,6 +971,7 @@ fn spawn_page_button(
     let active = ui.page == page;
     parent.spawn((
         Button,
+        UiSoundStyle::Switch,
         SettingsPageButton(page),
         SettingsPageButtonVisual(if active {
             PAGE_TEXT_ACTIVE
@@ -868,8 +979,8 @@ fn spawn_page_button(
             PAGE_TEXT_IDLE
         }),
         Node {
-            height: Val::Px(84.0),
-            padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+            height: Val::Px(63.0),
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.5)),
             align_items: AlignItems::Center,
             ..default()
         },
@@ -879,7 +990,7 @@ fn spawn_page_button(
             Text::new(label),
             TextFont {
                 font: font.clone().into(),
-                font_size: FontSize::from(48.0),
+                font_size: FontSize::from(36.0),
                 weight: FontWeight::BOLD,
                 ..default()
             },
@@ -902,7 +1013,9 @@ fn spawn_settings_page(
     page: SettingsPage,
     ui: &SettingsUi,
     settings: &RuntimeSettings,
+    config: &GameConfigResource,
     font: &Handle<Font>,
+    icon_font: &Handle<Font>,
 ) {
     let active = ui.page == page;
     parent
@@ -913,45 +1026,77 @@ fn spawn_settings_page(
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(28.0), Val::Px(12.0)),
-                flex_direction: FlexDirection::Row,
-                flex_wrap: FlexWrap::Wrap,
+                padding: UiRect::axes(Val::Px(21.0), Val::Px(9.0)),
+                grid_template_columns: RepeatedGridTrack::flex(SETTINGS_COLUMNS, 1.0),
                 align_items: AlignItems::FlexStart,
                 align_content: AlignContent::FlexStart,
-                overflow: Overflow::scroll_y(),
-                display: if active { Display::Flex } else { Display::None },
+                overflow: if matches!(page, SettingsPage::System | SettingsPage::About) {
+                    Overflow::visible()
+                } else {
+                    Overflow::scroll_y()
+                },
+                display: if active {
+                    settings_page_display(page)
+                } else {
+                    Display::None
+                },
                 ..default()
             },
         ))
         .with_children(|content| match page {
             SettingsPage::System => {
-                spawn_sliders(content, SYSTEM_SLIDERS, settings, font);
-                spawn_skip_row(content, settings, font);
-                spawn_static_row(content, "LANGUAGE", &["简体中文"], font, 30.0);
-                spawn_static_row(
+                let auto_play = SYSTEM_SLIDERS[0];
+                spawn_row(
+                    content,
+                    font,
+                    auto_play.label,
+                    auto_play.kind,
+                    auto_play.kind.ratio(settings),
+                    SettingsGridCell::at(1, 1),
+                );
+                spawn_skip_row(content, settings, font, SettingsGridCell::at(2, 1));
+                spawn_language_row(content, font, icon_font, SettingsGridCell::at(3, 1));
+                spawn_choice_row(
                     content,
                     "CLEAR OR RESTORE DATA",
-                    &["CLEAR SAVES", "RESET SETTINGS", "CLEAR ALL"],
+                    &[
+                        ("CLEAR SAVES", SettingAction::ClearSaves),
+                        ("RESET SETTINGS", SettingAction::ResetSettings),
+                        ("CLEAR ALL", SettingAction::ClearAll),
+                    ],
+                    usize::MAX,
                     font,
-                    54.0,
+                    SettingsGridCell::spanning(1, 2, 2),
                 );
-                spawn_static_row(
+                spawn_choice_row(
                     content,
                     "IMPORT OR EXPORT SAVES AND OPTIONS",
-                    &["EXPORT", "IMPORT"],
+                    &[
+                        ("EXPORT", SettingAction::ExportData),
+                        ("IMPORT", SettingAction::ImportData),
+                    ],
+                    usize::MAX,
                     font,
-                    38.0,
+                    SettingsGridCell::at(3, 2),
                 );
-                spawn_about(content, font);
             }
             SettingsPage::Display => {
-                spawn_fullscreen_row(content, settings, font);
-                spawn_text_size_row(content, settings, font);
-                spawn_sliders(content, DISPLAY_SLIDERS, settings, font);
-                spawn_text_preview(content, settings, font);
+                spawn_fullscreen_row(content, settings, font, SettingsGridCell::at(1, 1));
+                spawn_text_size_row(content, settings, font, SettingsGridCell::at(2, 1));
+                spawn_sliders(content, DISPLAY_SLIDERS, settings, font, 2);
+                spawn_text_preview(content, settings, font, SettingsGridCell::spanning(1, 3, 3));
             }
-            SettingsPage::Audio => spawn_sliders(content, AUDIO_SLIDERS, settings, font),
+            SettingsPage::Audio => spawn_sliders(content, AUDIO_SLIDERS, settings, font, 0),
+            SettingsPage::About => spawn_about_page(content, config, font),
         });
+}
+
+fn settings_page_display(page: SettingsPage) -> Display {
+    if page == SettingsPage::About {
+        Display::Flex
+    } else {
+        Display::Grid
+    }
 }
 
 fn spawn_sliders(
@@ -959,23 +1104,247 @@ fn spawn_sliders(
     specs: &[SliderSpec],
     settings: &RuntimeSettings,
     font: &Handle<Font>,
+    start_index: usize,
 ) {
-    for spec in specs {
+    for (offset, spec) in specs.iter().enumerate() {
         spawn_row(
             content,
             font,
             spec.label,
             spec.kind,
             spec.kind.ratio(settings),
-            30.0,
+            SettingsGridCell::from_index(start_index + offset),
         );
     }
+}
+
+fn spawn_about_page(
+    content: &mut ChildSpawnerCommands,
+    config: &GameConfigResource,
+    font: &Handle<Font>,
+) {
+    let project_description = if config.project.description.trim().is_empty() {
+        "No project description has been provided."
+    } else {
+        config.project.description.trim()
+    };
+    let loader_tree = loader_tree(config);
+    let runtime = format!(
+        "crabgal {}  ·  {} / {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+
+    content
+        .spawn((Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            padding: UiRect::new(Val::Px(9.0), Val::Px(36.0), Val::Px(9.0), Val::Px(18.0)),
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(60.0),
+            ..default()
+        },))
+        .with_children(|page| {
+            page.spawn((Node {
+                width: Val::Percent(48.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                ..default()
+            },))
+                .with_children(|engine| {
+                    engine.spawn(about_title("ABOUT CRABGAL", font, 48.0));
+                    engine.spawn(about_copy(
+                        "A refreshingly simple visual-novel engine.",
+                        font,
+                        22.5,
+                        0.58,
+                    ));
+                    spawn_about_section(engine, "VERSION & SYSTEM", &runtime, font, Val::Px(42.0));
+                    spawn_repository_link(engine, font);
+                });
+
+            page.spawn((Node {
+                width: Val::Percent(46.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                ..default()
+            },))
+                .with_children(|project| {
+                    project.spawn(about_title("CURRENT PROJECT", font, 39.0));
+                    project.spawn(about_title(config.title.clone(), font, 31.5));
+                    project.spawn(about_copy(project_description, font, 22.5, 0.62));
+                    spawn_about_section(project, "LOADER", &loader_tree, font, Val::Px(36.0));
+                });
+        });
+}
+
+fn loader_tree(config: &GameConfigResource) -> String {
+    let mut lines = vec!["ASSET".to_owned()];
+    for source in &config.adapter.asset {
+        lines.push(format!(
+            "  {}",
+            format_loader_source(&source.format, &source.path)
+        ));
+    }
+    lines.push(format!("SCRIPT\n  [{}]", config.adapter.script));
+    lines.push(format!("STORE\n  [{}]", config.adapter.store));
+    lines.join("\n")
+}
+
+fn format_loader_source(adapter: &str, path: &str) -> String {
+    let path = path.trim().trim_end_matches('/');
+    if path.is_empty() || path == "." {
+        return format!("[{adapter}]");
+    }
+    let path = path.strip_prefix("./").unwrap_or(path);
+    format!("[{adapter}]/{path}")
+}
+
+fn spawn_repository_link(parent: &mut ChildSpawnerCommands, font: &Handle<Font>) {
+    parent
+        .spawn((Node {
+            width: Val::Percent(100.0),
+            margin: UiRect::top(Val::Px(27.0)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(7.5),
+            ..default()
+        },))
+        .with_children(|section| {
+            section.spawn(about_title("REPOSITORY", font, 25.5));
+            section
+                .spawn((
+                    Button,
+                    AboutRepositoryLink,
+                    AboutRepositoryVisual {
+                        underline_width: 0.0,
+                        text_alpha: 0.58,
+                    },
+                    Node {
+                        position_type: PositionType::Relative,
+                        align_self: AlignSelf::FlexStart,
+                        padding: UiRect::vertical(Val::Px(6.0)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|link| {
+                    link.spawn((
+                        AboutRepositoryUnderline,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::ZERO,
+                            bottom: Val::ZERO,
+                            width: Val::ZERO,
+                            height: Val::Px(1.5),
+                            ..default()
+                        },
+                        FocusPolicy::Pass,
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
+                    ));
+                    link.spawn((
+                        AboutRepositoryLabel,
+                        ZIndex(1),
+                        text_weight(
+                            "github.com/shiftz300/crabgal",
+                            font,
+                            20.25,
+                            0.58,
+                            FontWeight::NORMAL,
+                        ),
+                    ));
+                });
+        });
+}
+
+pub fn handle_about_repository_link(links: AboutRepositoryLinkQuery) {
+    for interaction in &links {
+        if *interaction == Interaction::Pressed {
+            bevy::tasks::IoTaskPool::get()
+                .spawn(async {
+                    if let Err(error) = webbrowser::open("https://github.com/shiftz300/crabgal") {
+                        log::error!("failed to open crabgal repository: {error}");
+                    }
+                })
+                .detach();
+        }
+    }
+}
+
+pub fn animate_about_repository_link(
+    time: Res<Time>,
+    mut links: AboutRepositoryAnimationQuery,
+    mut labels: Query<&mut TextColor, With<AboutRepositoryLabel>>,
+    mut underlines: Query<&mut Node, With<AboutRepositoryUnderline>>,
+) {
+    let amount = exp_lerp(time.delta_secs(), OPTION_TRANSITION_RATE);
+    for (interaction, mut visual, children) in &mut links {
+        if !visual.is_animating(*interaction) {
+            continue;
+        }
+        let (target_underline, target_text) = about_repository_targets(*interaction);
+        visual.underline_width += (target_underline - visual.underline_width) * amount;
+        visual.text_alpha += (target_text - visual.text_alpha) * amount;
+        for child in children.iter() {
+            if let Ok(mut node) = underlines.get_mut(child) {
+                node.width = Val::Percent(visual.underline_width);
+            }
+            if let Ok(mut color) = labels.get_mut(child) {
+                color.0 = Color::srgba(1.0, 1.0, 1.0, visual.text_alpha);
+            }
+        }
+    }
+}
+
+fn about_repository_targets(interaction: Interaction) -> (f32, f32) {
+    match interaction {
+        Interaction::None => (0.0, 0.58),
+        Interaction::Hovered => (100.0, 0.84),
+        Interaction::Pressed => (100.0, 1.0),
+    }
+}
+
+fn spawn_about_section(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    value: &str,
+    font: &Handle<Font>,
+    top: Val,
+) {
+    parent
+        .spawn((Node {
+            width: Val::Percent(100.0),
+            margin: UiRect::top(top),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(7.5),
+            ..default()
+        },))
+        .with_children(|section| {
+            section.spawn(about_title(label, font, 25.5));
+            section.spawn(about_copy(value, font, 20.25, 0.52));
+        });
+}
+
+fn about_title(text: impl Into<String>, font: &Handle<Font>, size: f32) -> impl Bundle {
+    text_weight(text, font, size, 0.76, FontWeight::BOLD)
+}
+
+fn about_copy(text: impl Into<String>, font: &Handle<Font>, size: f32, alpha: f32) -> impl Bundle {
+    (
+        Node {
+            max_width: Val::Percent(100.0),
+            ..default()
+        },
+        text_weight(text, font, size, alpha, FontWeight::NORMAL),
+    )
 }
 
 fn spawn_skip_row(
     content: &mut ChildSpawnerCommands,
     settings: &RuntimeSettings,
     font: &Handle<Font>,
+    cell: SettingsGridCell,
 ) {
     spawn_choice_row(
         content,
@@ -986,14 +1355,171 @@ fn spawn_skip_row(
         ],
         usize::from(settings.skip_all),
         font,
-        30.0,
+        cell,
     );
+}
+
+fn spawn_language_row(
+    content: &mut ChildSpawnerCommands,
+    font: &Handle<Font>,
+    icon_font: &Handle<Font>,
+    cell: SettingsGridCell,
+) {
+    content
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                grid_column: cell.column(),
+                grid_row: cell.row(),
+                min_height: Val::Px(84.0),
+                margin: UiRect::vertical(Val::Px(4.5)),
+                padding: UiRect::all(Val::Px(4.5)),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                ..default()
+            },
+            ZIndex(30),
+        ))
+        .with_children(|row| {
+            row.spawn(setting_text("LANGUAGE", font, 24.0, true));
+            row.spawn((
+                Node {
+                    position_type: PositionType::Relative,
+                    width: Val::Px(150.0),
+                    height: Val::Px(43.5),
+                    margin: UiRect::top(Val::Px(7.5)),
+                    ..default()
+                },
+                ZIndex(30),
+            ))
+            .with_children(|dropdown| {
+                dropdown.spawn((
+                    Button,
+                    UiSoundStyle::Switch,
+                    LanguageDropdownButton,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        padding: UiRect::horizontal(Val::Px(15.0)),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(15.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                    children![
+                        setting_text("简体中文", font, 19.5, false),
+                        (
+                            LanguageDropdownIcon,
+                            text_weight("\u{f282}", icon_font, 18.0, 0.78, FontWeight::NORMAL,),
+                        ),
+                    ],
+                ));
+                dropdown
+                    .spawn((
+                        LanguageDropdownOptions,
+                        LanguageDropdownAnimation {
+                            progress: 0.0,
+                            target: 0.0,
+                        },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::ZERO,
+                            top: Val::Px(43.5),
+                            width: Val::Percent(100.0),
+                            height: Val::ZERO,
+                            display: Display::None,
+                            flex_direction: FlexDirection::Column,
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        FocusPolicy::Block,
+                        BackgroundColor(Color::srgb(0.12, 0.12, 0.135)),
+                        BoxShadow::new(
+                            Color::srgba(0.0, 0.0, 0.0, 0.55),
+                            Val::Px(0.0),
+                            Val::Px(9.0),
+                            Val::Px(0.0),
+                            Val::Px(18.0),
+                        ),
+                        GlobalZIndex(181),
+                    ))
+                    .with_child((
+                        Button,
+                        UiSoundStyle::Switch,
+                        LanguageDropdownOption,
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(43.5),
+                            padding: UiRect::horizontal(Val::Px(15.0)),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                        children![setting_text("简体中文", font, 19.5, false)],
+                    ));
+            });
+        });
+}
+
+pub fn handle_language_dropdown(
+    toggles: Query<&Interaction, (With<LanguageDropdownButton>, Changed<Interaction>)>,
+    options: Query<&Interaction, (With<LanguageDropdownOption>, Changed<Interaction>)>,
+    mut menus: Query<(&mut LanguageDropdownAnimation, &mut Node)>,
+    mut icons: Query<&mut Text, With<LanguageDropdownIcon>>,
+) {
+    let toggle = toggles
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed);
+    let selected = options
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed);
+    if !toggle && !selected {
+        return;
+    }
+    for (mut animation, mut node) in &mut menus {
+        animation.target = if selected || animation.target > 0.5 {
+            0.0
+        } else {
+            node.display = Display::Flex;
+            1.0
+        };
+    }
+    for mut icon in &mut icons {
+        icon.0 = if selected || icon.0 == "\u{f286}" {
+            "\u{f282}".into()
+        } else {
+            "\u{f286}".into()
+        };
+    }
+}
+
+pub fn animate_language_dropdown(
+    time: Res<Time>,
+    mut menus: Query<(&mut LanguageDropdownAnimation, &mut Node)>,
+) {
+    for (mut animation, mut node) in &mut menus {
+        if !animation.is_animating() {
+            if animation.target == 0.0 {
+                node.display = Display::None;
+            }
+            continue;
+        }
+        node.display = Display::Flex;
+        animation.progress +=
+            (animation.target - animation.progress) * exp_lerp(time.delta_secs(), 20.0);
+        if (animation.target - animation.progress).abs() < 0.001 {
+            animation.progress = animation.target;
+        }
+        node.height = Val::Px(43.5 * smoothstep(animation.progress));
+    }
 }
 
 fn spawn_fullscreen_row(
     content: &mut ChildSpawnerCommands,
     settings: &RuntimeSettings,
     font: &Handle<Font>,
+    cell: SettingsGridCell,
 ) {
     spawn_choice_row(
         content,
@@ -1004,7 +1530,7 @@ fn spawn_fullscreen_row(
         ],
         if settings.fullscreen { 0 } else { 1 },
         font,
-        30.0,
+        cell,
     );
 }
 
@@ -1012,6 +1538,7 @@ fn spawn_text_size_row(
     content: &mut ChildSpawnerCommands,
     settings: &RuntimeSettings,
     font: &Handle<Font>,
+    cell: SettingsGridCell,
 ) {
     spawn_choice_row(
         content,
@@ -1023,7 +1550,7 @@ fn spawn_text_size_row(
         ],
         usize::from(settings.text_size),
         font,
-        30.0,
+        cell,
     );
 }
 
@@ -1033,23 +1560,25 @@ fn spawn_choice_row(
     choices: &[(&str, SettingAction)],
     selected: usize,
     font: &Handle<Font>,
-    width: f32,
+    cell: SettingsGridCell,
 ) {
     content
         .spawn((Node {
-            width: Val::Percent(width),
-            min_height: Val::Px(112.0),
-            margin: UiRect::axes(Val::Px(16.0), Val::Px(6.0)),
-            padding: UiRect::all(Val::Px(6.0)),
+            width: Val::Percent(100.0),
+            grid_column: cell.column(),
+            grid_row: cell.row(),
+            min_height: Val::Px(84.0),
+            margin: UiRect::vertical(Val::Px(4.5)),
+            padding: UiRect::all(Val::Px(4.5)),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexStart,
             ..default()
         },))
         .with_children(|row| {
-            row.spawn(setting_text(label, font, 32.0, true));
+            row.spawn(setting_text(label, font, 24.0, true));
             row.spawn((Node {
-                margin: UiRect::top(Val::Px(10.0)),
-                column_gap: Val::Px(8.0),
+                margin: UiRect::top(Val::Px(7.5)),
+                column_gap: Val::Px(6.0),
                 ..default()
             },))
                 .with_children(|buttons| {
@@ -1060,62 +1589,39 @@ fn spawn_choice_row(
         });
 }
 
-fn spawn_static_row(
-    content: &mut ChildSpawnerCommands,
-    label: &str,
-    choices: &[&str],
-    font: &Handle<Font>,
-    width: f32,
-) {
-    let choices: Vec<_> = choices
-        .iter()
-        .map(|text| (*text, SettingAction::Noop))
-        .collect();
-    spawn_choice_row(content, label, &choices, usize::MAX, font, width);
-}
-
-fn spawn_about(content: &mut ChildSpawnerCommands, font: &Handle<Font>) {
-    content.spawn((
-        Node {
-            width: Val::Percent(100.0),
-            margin: UiRect::axes(Val::Px(22.0), Val::Px(6.0)),
-            padding: UiRect::all(Val::Px(6.0)),
-            ..default()
-        },
-        children![setting_text("ABOUT CRABGAL", font, 25.0, true)],
-    ));
-}
-
 fn spawn_text_preview(
     content: &mut ChildSpawnerCommands,
     settings: &RuntimeSettings,
     font: &Handle<Font>,
+    cell: SettingsGridCell,
 ) {
     let size = match settings.text_size {
-        0 => 31.0,
-        2 => 42.0,
-        _ => 36.0,
+        0 => 23.25,
+        2 => 31.5,
+        _ => 27.0,
     };
     content
         .spawn((Node {
             width: Val::Percent(94.0),
-            min_height: Val::Px(330.0),
-            margin: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-            padding: UiRect::all(Val::Px(6.0)),
+            grid_column: cell.column(),
+            grid_row: cell.row(),
+            min_height: Val::Px(247.5),
+            margin: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            padding: UiRect::all(Val::Px(4.5)),
             flex_direction: FlexDirection::Column,
             ..default()
         },))
         .with_children(|preview| {
-            preview.spawn(setting_text("TEXT PREVIEW", font, 32.0, true));
+            preview.spawn(setting_text("TEXT PREVIEW", font, 24.0, true));
             preview
                 .spawn((
                     Node {
                         width: Val::Percent(100.0),
                         flex_grow: 1.0,
-                        margin: UiRect::top(Val::Px(12.0)),
-                        padding: UiRect::axes(Val::Px(36.0), Val::Px(28.0)),
+                        margin: UiRect::top(Val::Px(9.0)),
+                        padding: UiRect::axes(Val::Px(27.0), Val::Px(21.0)),
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(10.0),
+                        row_gap: Val::Px(7.5),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(
@@ -1129,15 +1635,15 @@ fn spawn_text_preview(
                 .with_children(|box_| {
                     box_.spawn((
                         Node {
-                            width: Val::Px(300.0),
-                            height: Val::Px(58.0),
+                            width: Val::Px(225.0),
+                            height: Val::Px(43.5),
                             margin: UiRect::new(
-                                Val::Px(-18.0),
+                                Val::Px(-13.5),
                                 Val::ZERO,
-                                Val::Px(-12.0),
+                                Val::Px(-9.0),
                                 Val::ZERO,
                             ),
-                            padding: UiRect::horizontal(Val::Px(22.0)),
+                            padding: UiRect::horizontal(Val::Px(16.5)),
                             align_items: AlignItems::Center,
                             ..default()
                         },
@@ -1146,7 +1652,7 @@ fn spawn_text_preview(
                     .with_child(setting_text(
                         "TEXT PREVIEW",
                         font,
-                        34.0,
+                        25.5,
                         true,
                     ));
                     box_.spawn((
@@ -1168,27 +1674,30 @@ fn spawn_row(
     label: &str,
     kind: SettingKind,
     ratio: f32,
-    width: f32,
+    cell: SettingsGridCell,
 ) {
     root.spawn((Node {
-        width: Val::Percent(width),
-        min_height: Val::Px(128.0),
-        margin: UiRect::axes(Val::Px(16.0), Val::Px(6.0)),
-        padding: UiRect::all(Val::Px(6.0)),
+        width: Val::Percent(100.0),
+        grid_column: cell.column(),
+        grid_row: cell.row(),
+        min_height: Val::Px(96.0),
+        margin: UiRect::vertical(Val::Px(4.5)),
+        padding: UiRect::all(Val::Px(4.5)),
         flex_direction: FlexDirection::Column,
         align_items: AlignItems::FlexStart,
         ..default()
     },))
         .with_children(|row| {
-            row.spawn(setting_text(label, font, 32.0, true));
+            row.spawn(setting_text(label, font, 24.0, true));
             row.spawn((
                 Button,
+                UiSoundStyle::HoverOnly,
                 SettingSlider(kind),
                 Node {
                     position_type: PositionType::Relative,
-                    width: Val::Px(500.0),
-                    height: Val::Px(50.0),
-                    margin: UiRect::top(Val::Px(10.0)),
+                    width: Val::Px(375.0),
+                    height: Val::Px(37.5),
+                    margin: UiRect::top(Val::Px(7.5)),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -1198,13 +1707,13 @@ fn spawn_row(
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(0.0),
-                        top: Val::Px(20.0),
+                        top: Val::Px(15.0),
                         width: Val::Percent(100.0),
-                        height: Val::Px(10.0),
+                        height: Val::Px(7.5),
                         ..default()
                     },
                     BackgroundColor(Color::BLACK),
-                    Outline::new(Val::Px(5.0), Val::ZERO, Color::srgba(1.0, 1.0, 1.0, 0.19)),
+                    Outline::new(Val::Px(3.75), Val::ZERO, Color::srgba(1.0, 1.0, 1.0, 0.19)),
                 ));
                 slider.spawn((
                     SettingSliderThumb(kind),
@@ -1212,9 +1721,9 @@ fn spawn_row(
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
-                        top: Val::Px(5.0),
+                        top: Val::Px(3.75),
                         width: Val::Percent(10.0),
-                        height: Val::Px(40.0),
+                        height: Val::Px(30.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
@@ -1225,13 +1734,13 @@ fn spawn_row(
                         Node {
                             position_type: PositionType::Absolute,
                             left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
-                            top: Val::Px(-42.0),
+                            top: Val::Px(-31.5),
                             width: Val::Percent(10.0),
-                            height: Val::Px(36.0),
+                            height: Val::Px(27.0),
                             display: Display::None,
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.5)),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
@@ -1241,7 +1750,7 @@ fn spawn_row(
                         Text::new(kind.value_text(ratio)),
                         TextFont {
                             font: font.clone().into(),
-                            font_size: FontSize::from(22.0),
+                            font_size: FontSize::from(16.5),
                             weight: FontWeight::BOLD,
                             ..default()
                         },
@@ -1260,6 +1769,7 @@ fn spawn_choice(
 ) {
     parent.spawn((
         Button,
+        UiSoundStyle::Switch,
         action,
         SettingChoice(action),
         SettingChoiceVisual {
@@ -1273,9 +1783,9 @@ fn spawn_choice(
             },
         },
         Node {
-            min_width: Val::Px(110.0),
-            height: Val::Px(58.0),
-            padding: UiRect::horizontal(Val::Px(20.0)),
+            min_width: Val::Px(82.5),
+            height: Val::Px(43.5),
+            padding: UiRect::horizontal(Val::Px(15.0)),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             ..default()
@@ -1298,7 +1808,7 @@ fn spawn_choice(
             text_weight(
                 text,
                 font,
-                26.0,
+                19.5,
                 if selected {
                     OPTION_TEXT_ACTIVE
                 } else {
@@ -1333,13 +1843,45 @@ fn setting_text(
     )
 }
 
-pub fn handle_setting_action(
-    actions: Query<(&Interaction, &SettingAction), Changed<Interaction>>,
-    mut settings: ResMut<RuntimeSettings>,
-    mut toggles: ResMut<ToggleStates>,
-    mut pending_window: ResMut<PendingWindowMode>,
-    project_root: Res<ProjectRoot>,
-) {
+type TitleEntityQuery<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    Or<(
+        With<crate::ui::title::TitleRoot>,
+        With<crate::ui::title::TitleBackground>,
+    )>,
+>;
+
+#[derive(SystemParam)]
+pub(crate) struct SettingActionContext<'w, 's> {
+    commands: Commands<'w, 's>,
+    actions: Query<'w, 's, (&'static Interaction, &'static SettingAction), Changed<Interaction>>,
+    settings: ResMut<'w, RuntimeSettings>,
+    toggles: ResMut<'w, ToggleStates>,
+    pending_window: ResMut<'w, PendingWindowMode>,
+    project_root: Res<'w, ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
+    state: ResMut<'w, crate::runtime::resources::GameState>,
+    quick_preview: ResMut<'w, crate::ui::control_bar::QuickSavePreview>,
+    save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
+    title_entities: TitleEntityQuery<'w, 's>,
+}
+
+pub fn handle_setting_action(context: SettingActionContext) {
+    let SettingActionContext {
+        mut commands,
+        actions,
+        mut settings,
+        mut toggles,
+        mut pending_window,
+        project_root,
+        store,
+        mut state,
+        mut quick_preview,
+        mut save_previews,
+        title_entities,
+    } = context;
     let Some(action) = actions.iter().find_map(|(interaction, action)| {
         (*interaction == Interaction::Pressed).then_some(*action)
     }) else {
@@ -1361,10 +1903,99 @@ pub fn handle_setting_action(
             pending_window.delay_frames = 1;
         }
         SettingAction::SetTextSize(value) => settings.text_size = value.min(2),
-        SettingAction::Noop => return,
+        SettingAction::ClearSaves => {
+            commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
+                "Clear all save slots?",
+                crate::ui::dialog::DialogAction::ClearSaves,
+            ));
+            return;
+        }
+        SettingAction::ResetSettings => {
+            commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
+                "Restore default settings?",
+                crate::ui::dialog::DialogAction::ResetSettings,
+            ));
+            return;
+        }
+        SettingAction::ClearAll => {
+            commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
+                "Clear saves and restore all settings?",
+                crate::ui::dialog::DialogAction::ClearAll,
+            ));
+            return;
+        }
+        SettingAction::ExportData => {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("crabgal backup", &["crabgal-backup"])
+                .set_file_name("crabgal.crabgal-backup")
+                .save_file()
+            else {
+                return;
+            };
+            if let Err(error) = crate::storage::backup::export(&project_root, &path) {
+                log::error!("failed to export save data: {error:#}");
+            }
+            return;
+        }
+        SettingAction::ImportData => {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("crabgal backup", &["crabgal-backup"])
+                .pick_file()
+            else {
+                return;
+            };
+            if let Err(error) = crate::storage::backup::import(&project_root, &path) {
+                log::error!("failed to import save data: {error:#}");
+                return;
+            }
+            if let Some(mut imported) = crate::storage::settings::load(&project_root) {
+                crate::storage::settings::sanitize(&mut imported);
+                *settings = imported;
+                toggles.skip = false;
+                toggles.skip_mode = if settings.skip_all {
+                    SkipMode::All
+                } else {
+                    SkipMode::Read
+                };
+                pending_window.target = Some(settings.fullscreen);
+                pending_window.delay_frames = 1;
+            }
+            state.read_dialogues = crate::storage::read_history::load(&project_root);
+            state.unlocked_cg.clear();
+            state.unlocked_bgm.clear();
+            crate::storage::gallery::load(&mut state, &project_root);
+            quick_preview.state = crate::storage::save::load_game(
+                store.0.as_ref(),
+                crate::storage::save::QUICK_SAVE_SLOT,
+                &project_root,
+            )
+            .ok();
+            quick_preview.image = None;
+            save_previews.clear();
+            for entity in &title_entities {
+                commands.entity(entity).despawn();
+            }
+            return;
+        }
     }
     if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
         log::error!("failed to persist settings: {error:#}");
+    }
+}
+
+pub(crate) fn reset_runtime_settings(
+    settings: &mut RuntimeSettings,
+    toggles: &mut ToggleStates,
+    pending_window: &mut PendingWindowMode,
+    project_root: &ProjectRoot,
+) {
+    *settings = RuntimeSettings::default();
+    toggles.skip = false;
+    toggles.skip_mode = SkipMode::Read;
+    pending_window.target = Some(settings.fullscreen);
+    pending_window.delay_frames = 1;
+    if let Err(error) = crate::storage::settings::persist(settings, project_root) {
+        log::error!("failed to restore default settings: {error:#}");
     }
 }
 
@@ -1574,9 +2205,9 @@ pub fn update_setting_preview(
         background.0 = Color::srgba(0.0, 0.0, 0.03, settings.textbox_opacity * 0.72);
     }
     let size = match settings.text_size {
-        0 => 31.0,
-        2 => 42.0,
-        _ => 36.0,
+        0 => 23.25,
+        2 => 31.5,
+        _ => 27.0,
     };
     for mut font in &mut texts {
         font.font_size = FontSize::from(size);
@@ -1588,7 +2219,11 @@ fn choice_is_selected(settings: &RuntimeSettings, action: SettingAction) -> bool
         SettingAction::SetSkip(value) => settings.skip_all == value,
         SettingAction::SetFullscreen(value) => settings.fullscreen == value,
         SettingAction::SetTextSize(value) => settings.text_size == value,
-        SettingAction::Noop => false,
+        SettingAction::ClearSaves
+        | SettingAction::ResetSettings
+        | SettingAction::ClearAll
+        | SettingAction::ExportData
+        | SettingAction::ImportData => false,
     }
 }
 
@@ -1630,7 +2265,7 @@ pub fn update_settings_pages(
     let (Some(from), Some(to)) = (transition.from, transition.to) else {
         for (panel, mut node, mut transform) in &mut panels {
             node.display = if panel.page == ui.page {
-                Display::Flex
+                settings_page_display(panel.page)
             } else {
                 Display::None
             };
@@ -1655,7 +2290,7 @@ pub fn update_settings_pages(
             None
         };
         if let Some(offset) = offset {
-            node.display = Display::Flex;
+            node.display = settings_page_display(panel.page);
             transform.translation = Val2::percent(0.0, offset);
             transform.scale = Vec2::ONE;
         } else {
@@ -1668,7 +2303,7 @@ pub fn update_settings_pages(
         transition.reset();
         for (panel, mut node, mut transform) in &mut panels {
             node.display = if panel.page == ui.page {
-                Display::Flex
+                settings_page_display(panel.page)
             } else {
                 Display::None
             };

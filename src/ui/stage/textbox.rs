@@ -42,7 +42,7 @@ pub(crate) struct MiniAvatarNode;
 pub(crate) struct QuickPreviewLayer;
 
 const RUBY_FONT_SCALE: f32 = 0.44;
-const RUBY_COLLISION_PADDING: f32 = 6.0;
+const RUBY_COLLISION_PADDING: f32 = 4.5;
 
 #[derive(Resource)]
 pub(crate) struct TextboxOverlayFade {
@@ -81,7 +81,7 @@ impl Default for InitialTextboxFade {
 }
 
 impl InitialTextboxFade {
-    const SECONDS: f32 = 0.16;
+    const SECONDS: f32 = 0.12;
 
     pub(crate) fn is_animating(&self) -> bool {
         self.phase == InitialTextboxFadePhase::Fading
@@ -179,8 +179,8 @@ fn spawn_mini_avatar(root: &mut ChildSpawnerCommands, config: &GameConfig) {
             position_type: PositionType::Absolute,
             bottom: Val::Percent(config.layout.textbox_bottom),
             left: Val::Percent(config.layout.textbox_left),
-            width: Val::Px(280.0),
-            height: Val::Px(280.0),
+            width: Val::Px(210.0),
+            height: Val::Px(210.0),
             display: Display::None,
             ..default()
         },
@@ -194,10 +194,14 @@ pub fn update_mini_avatar(
     config: Res<GameConfigResource>,
     asset_server: Res<AssetServer>,
     mut avatars: Query<(&mut ImageNode, &mut Node), With<MiniAvatarNode>>,
+    mut previous: Local<Option<(Option<String>, f32)>>,
 ) {
-    if !state.is_changed() {
+    if previous.as_ref().is_some_and(|(avatar, progress)| {
+        avatar == &state.mini_avatar && *progress == state.mini_avatar_progress
+    }) {
         return;
     }
+    *previous = Some((state.mini_avatar.clone(), state.mini_avatar_progress));
     for (mut image, mut node) in &mut avatars {
         let Some(avatar) = &state.mini_avatar else {
             node.display = Display::None;
@@ -218,8 +222,8 @@ fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             position_type: PositionType::Absolute,
             bottom: Val::Percent(layout.namebar_bottom),
             left: Val::Percent(layout.textbox_left),
-            padding: UiRect::axes(Val::Px(32.0), Val::Px(12.0)),
-            min_width: Val::Px(100.0),
+            padding: UiRect::axes(Val::Px(24.0), Val::Px(9.0)),
+            min_width: Val::Px(75.0),
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
@@ -255,10 +259,10 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             width: Val::Percent(100.0 - layout.textbox_left),
             height: Val::Percent(layout.textbox_height),
             padding: UiRect {
-                left: Val::Px(56.0),
-                right: Val::Px(56.0),
-                top: Val::Px(72.0),
-                bottom: Val::Px(40.0),
+                left: Val::Px(42.0),
+                right: Val::Px(42.0),
+                top: Val::Px(54.0),
+                bottom: Val::Px(30.0),
             },
             ..default()
         },
@@ -283,7 +287,7 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
                 // Ruby is overlaid inside each base glyph's line box. This gap
                 // only keeps annotations on adjacent wrapped lines apart; it
                 // does not create a separate ruby line.
-                row_gap: Val::Px(14.0),
+                row_gap: Val::Px(10.5),
                 ..default()
             },
         ));
@@ -299,7 +303,7 @@ fn spawn_top_controls(text_box: &mut ChildSpawnerCommands, config: &GameConfig, 
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(0.0),
-                right: Val::Px(24.0),
+                right: Val::Px(18.0),
                 flex_direction: FlexDirection::Row,
                 // Adjacent hit boxes prevent hover from dropping while moving
                 // horizontally across the control bar.
@@ -328,9 +332,9 @@ fn spawn_top_control(
             HoverAlpha::default(),
             item.action,
             Node {
-                width: Val::Px(72.0),
-                height: Val::Px(68.0),
-                padding: UiRect::all(Val::Px(8.0)),
+                width: Val::Px(54.0),
+                height: Val::Px(51.0),
+                padding: UiRect::all(Val::Px(6.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -372,7 +376,7 @@ fn spawn_bottom_controls(
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(0.0),
-                right: Val::Px(24.0),
+                right: Val::Px(18.0),
                 flex_direction: FlexDirection::Row,
                 // Keep Q·SAVE/Q·LOAD and the remaining controls contiguous so
                 // quick-preview transitions are not interrupted by dead space.
@@ -393,8 +397,8 @@ fn spawn_bottom_controls(
                             flex_direction: FlexDirection::Row,
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            column_gap: Val::Px(16.0),
-                            padding: UiRect::axes(Val::Px(24.0), Val::Px(12.0)),
+                            column_gap: Val::Px(12.0),
+                            padding: UiRect::axes(Val::Px(18.0), Val::Px(9.0)),
                             ..default()
                         },
                     ))
@@ -434,10 +438,10 @@ fn spawn_quick_preview_backdrops(root: &mut ChildSpawnerCommands) {
             BlurStrength(0.0),
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(40.0),
-                bottom: Val::Px(290.0),
-                width: Val::Px(1050.0),
-                height: Val::Px(270.0),
+                right: Val::Px(30.0),
+                bottom: Val::Px(217.5),
+                width: Val::Px(787.5),
+                height: Val::Px(202.5),
                 display: Display::None,
                 ..default()
             },
@@ -478,15 +482,15 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
             QuickPreviewSurface,
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(40.0),
-                bottom: Val::Px(290.0),
-                width: Val::Px(1050.0),
-                height: Val::Px(270.0),
+                right: Val::Px(30.0),
+                bottom: Val::Px(217.5),
+                width: Val::Px(787.5),
+                height: Val::Px(202.5),
                 display: Display::None,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                padding: UiRect::all(Val::Px(16.0)),
+                padding: UiRect::all(Val::Px(12.0)),
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -502,7 +506,7 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
                 },
                 ImageNode::default(),
                 Node {
-                    width: Val::Px(424.0),
+                    width: Val::Px(318.0),
                     height: Val::Percent(100.0),
                     flex_shrink: 0.0,
                     display: Display::None,
@@ -517,8 +521,8 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
                         flex_grow: 1.0,
                         display: Display::None,
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(12.0),
-                        padding: UiRect::left(Val::Px(20.0)),
+                        row_gap: Val::Px(9.0),
+                        padding: UiRect::left(Val::Px(15.0)),
                         overflow: Overflow::clip(),
                         ..default()
                     },
@@ -533,7 +537,7 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
                         Text::new(""),
                         TextFont {
                             font: assets.text.clone().into(),
-                            font_size: FontSize::from(32.0),
+                            font_size: FontSize::from(24.0),
                             ..default()
                         },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
@@ -547,7 +551,7 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
                         Text::new(""),
                         TextFont {
                             font: assets.text.clone().into(),
-                            font_size: FontSize::from(26.0),
+                            font_size: FontSize::from(19.5),
                             ..default()
                         },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.67)),
@@ -562,7 +566,7 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
                 Text::new("暂无存档"),
                 TextFont {
                     font: assets.text.clone().into(),
-                    font_size: FontSize::from(30.0),
+                    font_size: FontSize::from(22.5),
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.67)),
@@ -599,16 +603,14 @@ pub fn update_textbox(
         cache.content_hidden = Some(content_hidden);
     }
 
-    let (speaker, markup, visible_chars) = state.dialogue.as_ref().map_or_else(
-        || (String::new(), String::new(), 0),
-        |dialogue| {
+    let (speaker, markup, visible_chars) =
+        state.dialogue.as_ref().map_or(("", "", 0), |dialogue| {
             (
-                dialogue.speaker.clone(),
-                dialogue.markup.clone(),
+                dialogue.speaker.as_str(),
+                dialogue.markup.as_str(),
                 dialogue.visible_chars,
             )
-        },
-    );
+        });
 
     let has_left_sprite = state
         .sprites
@@ -659,7 +661,8 @@ pub fn update_textbox(
     }
 
     if speaker_changed && let Ok(mut text) = speaker_text.single_mut() {
-        text.0.clone_from(&speaker);
+        text.0.clear();
+        text.0.push_str(speaker);
     }
     let scale = match resources.settings.text_size {
         0 => 0.86,
@@ -675,7 +678,7 @@ pub fn update_textbox(
         spawn_rich_dialogue(
             &mut commands,
             root,
-            &markup,
+            markup,
             visible_chars,
             dialogue_size,
             &resources.fonts.text,
@@ -689,8 +692,14 @@ pub fn update_textbox(
             };
         }
     }
-    cache.speaker = speaker;
-    cache.dialogue = markup;
+    if speaker_changed {
+        cache.speaker.clear();
+        cache.speaker.push_str(speaker);
+    }
+    if dialogue_changed {
+        cache.dialogue.clear();
+        cache.dialogue.push_str(markup);
+    }
     cache.visible_chars = visible_chars;
     cache.left = Some(left);
     cache.textbox_alpha = Some(textbox_alpha);
@@ -853,7 +862,7 @@ fn spawn_ruby_cluster(
                     bottom: Val::Percent(80.0),
                     ..default()
                 },
-                UiTransform::from_xy(Val::Percent(-50.0), Val::Px(-2.0)),
+                UiTransform::from_xy(Val::Percent(-50.0), Val::Px(-1.5)),
                 Text::new(ruby),
                 TextFont {
                     font: font.clone().into(),

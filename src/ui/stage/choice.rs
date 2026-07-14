@@ -109,7 +109,7 @@ pub fn sync_choice(
                         width: Val::Percent(56.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Stretch,
-                        row_gap: Val::Px(16.0),
+                        row_gap: Val::Px(12.0),
                         ..default()
                     },
                 ))
@@ -119,7 +119,7 @@ pub fn sync_choice(
                             Name::new(format!("choice::{index}")),
                             Button,
                             BlurSource,
-                            BlurStrength(42.0),
+                            BlurStrength(31.5),
                             ChoiceButton {
                                 index,
                                 enabled: choice.enabled,
@@ -127,8 +127,8 @@ pub fn sync_choice(
                             },
                             Node {
                                 width: Val::Percent(100.0),
-                                padding: UiRect::axes(Val::Px(32.0), Val::Px(14.0)),
-                                border: UiRect::all(Val::Px(3.0)),
+                                padding: UiRect::axes(Val::Px(24.0), Val::Px(10.5)),
+                                border: UiRect::all(Val::Px(2.25)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..default()
@@ -144,14 +144,14 @@ pub fn sync_choice(
                                 Val::Px(0.0),
                                 Val::Px(0.0),
                                 Val::Px(0.0),
-                                Val::Px(25.0),
+                                Val::Px(18.75),
                             ),
                         ))
                         .with_child((
                             text(
                                 choice.text.clone(),
                                 &font,
-                                64.0,
+                                48.0,
                                 if choice.enabled { 0.88 } else { 0.45 },
                             ),
                             TextLayout::justify(Justify::Center),

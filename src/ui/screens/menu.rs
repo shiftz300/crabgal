@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::ui::control_bar::{BlurStrength, ButtonAction, HoverAlpha};
-use crate::ui::foundation::{ease_in_out_cubic, exp_lerp, smoothstep, text};
+use crate::ui::foundation::{UiSoundStyle, ease_in_out_cubic, exp_lerp, smoothstep, text};
 use crate::ui::save_load::{SaveLoadContent, SaveLoadMode, SaveLoadRoot, SaveLoadUi};
 use crate::ui::settings_panel::{SettingsContent, SettingsRoot, SettingsUi};
 use crate::ui::{FULLSCREEN_BLUR_STRENGTH, MENU_BACKDROP_ALPHA};
@@ -47,14 +47,14 @@ impl MenuSurface {
     pub(crate) fn standard() -> Self {
         Self {
             start_scale: 0.99,
-            start_translation: Vec2::new(0.0, 12.0),
+            start_translation: Vec2::new(0.0, 9.0),
         }
     }
 
     pub(crate) fn config() -> Self {
         Self {
             start_scale: 1.0,
-            start_translation: Vec2::new(42.0, 0.0),
+            start_translation: Vec2::new(31.5, 0.0),
         }
     }
 }
@@ -193,7 +193,7 @@ pub(crate) fn spawn_header(
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(7.0),
-            padding: UiRect::horizontal(Val::Px(12.0)),
+            padding: UiRect::horizontal(Val::Px(9.0)),
             flex_shrink: 0.0,
             justify_content: JustifyContent::SpaceBetween,
             align_items: AlignItems::Center,
@@ -255,18 +255,18 @@ pub(crate) fn spawn_header(
                     MenuBack,
                     HoverAlpha::default(),
                     Node {
-                        min_width: Val::Px(150.0),
+                        min_width: Val::Px(112.5),
                         height: Val::Percent(100.0),
-                        padding: UiRect::horizontal(Val::Px(28.0)),
-                        column_gap: Val::Px(10.0),
+                        padding: UiRect::horizontal(Val::Px(21.0)),
+                        column_gap: Val::Px(7.5),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
                     children![
-                        text("\u{f1c3}", icon_font, 28.0, 0.82),
-                        text("BACK", font, 28.0, 0.82),
+                        text("\u{f1c3}", icon_font, 21.0, 0.82),
+                        text("BACK", font, 21.0, 0.82),
                     ],
                 ));
             });
@@ -285,6 +285,7 @@ fn spawn_button(
     let alpha = if active { 0.18 } else { 0.0 };
     parent.spawn((
         Button,
+        UiSoundStyle::Switch,
         action,
         MenuTab(action),
         HoverAlpha {
@@ -295,19 +296,19 @@ fn spawn_button(
             hover_alpha: 0.18,
         },
         Node {
-            min_width: Val::Px(165.0),
+            min_width: Val::Px(123.75),
             height: Val::Percent(100.0),
-            padding: UiRect::horizontal(Val::Px(28.0)),
-            margin: UiRect::right(Val::Px(12.0)),
-            column_gap: Val::Px(10.0),
+            padding: UiRect::horizontal(Val::Px(21.0)),
+            margin: UiRect::right(Val::Px(9.0)),
+            column_gap: Val::Px(7.5),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             ..default()
         },
         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
         children![
-            text(icon, icon_font, 28.0, 0.82),
-            text(label, font, 28.0, 0.82),
+            text(icon, icon_font, 21.0, 0.82),
+            text(label, font, 21.0, 0.82),
         ],
     ));
 }

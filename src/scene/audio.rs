@@ -5,6 +5,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crabgal_core::{BgmState, EffectEvent, EffectState};
 
+use crate::runtime::audio::insert_player;
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::ButtonAction;
@@ -94,7 +95,7 @@ pub fn sync_bgm(
     }
     let fading = duration > f32::EPSILON;
     let base_volume = context.state.bgm.volume.clamp(0.0, 1.0);
-    commands.spawn((
+    let mut entity = commands.spawn((
         Name::new(format!("bgm::{file}")),
         BgmPlayer {
             base_volume,
@@ -108,7 +109,6 @@ pub fn sync_bgm(
                 FadeDirection::Settled
             },
         },
-        AudioPlayer::new(context.asset_server.load(context.config.bgm_path(file))),
         PlaybackSettings {
             mode: PlaybackMode::Loop,
             volume: Volume::Linear(if fading {
@@ -119,6 +119,11 @@ pub fn sync_bgm(
             ..default()
         },
     ));
+    insert_player(
+        &mut entity,
+        &context.asset_server,
+        context.config.bgm_path(file),
+    );
     context.activity.0 = fading;
 }
 
@@ -249,7 +254,7 @@ fn spawn_effect(
     volume: f32,
 ) {
     let looping = id.is_some();
-    commands.spawn((
+    let mut entity = commands.spawn((
         Name::new(match &id {
             Some(id) => format!("effect::{id}::{file}"),
             None => format!("effect::{file}"),
@@ -258,7 +263,6 @@ fn spawn_effect(
             id,
             base_volume: volume,
         },
-        AudioPlayer::new(asset_server.load(config.effect_path(file))),
         PlaybackSettings {
             mode: if looping {
                 PlaybackMode::Loop
@@ -269,6 +273,7 @@ fn spawn_effect(
             ..default()
         },
     ));
+    insert_player(&mut entity, asset_server, config.effect_path(file));
 }
 
 type EffectSinkQuery<'w, 's> = Query<
@@ -378,14 +383,14 @@ fn spawn_vocal(
     line_volume: f32,
     vocal: &str,
 ) {
-    commands.spawn((
+    let mut entity = commands.spawn((
         Name::new(format!("vocal::{vocal}")),
         VocalPlayer,
-        AudioPlayer::new(asset_server.load(config.voice_path(vocal))),
         PlaybackSettings {
             mode: PlaybackMode::Despawn,
             volume: Volume::Linear(line_volume * settings.master_volume * settings.vocal_volume),
             ..default()
         },
     ));
+    insert_player(&mut entity, asset_server, config.voice_path(vocal));
 }

@@ -16,6 +16,10 @@ pub struct GameConfig {
     #[serde(default = "default_title_background")]
     pub title_background: String,
 
+    /// Optional metadata shown by the engine's About page.
+    #[serde(default)]
+    pub project: ProjectMetadata,
+
     /// Independently selected parser/codec categories.
     #[serde(default)]
     pub adapter: AdapterConfig,
@@ -35,6 +39,16 @@ pub struct GameConfig {
     /// Layout settings (anchor offsets, dodge, etc).
     #[serde(default)]
     pub layout: LayoutConfig,
+}
+
+/// Human-facing project information. It deliberately stays independent from
+/// resource adapters so packaged and development projects expose the same
+/// metadata.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMetadata {
+    /// Short description of the currently loaded visual novel.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// One resource source consumed through an asset adapter.
@@ -110,7 +124,7 @@ pub struct LayoutConfig {
     #[serde(default = "default_sprite_height")]
     pub sprite_height: f32,
 
-    // ── Textbox positioning (percent of 2560x1440 design area) ──
+    // ── Textbox positioning (percent of the 1920×1080 design area) ──
     /// Textbox left edge when no dodge (%).
     #[serde(default = "default_textbox_left")]
     pub textbox_left: f32,
@@ -129,10 +143,10 @@ pub struct LayoutConfig {
 }
 
 fn default_anchor_offset() -> f32 {
-    40.0
+    30.0
 }
 fn default_sprite_height() -> f32 {
-    1100.0
+    825.0
 }
 fn default_textbox_left() -> f32 {
     7.0
@@ -200,16 +214,16 @@ pub struct FontConfig {
 }
 
 fn default_speaker_size() -> f32 {
-    52.0
+    39.0
 }
 fn default_dialogue_size() -> f32 {
-    60.0
+    45.0
 }
 fn default_icon_size() -> f32 {
-    26.0
+    19.5
 }
 fn default_label_size() -> f32 {
-    24.0
+    18.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +262,7 @@ impl Default for GameConfig {
         Self {
             title: default_title(),
             title_background: default_title_background(),
+            project: ProjectMetadata::default(),
             adapter: AdapterConfig::default(),
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
@@ -370,6 +385,17 @@ styles:
         assert_eq!(cfg.title, "Test Game");
         assert_eq!(cfg.styles.typewriter_speed, 60.0);
         assert_eq!(cfg.adapter, AdapterConfig::default());
+    }
+
+    #[test]
+    fn parses_project_metadata() {
+        let yaml = r#"
+title: "Example"
+project:
+  description: "A short visual novel."
+"#;
+        let cfg = GameConfig::from_yaml(yaml).unwrap();
+        assert_eq!(cfg.project.description, "A short visual novel.");
     }
 
     #[test]

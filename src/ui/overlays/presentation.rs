@@ -35,7 +35,7 @@ pub(crate) fn setup(
                 display: Display::None,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                padding: UiRect::horizontal(Val::Px(240.0)),
+                padding: UiRect::horizontal(Val::Px(180.0)),
                 ..default()
             },
             BackgroundColor(Color::BLACK),
@@ -49,7 +49,7 @@ pub(crate) fn setup(
             Text::new(""),
             TextFont {
                 font: FontSource::Handle(fonts.text.clone()),
-                font_size: FontSize::Px(54.0),
+                font_size: FontSize::Px(40.5),
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -63,7 +63,7 @@ pub(crate) fn setup(
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(DESIGN_WIDTH),
-                height: Val::Px(92.0),
+                height: Val::Px(69.0),
                 top: if top { Val::Px(0.0) } else { Val::Auto },
                 bottom: if top { Val::Auto } else { Val::Px(0.0) },
                 display: Display::None,

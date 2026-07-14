@@ -100,8 +100,9 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] UI 稳态性能收尾：隐藏 CONFIG 停止更新、滑杆松手落盘、Backlog 有界入场、存档预览异步解码，并为 textbox/TITLE/SAVE 动画增加变更检测
 - [x] CONFIG 全控件与 blur 同步淡入淡出、SL→CONFIG 无白闪交接；全局文字使用四向低成本字形扩散阴影
 - [x] GAL 生命周期调度：活动态按显示器自然刷新，稳态事件驱动休眠，失焦暂停虚拟时间；剧情与 UI 动画不绑定固定帧率
-- [x] 稳态渲染收敛：准确标记 `GameState` 变更，背景/立绘只在状态、资源或 viewport 改变时同步；隐藏/零强度 blur 跳过并复用区域缓冲
-- [x] 图片内存管线：原生 libwebp 在解码阶段直出目标尺寸，背景上限 1920×1080、立绘按设计高度；GPU 上传后释放 CPU 像素，资源离开预取窗口即卸载
+- [x] 稳态渲染收敛：背景、立绘、资源预取按各自渲染快照更新，打字机进度不再触发舞台重建；纹理只在载入/重载时准备并上传，稳定实体原地更新组件；隐藏/零强度 blur 跳过并复用区域缓冲
+- [x] UI 绘制收敛：全局扩散文字阴影由 8 次采样压缩为 4 次双线性对角采样，关闭的 Extra 页面不进入更新链
+- [x] 1080p 设计与图片内存管线：逻辑画布固定 1920×1080，原生 libwebp 在解码阶段直出目标尺寸，背景纹理不超过画布、立绘按设计高度；GPU 上传后释放 CPU 像素，资源离开预取窗口即卸载
 - [x] SL 分页彻底移除黑幕并改为槽位内容自身淡出/淡入；CONFIG 预览设置不再穿透显示舞台 textbox；TITLE 预览与按钮缩进解耦并移除左边框
 - [x] 集中式 UI 输入 scope（Loading/Dialog/Menu/Backlog/Title/Stage）阻止快捷键穿透；SL 子页与 SL↔CONFIG 使用连续 blur 和内容淡入淡出交接
 - [x] TITLE 统一低透明黑色可交互按钮与低透明灰色禁用按钮；CONFIG 导航对齐内容垂直节奏；SL 分页采用方向滑动并收敛 UI 动画为帧率无关时间函数
@@ -117,6 +118,8 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] playEffect — 一次性音效、volume、带 id 循环/替换/停止与存档恢复
 - [x] Replay — 控制栏当前语音重播与 Backlog 任意语音重播
 - [x] 主音量/BGM/vocal/SE 分总线实时更新；淡入生命周期保持事件驱动调度活跃
+- [x] 推荐 Ogg Opus 发行格式：BGM/vocal/SE/UI 共用加载入口和增量 Opus 解码器，同时兼容 WAV/MP3/Vorbis/FLAC
+- [x] WebGAL K UI 提示音：hover/click/switch 无损 remux 为内嵌 Opus，单通道替换播放并服从 UI 音量总线
 
 验收入口与逐步预期见 [`14-phase4-acceptance.md`](acceptance/14-phase4-acceptance.md)。
 
@@ -149,30 +152,30 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] setTextbox — 持久 hide/show 与 `:` 单句自动恢复
 - [x] `;` 全行注释与 `//` 行内注释
 - [x] `comment:` 显式 no-op，不再误解析成对话
-- [ ] playVideo
-- [ ] GIF / Spine
 - [x] unlockCg / unlockBgm — 解析、资源扫描与独立原子持久化
-- [x] Title EXTRA — 持久 CG/BGM 解锁计数入口（Flowchart 仍待内容 UI）
+- [x] Title EXTRA — WebGAL K 风格 CG/BGM 鉴赏、分页预览、全屏查看与播放器
 - [x] 本地资源清单、当前场景/子场景前看预取、标题页入口资源预热与加载状态
   （Bevy `AssetServer`）
 - [x] `crabgal-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
 - [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
-- [ ] Live2D — 用户决定暂缓，不纳入当前默认二进制
-- [ ] MainCore 固定 UI 的完整本地化（主题/运行时换肤明确不做）
-- [ ] 编辑器预览同步 / Steam 集成
 - [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
-- [ ] SafeArea、横竖屏和响应式 UI 断点
-- [ ] 桌面、Android、iOS、Web 编译矩阵与设备验收
 - [x] `hexz_k` 标准加密 `.hxz`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
-- [ ] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
+- [x] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
   `CRABGAL_HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
   artifact 不泄露密钥
 
-Phase 7 已完成不依赖第三方专有 SDK 的工程主线。视频、Live2D、Spine、Steam 和完整
-Extra/Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖冒充完成。逐步验收见
+Phase 7 已完成不依赖第三方专有 SDK 的工程主线。视频、Live2D、Spine、Steam 和
+Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖冒充完成。逐步验收见
 [`17-phase7-acceptance.md`](acceptance/17-phase7-acceptance.md)。
+
+### 延期适配（不属于 Phase 7 完成条件）
+
+- playVideo、GIF、Spine 与 Live2D（Live2D 已由用户决定暂缓）
+- MainCore 固定 UI 的完整本地化（主题和运行时换肤明确不做）
+- 编辑器预览同步、Steam 集成与 Flowchart 内容页
+- SafeArea、横竖屏、响应式断点及 Android / iOS / Web 设备验收
 
 ---
 

@@ -214,7 +214,7 @@ pub fn sync_backlog(
                 position_type: PositionType::Absolute,
                 width: Val::Px(DESIGN_WIDTH),
                 height: Val::Px(DESIGN_HEIGHT),
-                padding: UiRect::axes(Val::ZERO, Val::Px(32.0)),
+                padding: UiRect::axes(Val::ZERO, Val::Px(24.0)),
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -234,8 +234,8 @@ fn spawn_header(root: &mut ChildSpawnerCommands, assets: &UiFonts) {
         Name::new("backlog_top"),
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(32.0),
-            top: Val::Px(32.0),
+            left: Val::Px(24.0),
+            top: Val::Px(24.0),
             width: Val::Percent(96.0),
             height: Val::Percent(8.0),
             align_items: AlignItems::FlexStart,
@@ -249,17 +249,17 @@ fn spawn_header(root: &mut ChildSpawnerCommands, assets: &UiFonts) {
                 BacklogClose,
                 BacklogButtonVisual::default(),
                 Node {
-                    width: Val::Px(72.0),
-                    height: Val::Px(72.0),
-                    margin: UiRect::right(Val::Px(12.0)),
+                    width: Val::Px(54.0),
+                    height: Val::Px(54.0),
+                    margin: UiRect::right(Val::Px(9.0)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
             ))
-            .with_child(chrome_text("\u{f659}", &assets.icons, 60.0, 0.8, false));
-        header.spawn(chrome_text("BACKLOG", &assets.text, 58.0, 1.0, true));
+            .with_child(chrome_text("\u{f659}", &assets.icons, 45.0, 0.8, false));
+        header.spawn(chrome_text("BACKLOG", &assets.text, 43.5, 1.0, true));
     });
 }
 
@@ -273,7 +273,7 @@ fn spawn_content(root: &mut ChildSpawnerCommands, state: &GameState, assets: &Ui
             top: Val::Percent(12.0),
             width: Val::Percent(100.0),
             height: Val::Percent(80.0),
-            padding: UiRect::axes(Val::Px(160.0), Val::Px(16.0)),
+            padding: UiRect::axes(Val::Px(120.0), Val::Px(12.0)),
             // WebGAL K uses `flex-flow: column-reverse`: the newest line sits
             // at the bottom and older dialogue is reached by scrolling up.
             flex_direction: FlexDirection::ColumnReverse,
@@ -287,8 +287,8 @@ fn spawn_content(root: &mut ChildSpawnerCommands, state: &GameState, assets: &Ui
                 Name::new(format!("backlog_item::{index}")),
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Px(68.0),
-                    margin: UiRect::top(Val::Px(20.0)),
+                    min_height: Val::Px(51.0),
+                    margin: UiRect::top(Val::Px(15.0)),
                     flex_shrink: 0.0,
                     ..default()
                 },
@@ -296,7 +296,7 @@ fn spawn_content(root: &mut ChildSpawnerCommands, state: &GameState, assets: &Ui
             if order < ANIMATED_ITEM_LIMIT {
                 item.insert((
                     BacklogItemAnimation { order },
-                    UiTransform::from_xy(Val::Px(-15.0), Val::Px(10.0)),
+                    UiTransform::from_xy(Val::Px(-11.25), Val::Px(7.5)),
                 ));
             } else {
                 item.insert(UiTransform::default());
@@ -306,13 +306,13 @@ fn spawn_content(root: &mut ChildSpawnerCommands, state: &GameState, assets: &Ui
                 row.spawn((
                     Node {
                         width: Val::Percent(70.0),
-                        padding: UiRect::left(Val::Px(16.0)),
+                        padding: UiRect::left(Val::Px(12.0)),
                         ..default()
                     },
                     children![item_text(
                         entry.text.clone(),
                         &assets.text,
-                        35.0,
+                        26.25,
                         order,
                         false,
                     )],
@@ -338,7 +338,7 @@ fn spawn_item_functions(
     },))
         .with_children(|area| {
             area.spawn((Node {
-                margin: UiRect::top(Val::Px(10.0)),
+                margin: UiRect::top(Val::Px(7.5)),
                 ..default()
             },))
                 .with_children(|buttons| {
@@ -363,13 +363,13 @@ fn spawn_item_functions(
                 Node {
                     width: Val::Percent(50.0),
                     margin: UiRect::left(Val::Auto),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(4.5)),
                     ..default()
                 },
                 children![item_text(
                     entry.speaker.clone(),
                     &assets.text,
-                    39.0,
+                    29.25,
                     order,
                     true,
                 )],
@@ -390,16 +390,16 @@ fn spawn_item_button(
             action,
             BacklogButtonVisual::default(),
             Node {
-                margin: UiRect::left(Val::Px(8.0)),
-                width: Val::Px(60.0),
-                height: Val::Px(60.0),
+                margin: UiRect::left(Val::Px(6.0)),
+                width: Val::Px(45.0),
+                height: Val::Px(45.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.063)),
         ))
-        .with_child(item_text(icon, &assets.icons, 28.0, order, false));
+        .with_child(item_text(icon, &assets.icons, 21.0, order, false));
 }
 
 fn chrome_text(
@@ -575,7 +575,7 @@ pub fn scroll_backlog(
         }
         let amount = event.y
             * match event.unit {
-                MouseScrollUnit::Line => 48.0,
+                MouseScrollUnit::Line => 36.0,
                 MouseScrollUnit::Pixel => 1.0,
             };
         delta += amount;
@@ -630,14 +630,9 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
             for entity in &context.vocals {
                 context.commands.entity(entity).despawn();
             }
-            context.commands.spawn((
+            let mut entity = context.commands.spawn((
                 Name::new(format!("backlog_vocal::{dialogue:?}")),
                 VocalPlayer,
-                AudioPlayer::new(
-                    context
-                        .asset_server
-                        .load(context.config.voice_path(dialogue.0)),
-                ),
                 PlaybackSettings {
                     mode: PlaybackMode::Despawn,
                     volume: Volume::Linear(
@@ -646,6 +641,11 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
                     ..default()
                 },
             ));
+            crate::runtime::audio::insert_player(
+                &mut entity,
+                &context.asset_server,
+                context.config.voice_path(dialogue.0),
+            );
         }
     }
 }

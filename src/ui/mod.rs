@@ -5,17 +5,21 @@ mod support;
 
 pub use overlays::{backlog, dialog};
 pub(crate) use screens::menu;
-pub use screens::{save_load, settings_panel, title};
+pub use screens::{extra, save_load, settings_panel, title};
 pub use stage::{choice, control_bar, textbox};
+#[cfg(feature = "ui-sounds")]
+pub(crate) use support::sound;
 pub(crate) use support::{activity, foundation, input_scope, locale};
 pub use support::{loading, performance, text_style};
 
+#[cfg(feature = "ui-sounds")]
+use bevy::asset::embedded_asset;
 use bevy::prelude::*;
 
 use crate::render::blur;
 use crate::runtime::GameSystemSet;
 
-pub(crate) const FULLSCREEN_BLUR_STRENGTH: f32 = 48.0;
+pub(crate) const FULLSCREEN_BLUR_STRENGTH: f32 = 36.0;
 pub(crate) const MENU_BACKDROP_ALPHA: f32 = 0.8;
 pub(crate) const BACKLOG_BACKDROP_ALPHA: f32 = 0.82;
 
@@ -23,6 +27,12 @@ pub(crate) struct GameUiPlugin;
 
 impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(feature = "ui-sounds")]
+        {
+            embedded_asset!(app, "src/ui", "assets/audio/click.opus");
+            embedded_asset!(app, "src/ui", "assets/audio/mouse-enter.opus");
+            embedded_asset!(app, "src/ui", "assets/audio/switch.opus");
+        }
         text_style::install_renderer(app);
         init_resources(app);
         app.add_systems(PreUpdate, input_scope::sync);
@@ -68,8 +78,11 @@ fn init_resources(app: &mut App) {
         .init_resource::<settings_panel::SettingsPageTransition>()
         .init_resource::<settings_panel::PendingWindowMode>()
         .init_resource::<settings_panel::ActiveSettingSlider>()
+        .init_resource::<extra::ExtraUi>()
         .init_resource::<input_scope::UiInputScope>()
         .init_resource::<crate::storage::settings::RuntimeSettings>();
+    #[cfg(feature = "ui-sounds")]
+    app.init_resource::<sound::UiSoundAssets>();
 }
 
 fn add_startup_systems(app: &mut App) {
@@ -88,6 +101,8 @@ fn add_startup_systems(app: &mut App) {
 }
 
 fn add_stage_systems(app: &mut App) {
+    #[cfg(feature = "ui-sounds")]
+    app.add_systems(Update, sound::play_button_sounds.in_set(GameSystemSet::Ui));
     app.add_systems(
         Update,
         (
@@ -165,7 +180,22 @@ fn add_overlay_systems(app: &mut App) {
                     .run_if(input_scope::title_allowed),
                 title::animate_title_buttons,
             )
-                .chain(),
+                .chain()
+                // Let START produce the first dialogue before the stage UI is
+                // updated. The title remains for this frame, so the textbox
+                // has already begun its fade when the title leaves.
+                .before(textbox::update_textbox),
+            (
+                extra::handle_navigation,
+                extra::handle_page,
+                extra::handle_cg,
+                extra::handle_bgm,
+                extra::sync,
+                extra::animate,
+                extra::animate_buttons,
+            )
+                .chain()
+                .run_if(extra::active),
             (
                 performance::toggle_performance_overlay.run_if(loading::assets_ready),
                 performance::update_performance_overlay,
@@ -196,6 +226,12 @@ fn add_menu_systems(app: &mut App) {
                 settings_panel::handle_setting_action
                     .run_if(loading::assets_ready)
                     .run_if(menu::route_settled),
+                settings_panel::handle_language_dropdown
+                    .run_if(loading::assets_ready)
+                    .run_if(menu::route_settled),
+                settings_panel::handle_about_repository_link
+                    .run_if(loading::assets_ready)
+                    .run_if(menu::route_settled),
                 settings_panel::apply_pending_window_mode,
                 settings_panel::handle_settings_page
                     .run_if(loading::assets_ready)
@@ -215,6 +251,8 @@ fn add_menu_systems(app: &mut App) {
                 settings_panel::update_setting_bubbles.run_if(settings_panel::settings_open),
                 settings_panel::update_setting_preview.run_if(settings_panel::settings_open),
                 settings_panel::update_settings_pages.run_if(settings_panel::settings_open),
+                settings_panel::animate_language_dropdown.run_if(settings_panel::settings_open),
+                settings_panel::animate_about_repository_link.run_if(settings_panel::settings_open),
                 settings_panel::animate_watermark,
                 save_load::animate_save_load_grid_track.run_if(save_load::save_load_open),
                 save_load::animate_save_load_pages.run_if(save_load::save_load_open),

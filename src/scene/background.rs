@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crabgal_core::SpriteTransform;
 use crabgal_core::dissolve;
@@ -11,6 +10,36 @@ use crate::runtime::viewport::DesignViewport;
 use crate::scene::components::{BackgroundLayer, BackgroundNode};
 use crate::scene::effects::material::{StageMaterial, StageQuad, animation_uniform};
 
+#[derive(Default)]
+pub(crate) struct BackgroundRenderCache {
+    initialized: bool,
+    image: Option<String>,
+    transition: Option<crabgal_core::state::BgTransition>,
+    transform: SpriteTransform,
+    filter: crabgal_core::VisualFilter,
+    animation: Option<crabgal_core::state::PresetAnimation>,
+}
+
+impl BackgroundRenderCache {
+    fn matches(&self, state: &GameState) -> bool {
+        self.initialized
+            && self.image == state.bg
+            && self.transition == state.bg_transition
+            && self.transform == state.bg_transform
+            && self.filter == state.bg_filter
+            && self.animation == state.bg_animation
+    }
+
+    fn capture(&mut self, state: &GameState) {
+        self.initialized = true;
+        self.image.clone_from(&state.bg);
+        self.transition.clone_from(&state.bg_transition);
+        self.transform = state.bg_transform;
+        self.filter = state.bg_filter;
+        self.animation.clone_from(&state.bg_animation);
+    }
+}
+
 struct DesiredBackground<'a> {
     layer: BackgroundLayer,
     image: &'a str,
@@ -20,38 +49,64 @@ struct DesiredBackground<'a> {
     transition: Vec4,
 }
 
-/// Synchronizes background entities without recreating them every frame.
-pub fn sync_bg(
-    state: Res<GameState>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-    mut backgrounds: Query<(
+type BackgroundQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
         Entity,
-        &mut BackgroundNode,
-        &mut Transform,
-        Option<&MeshMaterial2d<StageMaterial>>,
-    )>,
-    quad: Res<StageQuad>,
-    mut materials: ResMut<Assets<StageMaterial>>,
-    window_query: Query<Ref<Window>>,
-) {
-    let Ok(window) = window_query.single() else {
+        &'static mut BackgroundNode,
+        &'static mut Transform,
+        Option<&'static MeshMaterial2d<StageMaterial>>,
+        Option<&'static mut Sprite>,
+    ),
+>;
+
+#[derive(SystemParam)]
+pub(crate) struct BackgroundSyncContext<'w, 's> {
+    state: Res<'w, GameState>,
+    asset_server: Res<'w, AssetServer>,
+    commands: Commands<'w, 's>,
+    backgrounds: BackgroundQuery<'w, 's>,
+    quad: Res<'w, StageQuad>,
+    materials: ResMut<'w, Assets<StageMaterial>>,
+    windows: Query<'w, 's, Ref<'static, Window>>,
+    cache: Local<'s, BackgroundRenderCache>,
+}
+
+/// Synchronizes background entities without recreating them every frame.
+pub fn sync_bg(context: BackgroundSyncContext) {
+    let BackgroundSyncContext {
+        state,
+        asset_server,
+        mut commands,
+        mut backgrounds,
+        quad,
+        mut materials,
+        windows,
+        mut cache,
+    } = context;
+    let Ok(window) = windows.single() else {
         return;
     };
-    if !state.is_changed() && !window.is_changed() {
+    if cache.matches(&state) && !window.is_changed() {
         return;
     }
+    cache.capture(&state);
     let viewport = DesignViewport::from_window(&window);
     let desired = desired_backgrounds(&state);
-    let mut existing_layers = HashSet::new();
+    let mut previous_exists = false;
+    let mut current_exists = false;
 
-    for (entity, mut node, mut transform, existing_material) in &mut backgrounds {
+    for (entity, mut node, mut transform, existing_material, existing_sprite) in &mut backgrounds {
         let Some(background) = desired.iter().find(|item| item.layer == node.layer) else {
             commands.entity(entity).despawn();
             continue;
         };
 
-        existing_layers.insert(node.layer);
+        match node.layer {
+            BackgroundLayer::Previous => previous_exists = true,
+            BackgroundLayer::Current => current_exists = true,
+        }
         node.image = background.image.to_owned();
         let image = asset_server.load(format!("background/{}", background.image));
         apply_background_entity(
@@ -65,11 +120,17 @@ pub fn sync_bg(
             background,
             viewport,
             state.bg_filter,
+            existing_sprite,
+            true,
         );
     }
 
     for background in desired {
-        if existing_layers.contains(&background.layer) {
+        let exists = match background.layer {
+            BackgroundLayer::Previous => previous_exists,
+            BackgroundLayer::Current => current_exists,
+        };
+        if exists {
             continue;
         }
         let mut transform = Transform::default();
@@ -96,6 +157,8 @@ pub fn sync_bg(
             &background,
             viewport,
             state.bg_filter,
+            None,
+            false,
         );
     }
 }
@@ -168,6 +231,8 @@ fn apply_background_entity(
     background: &DesiredBackground<'_>,
     viewport: DesignViewport,
     mut filter: crabgal_core::VisualFilter,
+    existing_sprite: Option<Mut<'_, Sprite>>,
+    existing_entity: bool,
 ) {
     let effect = background.transform;
     filter.blur += effect.blur;
@@ -197,22 +262,57 @@ fn apply_background_entity(
         } else {
             materials.add(material)
         };
-        commands
-            .entity(entity)
-            .remove::<Sprite>()
-            .insert((Mesh2d(quad.0.clone()), MeshMaterial2d(material_handle)));
+        if existing_material.is_none() {
+            commands
+                .entity(entity)
+                .remove::<Sprite>()
+                .insert((Mesh2d(quad.0.clone()), MeshMaterial2d(material_handle)));
+        }
     } else {
         transform.scale = Vec3::ONE;
-        commands
-            .entity(entity)
-            .remove::<Mesh2d>()
-            .remove::<MeshMaterial2d<StageMaterial>>()
-            .insert(Sprite {
-                image,
-                custom_size: Some(size),
-                color: Color::srgba(1.0, 1.0, 1.0, alpha),
-                ..default()
-            });
+        let desired = Sprite {
+            image,
+            custom_size: Some(size),
+            color: Color::srgba(1.0, 1.0, 1.0, alpha),
+            ..default()
+        };
+        if let Some(mut sprite) = existing_sprite {
+            *sprite = desired;
+        } else {
+            commands
+                .entity(entity)
+                .remove::<Mesh2d>()
+                .remove::<MeshMaterial2d<StageMaterial>>()
+                .insert(desired);
+        }
     }
-    commands.entity(entity).insert(*transform);
+    if !existing_entity {
+        commands.entity(entity).insert(*transform);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialogue_changes_do_not_invalidate_the_background() {
+        let mut state = crabgal_core::State::new();
+        state.bg = Some("scene.webp".into());
+        let mut cache = BackgroundRenderCache::default();
+        cache.capture(&GameState(state.clone()));
+
+        state.dialogue = Some(crabgal_core::state::Dialogue {
+            speaker: "A".into(),
+            text: "hello".into(),
+            markup: "hello".into(),
+            visible_chars: 1,
+            vocal: None,
+            volume: 1.0,
+            auto_advance: false,
+        });
+        assert!(cache.matches(&GameState(state.clone())));
+        state.bg_transform.offset_x = 10.0;
+        assert!(!cache.matches(&GameState(state)));
+    }
 }

@@ -44,7 +44,7 @@ pub fn setup_loading(
             Text::new("Loading..."),
             TextFont {
                 font: font.into(),
-                font_size: FontSize::from(24.0),
+                font_size: FontSize::from(18.0),
                 ..default()
             },
             TextColor(Color::WHITE),

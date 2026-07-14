@@ -10,7 +10,7 @@ setVar:enableLocked=false
 
 changeBg:bg.webp -fade -duration=500
 changeFigure:stand.webp -left -id=hero -fade -duration=500 -zIndex=2
-{heroName}:Phase {chapter} 验收开始。数组第二项是 {flags[1]}。 -v16.wav -volume=65
+{heroName}:Phase {chapter} 验收开始。数组第二项是 {flags[1]}。 -v16.opus -volume=65
 {heroName}:富文本可读降级：[样式文本](color=#ffb7c5)，注音：[蟹](かに)，以及第一行<br>第二行。
 
 setTransform:{"position":{"x":180,"y":0},"scale":{"x":1.04,"y":1.04},"rotation":0.02,"blur":5} -target=hero -duration=700 -easing=easeInOut

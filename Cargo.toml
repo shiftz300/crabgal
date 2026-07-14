@@ -11,8 +11,19 @@ version.workspace = true
 edition.workspace = true
 description = "A dedicated visual-novel engine with WebGAL script compatibility"
 
+[features]
+default = ["audio-all", "ui-sounds"]
+audio-all = ["bundled-opus", "audio-wav", "audio-mp3", "audio-vorbis", "audio-flac"]
+ui-sounds = ["bundled-opus"]
+audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
+bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
+audio-wav = ["bevy/wav"]
+audio-mp3 = ["bevy/mp3"]
+audio-vorbis = ["bevy/vorbis"]
+audio-flac = ["bevy/flac"]
+
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
@@ -38,6 +49,11 @@ hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "4cf5287", defa
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+webbrowser = "1"
+rodio = { version = "0.22.2", default-features = false }
+symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
+symphonia-adapter-libopus = { version = "0.3", default-features = false }
 
 [dependencies]
 crabgal-core = { workspace = true }
@@ -48,4 +64,9 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 libwebp-sys = { workspace = true }
 futures-lite = { workspace = true }
-bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "wav", "mp3", "vorbis", "png", "jpeg"] }
+rfd = { workspace = true }
+webbrowser = { workspace = true }
+rodio = { workspace = true, optional = true }
+symphonia = { workspace = true, optional = true }
+symphonia-adapter-libopus = { workspace = true, optional = true }
+bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }

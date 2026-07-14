@@ -24,15 +24,15 @@ pub fn setup_performance_overlay(
         Text::new("Performance data warming up..."),
         TextFont {
             font: fonts.text.clone().into(),
-            font_size: FontSize::from(20.0),
+            font_size: FontSize::from(15.0),
             ..default()
         },
         TextColor(Color::srgb(0.45, 1.0, 0.55)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(16.0),
-            right: Val::Px(16.0),
-            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+            top: Val::Px(12.0),
+            right: Val::Px(12.0),
+            padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
             display: Display::None,
             ..default()
         },

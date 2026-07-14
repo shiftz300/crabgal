@@ -3,8 +3,12 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bevy::app::AppExit;
+use bevy::prelude::*;
 use crabgal_core::State;
 use crabgal_loader::{StoreAdapter, StoreStatus};
+
+use crate::runtime::resources::{GameState, ProjectRoot, StoreCodec};
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 pub use crabgal_loader::StoreMetadata as SaveMetadata;
@@ -62,6 +66,26 @@ pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Re
     Ok(state)
 }
 
+/// Flushes the current game state before Bevy completes a graceful shutdown.
+/// Window close, the in-game EXIT action and the first terminal Ctrl+C all
+/// produce `AppExit`; title-screen exits intentionally preserve the previous
+/// quick save instead of replacing it with an empty title state.
+pub(crate) fn quick_save_on_exit(
+    mut exits: MessageReader<AppExit>,
+    state: Res<GameState>,
+    project_root: Res<ProjectRoot>,
+    store: Res<StoreCodec>,
+) {
+    if exits.read().next().is_none() || state.ended {
+        return;
+    }
+    if let Err(error) = save_game(store.0.as_ref(), &state, QUICK_SAVE_SLOT, &project_root) {
+        log::error!("failed to quick-save during shutdown: {error:#}");
+    } else {
+        log::info!("quick-saved current game before shutdown");
+    }
+}
+
 /// Reads only the small metadata prefix; the full state is untouched until load.
 pub fn inspect_slot(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> SlotStatus {
     let path = slot_path(store, project_root, slot);
@@ -95,6 +119,31 @@ pub fn delete_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> 
     Ok(())
 }
 
+/// Deletes every manual and quick-save slot while preserving settings,
+/// read-history and gallery data stored beside them.
+pub fn clear_games(store: &dyn StoreAdapter, project_root: &Path) -> Result<()> {
+    let directory = project_root.join("saves");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("failed to read save directory"),
+    };
+    let store_suffix = format!(".{}", store.extension());
+    for entry in entries {
+        let entry = entry.context("failed to inspect save directory entry")?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_slot =
+            name.starts_with("slot_") && (name.ends_with(&store_suffix) || name.ends_with(".webp"));
+        if is_slot {
+            fs::remove_file(entry.path())
+                .with_context(|| format!("failed to delete {}", entry.path().display()))?;
+        }
+    }
+    log::info!("cleared all save slots");
+    Ok(())
+}
+
 fn inspect_file(store: &dyn StoreAdapter, path: &Path) -> Result<SlotStatus> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -118,6 +167,7 @@ fn slot_path(store: &dyn StoreAdapter, project_root: &Path, slot: u32) -> PathBu
 mod tests {
     use super::*;
     use crabgal_loader::CrabgalStore;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_root(label: &str) -> PathBuf {
@@ -178,6 +228,56 @@ mod tests {
 
         assert_eq!(inspect_slot(&CrabgalStore, 4, &root), SlotStatus::Empty);
         assert!(!preview_path(&root, 4).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clears_slots_without_removing_settings_data() {
+        let root = temp_root("clear");
+        save_game(&CrabgalStore, &sample_state(), QUICK_SAVE_SLOT, &root).unwrap();
+        save_game(&CrabgalStore, &sample_state(), 4, &root).unwrap();
+        fs::write(preview_path(&root, 4), b"preview").unwrap();
+        fs::write(root.join("saves/settings.bin"), b"settings").unwrap();
+
+        clear_games(&CrabgalStore, &root).unwrap();
+
+        assert_eq!(
+            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            SlotStatus::Empty
+        );
+        assert_eq!(inspect_slot(&CrabgalStore, 4, &root), SlotStatus::Empty);
+        assert!(root.join("saves/settings.bin").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graceful_exit_quick_saves_only_during_gameplay() {
+        let root = temp_root("exit");
+        let mut state = sample_state();
+        state.ended = false;
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .insert_resource(GameState(state.clone()))
+            .insert_resource(ProjectRoot(root.clone()))
+            .insert_resource(StoreCodec(Arc::new(CrabgalStore)))
+            .add_systems(Last, quick_save_on_exit);
+
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+
+        assert_eq!(
+            load_game(&CrabgalStore, QUICK_SAVE_SLOT, &root).unwrap(),
+            state
+        );
+
+        app.world_mut().resource_mut::<GameState>().ended = true;
+        fs::remove_file(slot_path(&CrabgalStore, &root, QUICK_SAVE_SLOT)).unwrap();
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        assert_eq!(
+            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            SlotStatus::Empty
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

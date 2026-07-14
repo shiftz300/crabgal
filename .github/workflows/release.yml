@@ -1,0 +1,61 @@
+name: encrypted-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Project directory to package
+        required: true
+        default: projects/test-project
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: crabgal-linux
+          - os: macos-latest
+            artifact: crabgal-macos
+          - os: windows-latest
+            artifact: crabgal-windows
+    runs-on: ${{ matrix.os }}
+    env:
+      CRABGAL_HEXZ_PASSWORD: ${{ secrets.CRABGAL_HEXZ_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require encrypted-release secret
+        shell: bash
+        run: |
+          if [[ -z "$CRABGAL_HEXZ_PASSWORD" ]]; then
+            echo "Configure the CRABGAL_HEXZ_PASSWORD repository secret" >&2
+            exit 2
+          fi
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Install pinned Hexz CLI
+        shell: bash
+        run: >-
+          cargo install --locked --git https://github.com/maincoretech/hexz_k
+          --rev 4cf5287 --no-default-features --features cli
+      - name: Build encrypted release package
+        shell: bash
+        run: >-
+          bash dev/scripts/package-release.sh
+          "${{ inputs.project || 'projects/test-project' }}"
+          "target/${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.artifact }}/
+          if-no-files-found: error
+          retention-days: 14

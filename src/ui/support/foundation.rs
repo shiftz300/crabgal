@@ -81,6 +81,14 @@ pub(crate) fn ease_in_out_cubic(value: f32) -> f32 {
     }
 }
 
+#[derive(Component, Clone, Copy, Default)]
+pub(crate) enum UiSoundStyle {
+    #[default]
+    Click,
+    Switch,
+    HoverOnly,
+}
+
 #[derive(Component)]
 pub(crate) struct ButtonPressFeedback {
     scale: f32,

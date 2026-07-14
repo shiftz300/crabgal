@@ -20,6 +20,7 @@ impl Plugin for ScenePlugin {
             .init_resource::<audio::EffectPlayback>()
             .init_resource::<audio::AudioAnimationActivity>()
             .init_resource::<images::ImageDimensions>()
+            .init_resource::<images::PreparedImages>()
             .init_resource::<crate::runtime::resources::AssetLoadingGate>();
         app.add_systems(
             Update,

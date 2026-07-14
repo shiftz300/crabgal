@@ -27,6 +27,9 @@ pub(crate) enum DialogAction {
     SaveSlot(u32),
     LoadSlot(u32),
     DeleteSlot(u32),
+    ClearSaves,
+    ResetSettings,
+    ClearAll,
     BackToTitle,
     Noop,
     ExitGame,
@@ -115,11 +118,15 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     project_root: Res<'w, crate::runtime::resources::ProjectRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     preview: ResMut<'w, QuickSavePreview>,
+    save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
     images: ResMut<'w, Assets<Image>>,
     windows: Query<'w, 's, &'static Window>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     settings_ui: ResMut<'w, crate::ui::settings_panel::SettingsUi>,
     backlog_ui: ResMut<'w, crate::ui::backlog::BacklogUiState>,
+    settings: ResMut<'w, crate::storage::settings::RuntimeSettings>,
+    toggles: ResMut<'w, crate::ui::control_bar::ToggleStates>,
+    pending_window: ResMut<'w, crate::ui::settings_panel::PendingWindowMode>,
 }
 
 #[derive(SystemParam)]
@@ -192,7 +199,7 @@ pub fn spawn_dialog(
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Percent(20.0),
-                    border: UiRect::top(Val::Px(15.0)),
+                    border: UiRect::top(Val::Px(11.25)),
                     ..default()
                 },
                 BorderColor::all(Color::NONE),
@@ -205,7 +212,7 @@ pub fn spawn_dialog(
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::SpaceBetween,
                     align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(80.0), Val::Px(24.0)),
+                    padding: UiRect::axes(Val::Px(60.0), Val::Px(18.0)),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -214,12 +221,12 @@ pub fn spawn_dialog(
                 },
                 children![
                     // Title
-                    dialog_text(req.title.clone(), font.clone(), 64.0, 0.9),
+                    dialog_text(req.title.clone(), font.clone(), 48.0, 0.9),
                     // Button row — wide spacing
                     (
                         Node {
                             flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(80.0),
+                            column_gap: Val::Px(60.0),
                             ..default()
                         },
                         children![
@@ -271,11 +278,11 @@ fn spawn_dialog_button(action: DialogButton, text: String, font: Handle<Font>) -
         action,
         DialogButtonVisual::default(),
         Node {
-            padding: UiRect::axes(Val::Px(32.0), Val::Px(8.0)),
+            padding: UiRect::axes(Val::Px(24.0), Val::Px(6.0)),
             ..default()
         },
         BackgroundColor(Color::NONE),
-        children![dialog_text(text, font, 42.0, 0.67)],
+        children![dialog_text(text, font, 31.5, 0.67)],
     )
 }
 
@@ -434,6 +441,46 @@ pub fn handle_dialog_click(
                     Ok(()) => context.save_load.set_changed(),
                     Err(error) => log::error!("delete slot {slot} failed: {error:#}"),
                 }
+            }
+            DialogAction::ClearSaves => {
+                if let Err(error) = crate::storage::save::clear_games(
+                    context.store.0.as_ref(),
+                    &context.project_root,
+                ) {
+                    log::error!("failed to clear save slots: {error:#}");
+                } else {
+                    context.preview.state = None;
+                    context.preview.image = None;
+                    context.save_previews.clear();
+                    context.save_load.set_changed();
+                }
+            }
+            DialogAction::ResetSettings => {
+                crate::ui::settings_panel::reset_runtime_settings(
+                    &mut context.settings,
+                    &mut context.toggles,
+                    &mut context.pending_window,
+                    &context.project_root,
+                );
+            }
+            DialogAction::ClearAll => {
+                if let Err(error) = crate::storage::save::clear_games(
+                    context.store.0.as_ref(),
+                    &context.project_root,
+                ) {
+                    log::error!("failed to clear save slots: {error:#}");
+                } else {
+                    context.preview.state = None;
+                    context.preview.image = None;
+                    context.save_previews.clear();
+                    context.save_load.set_changed();
+                }
+                crate::ui::settings_panel::reset_runtime_settings(
+                    &mut context.settings,
+                    &mut context.toggles,
+                    &mut context.pending_window,
+                    &context.project_root,
+                );
             }
             DialogAction::Noop => {}
             DialogAction::ExitGame => {

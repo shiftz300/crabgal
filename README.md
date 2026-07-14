@@ -32,7 +32,7 @@ crabgal/
 
 ## Features
 
-- **GPU rendering** — Bevy/wgpu, 2560x1440 design resolution, letterbox scaling
+- **GPU rendering** — Bevy/wgpu, 1920×1080 design resolution, letterbox scaling
 - **GPU blur** — region-based separable Gaussian blur and modal backdrop blur
 - **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
 - **WebGAL migration path** — parse and execute a growing, explicitly tracked subset of `.txt` scripts
@@ -44,6 +44,8 @@ crabgal/
 - **Script runtime** — expressions, arrays, global variables, interpolation and common flow arguments
 - **Local asset pipeline** — parser-generated manifests and bounded Bevy `AssetServer` prefetch
 - **Local vocal playback** — WebGAL vocal shorthand and per-line volume
+- **Unified Opus distribution** — streaming decode for BGM, voice, effects and engine UI audio
+- **Project-sized audio build** — release packaging compiles only the codecs used by project assets
 - **Auto / Skip modes** — A for auto-advance, Ctrl for skip
 - **Rich dialogue** — styled spans, ruby/furigana, concatenation and player input
 - **Unified input** — keyboard, mouse, touch and gamepad actions behind one runtime API
@@ -97,7 +99,7 @@ See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
 | 4 — Audio | Done; awaiting acceptance | BGM fades, vocal/replay, effects and volume buses |
 | 5 — Presentation | Done; awaiting acceptance | Timelines, filters, blend modes, transitions and particles |
 | 6 — Text | Done; awaiting acceptance | Rich spans, ruby/furigana, concatenation and player input |
-| 7 — Engineering | Core done; awaiting acceptance | Unified input, gallery unlocks, Hexz, app bundle and CI |
+| 7 — Engineering | Done; awaiting acceptance | Unified input, gallery unlocks, Hexz, app bundle and encrypted release CI |
 
 Phase 7 keeps video, Live2D, Spine and Steam as explicit optional adapters. They are not linked into
 the default engine until a backend and its distribution/licensing policy are selected.

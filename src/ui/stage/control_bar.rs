@@ -373,7 +373,7 @@ pub fn animate_quick_previews(
 ) {
     const TRANSITION_SECONDS: f32 = 0.2;
     const SURFACE_ALPHA: f32 = 0.68;
-    const BLUR_STRENGTH: f32 = 48.0;
+    const BLUR_STRENGTH: f32 = 36.0;
 
     let amount = (time.delta_secs() / TRANSITION_SECONDS).min(1.0);
     let mut visual_alpha = [0.0; 2];
@@ -417,7 +417,7 @@ fn preview_index(owner: ButtonAction) -> usize {
 
 /// Anchors both the UI-layer blur proxy and the Dialog-camera preview to the
 /// corresponding control button. All inputs are physical layout values, then
-/// converted back into the shared 2560x1440 design canvas.
+/// converted back into the shared 1920×1080 design canvas.
 pub fn position_quick_previews(
     buttons: Query<(&ButtonAction, &ComputedNode, &UiGlobalTransform), With<Button>>,
     content_root: Query<(&ComputedNode, &UiGlobalTransform), With<ContentRoot>>,
@@ -437,8 +437,8 @@ pub fn position_quick_previews(
         let button_center =
             root_size * 0.5 + (button_transform.translation - root_center) * to_design;
         let button_size = button_node.size() * to_design;
-        let left = button_center.x + button_size.x * 0.5 - 1050.0;
-        let top = button_center.y - button_size.y * 0.5 - 270.0 - 8.0;
+        let left = button_center.x + button_size.x * 0.5 - 787.5;
+        let top = button_center.y - button_size.y * 0.5 - 202.5 - 6.0;
 
         for (preview, mut node) in &mut previews {
             if preview.owner == *action {

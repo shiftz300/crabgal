@@ -6,15 +6,17 @@ use crate::ui::backlog::{BacklogButtonVisual, BacklogClose, BacklogRoot, Backlog
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
 use crate::ui::dialog::{DialogButtonVisual, DialogFade};
+use crate::ui::extra::{ExtraButtonVisual, ExtraMotion};
 use crate::ui::foundation::ButtonPressFeedback;
 use crate::ui::menu::{MenuFade, MenuRouteTransition};
 use crate::ui::save_load::{
     SaveLoadPage, SaveLoadPageTransition, SaveLoadPageVisual, SaveLoadSlotMotion, SaveLoadUi,
 };
 use crate::ui::settings_panel::{
-    ActiveSettingSlider, PendingWindowMode, SettingChoice, SettingChoiceVisual, SettingSlider,
-    SettingSliderThumb, SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual,
-    SettingsPageTransition, SettingsUi, SettingsWatermark,
+    AboutRepositoryLink, AboutRepositoryVisual, ActiveSettingSlider, LanguageDropdownAnimation,
+    PendingWindowMode, SettingChoice, SettingChoiceVisual, SettingSlider, SettingSliderThumb,
+    SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual, SettingsPageTransition,
+    SettingsUi, SettingsWatermark,
 };
 use crate::ui::textbox::{InitialTextboxFade, TextboxOverlayFade};
 use crate::ui::title::{PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion};
@@ -90,6 +92,15 @@ pub(crate) struct UiActivityContext<'w, 's> {
             &'static SettingSliderThumbVisual,
         ),
     >,
+    language_dropdowns: Query<'w, 's, &'static LanguageDropdownAnimation>,
+    about_links: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static AboutRepositoryVisual),
+        With<AboutRepositoryLink>,
+    >,
+    extra_motions: Query<'w, 's, &'static ExtraMotion>,
+    extra_buttons: Query<'w, 's, (&'static Interaction, &'static ExtraButtonVisual)>,
     save_load_transition: Res<'w, SaveLoadPageTransition>,
     menu_route_transition: Res<'w, MenuRouteTransition>,
     pending_title: Option<Res<'w, PendingTitleAction>>,
@@ -142,6 +153,11 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
         || context.menu_route_transition.is_animating()
         || context.pending_title.is_some()
         || context.return_to_title.is_some()
+        || context.extra_motions.iter().any(ExtraMotion::is_animating)
+        || context
+            .extra_buttons
+            .iter()
+            .any(|(interaction, visual)| visual.is_animating(*interaction))
         || context.pending_window.is_pending()
         || context.active_slider.is_active()
         || context.textbox_initial_fade.is_animating()
@@ -166,6 +182,14 @@ fn menu_controls_are_animating(context: &UiActivityContext<'_, '_>) -> bool {
                 visual.is_animating(*interaction, page.0, context.settings_ui.page)
             })
         || context.settings_page_transition.is_animating()
+        || context
+            .language_dropdowns
+            .iter()
+            .any(LanguageDropdownAnimation::is_animating)
+        || context
+            .about_links
+            .iter()
+            .any(|(interaction, visual)| visual.is_animating(*interaction))
         || context
             .setting_choices
             .iter()

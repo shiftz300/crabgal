@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 
 use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages, io::Reader};
@@ -11,7 +11,10 @@ use libwebp_sys::{
 
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
 
-const BACKGROUND_LIMIT: UVec2 = UVec2::new(1920, 1080);
+const BACKGROUND_LIMIT: UVec2 = UVec2::new(
+    crabgal_core::DESIGN_WIDTH as u32,
+    crabgal_core::DESIGN_HEIGHT as u32,
+);
 
 pub(crate) struct NativeWebpPlugin {
     sprite_height: f32,
@@ -63,6 +66,9 @@ impl AssetLoader for NativeWebpLoader {
 #[derive(Resource, Default)]
 pub(crate) struct ImageDimensions(HashMap<AssetId<Image>, UVec2>);
 
+#[derive(Resource, Default)]
+pub(crate) struct PreparedImages(HashSet<AssetId<Image>>);
+
 impl ImageDimensions {
     pub(crate) fn aspect(&self, handle: &Handle<Image>) -> Option<f32> {
         let size = self.0.get(&handle.id())?;
@@ -77,12 +83,39 @@ pub(crate) fn prepare(
     config: Res<GameConfigResource>,
     mut images: ResMut<Assets<Image>>,
     mut dimensions: ResMut<ImageDimensions>,
+    mut prepared: ResMut<PreparedImages>,
 ) {
+    let is_image = |path: &str| path.starts_with("background/") || path.starts_with("figure/");
+    let has_pending = cache.0.iter().any(|(path, handle)| {
+        is_image(path) && !prepared.0.contains(&handle.id().typed::<Image>())
+    });
+    if !cache.is_changed() && !has_pending {
+        return;
+    }
+
+    let active = cache
+        .0
+        .iter()
+        .filter(|(path, _)| is_image(path))
+        .map(|(_, handle)| handle.id().typed::<Image>())
+        .collect::<HashSet<_>>();
+    if cache.is_changed() {
+        if prepared.0.iter().any(|id| !active.contains(id)) {
+            prepared.0.retain(|id| active.contains(id));
+        }
+        if dimensions.0.keys().any(|id| !active.contains(id)) {
+            dimensions.0.retain(|id, _| active.contains(id));
+        }
+    }
+
     for (path, handle) in &cache.0 {
         if !path.starts_with("background/") && !path.starts_with("figure/") {
             continue;
         }
         let id = handle.id().typed::<Image>();
+        if prepared.0.contains(&id) {
+            continue;
+        }
         let Some(mut image) = images.get_mut(id) else {
             continue;
         };
@@ -112,6 +145,7 @@ pub(crate) fn prepare(
             }
             image.asset_usage = RenderAssetUsages::RENDER_WORLD;
         }
+        prepared.0.insert(id);
     }
 }
 
@@ -272,15 +306,23 @@ mod tests {
     #[test]
     fn preserves_aspect_when_reducing_figure() {
         assert_eq!(
-            target_size("figure/stand.webp", UVec2::new(1536, 2742), 1100.0),
-            UVec2::new(616, 1100)
+            target_size("figure/stand.webp", UVec2::new(1536, 2742), 825.0),
+            UVec2::new(462, 825)
+        );
+    }
+
+    #[test]
+    fn caps_background_textures_at_the_design_resolution() {
+        assert_eq!(
+            target_size("background/bg.webp", UVec2::new(3840, 2160), 825.0),
+            UVec2::new(1920, 1080)
         );
     }
 
     #[test]
     fn never_upscales_source_art() {
         assert_eq!(
-            target_size("background/bg.webp", UVec2::new(1280, 720), 1100.0),
+            target_size("background/bg.webp", UVec2::new(1280, 720), 825.0),
             UVec2::new(1280, 720)
         );
     }

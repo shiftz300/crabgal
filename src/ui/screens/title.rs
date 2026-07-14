@@ -107,9 +107,9 @@ pub struct TitleButtonMotion {
 impl TitleButtonMotion {
     pub(crate) fn is_animating(&self, interaction: Interaction) -> bool {
         let (target_width, target_padding) = match interaction {
-            Interaction::None => (100.0, 30.0),
-            Interaction::Hovered => (96.25, 30.0),
-            Interaction::Pressed => (92.0, 27.0),
+            Interaction::None => (100.0, 22.5),
+            Interaction::Hovered => (96.25, 22.5),
+            Interaction::Pressed => (92.0, 20.25),
         };
         (self.width - target_width).abs() > 0.001
             || (self.padding - target_padding).abs() > 0.001
@@ -158,6 +158,7 @@ pub struct TitleInputContext<'w, 's> {
     pending: Option<ResMut<'w, PendingTitleAction>>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     settings: ResMut<'w, crate::ui::settings_panel::SettingsUi>,
+    extra: ResMut<'w, crate::ui::extra::ExtraUi>,
     commands: Commands<'w, 's>,
 }
 
@@ -238,7 +239,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                     top: Val::Percent(17.0),
                     width: Val::Percent(20.5),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(40.0),
+                    row_gap: Val::Px(30.0),
                     ..default()
                 },))
                 .with_children(|menu| {
@@ -292,7 +293,7 @@ fn spawn_title_button(
         Node {
             position_type: PositionType::Relative,
             width: Val::Percent(100.0),
-            height: Val::Px(126.0),
+            height: Val::Px(94.5),
             ..default()
         },
         BackgroundColor(Color::NONE),
@@ -307,16 +308,16 @@ fn spawn_title_button(
             },
             TitleButtonMotion {
                 width: 100.0,
-                padding: 30.0,
+                padding: 22.5,
                 press: 0.0,
             },
             UiTransform::default(),
             BlurSource,
-            BlurStrength(10.0),
+            BlurStrength(7.5),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                padding: UiRect::left(Val::Px(30.0)),
+                padding: UiRect::left(Val::Px(22.5)),
                 align_items: AlignItems::Center,
                 ..default()
             },
@@ -334,7 +335,7 @@ fn spawn_title_button(
                     BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.64)),
                     FocusPolicy::Pass,
                 ),
-                text(label, font, 50.0, 0.9)
+                text(label, font, 37.5, 0.9)
             ],
         ));
         if let Some(action) = action {
@@ -358,24 +359,24 @@ fn spawn_continue_preview(
                 position_type: PositionType::Absolute,
                 right: Val::Percent(105.0),
                 top: Val::Px(0.0),
-                width: Val::Px(900.0),
-                height: Val::Px(230.0),
-                padding: UiRect::all(Val::Px(12.0)),
+                width: Val::Px(675.0),
+                height: Val::Px(172.5),
+                padding: UiRect::all(Val::Px(9.0)),
                 display: Display::None,
-                column_gap: Val::Px(14.0),
+                column_gap: Val::Px(10.5),
                 overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.78)),
             BlurSource,
-            BlurStrength(48.0),
+            BlurStrength(36.0),
         ))
         .with_children(|panel| {
             if let Some(image) = &preview.image {
                 panel.spawn((
                     ImageNode::new(image.clone()),
                     Node {
-                        width: Val::Px(360.0),
+                        width: Val::Px(270.0),
                         height: Val::Percent(100.0),
                         flex_shrink: 0.0,
                         ..default()
@@ -393,12 +394,12 @@ fn spawn_continue_preview(
                 .spawn((Node {
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(12.0),
+                    row_gap: Val::Px(9.0),
                     ..default()
                 },))
                 .with_children(|copy| {
-                    copy.spawn(text(speaker, font, 30.0, 0.8));
-                    copy.spawn(text(dialogue, font, 25.0, 0.67));
+                    copy.spawn(text(speaker, font, 22.5, 0.8));
+                    copy.spawn(text(dialogue, font, 18.75, 0.67));
                 });
         });
 }
@@ -406,16 +407,16 @@ fn spawn_continue_preview(
 fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Handle<Font>) {
     menu.spawn((
         BlurSource,
-        BlurStrength(10.0),
+        BlurStrength(7.5),
         Node {
             width: Val::Percent(100.0),
-            height: Val::Px(126.0),
-            padding: UiRect::left(Val::Px(34.0)),
+            height: Val::Px(94.5),
+            padding: UiRect::left(Val::Px(25.5)),
             align_items: AlignItems::Center,
             ..default()
         },
         BackgroundColor(Color::srgba(0.32, 0.32, 0.34, 0.2)),
-        children![text(label, font, 50.0, 0.36)],
+        children![text(label, font, 37.5, 0.36)],
     ));
 }
 
@@ -482,14 +483,9 @@ pub fn handle_title_input(mut context: TitleInputContext) {
             context.settings.open = true;
         }
         Some(TitleAction::Extra) => {
-            let message = format!(
-                "EXTRA  ·  {} CG  ·  {} BGM",
-                context.state.unlocked_cg.len(),
-                context.state.unlocked_bgm.len()
-            );
-            context
-                .commands
-                .insert_resource(DialogRequest::confirmation(message, DialogAction::Noop));
+            context.save_load.mode = None;
+            context.settings.open = false;
+            context.extra.open = true;
         }
         Some(TitleAction::Start) => start_game(&mut context.state),
         _ => {}
@@ -512,9 +508,9 @@ pub fn animate_title_buttons(
             }
         }
         let (target_width, target_padding) = match interaction {
-            Interaction::None => (100.0, 30.0),
-            Interaction::Hovered => (96.25, 30.0),
-            Interaction::Pressed => (92.0, 27.0),
+            Interaction::None => (100.0, 22.5),
+            Interaction::Hovered => (96.25, 22.5),
+            Interaction::Pressed => (92.0, 20.25),
         };
         if (motion.width - target_width).abs() < 0.001
             && (motion.padding - target_padding).abs() < 0.001

@@ -6,7 +6,6 @@ use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::camera::visibility::RenderLayers;
 use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
-use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use crabgal_core::config::GameConfig;
@@ -34,21 +33,21 @@ pub fn run_with_loader(loader: LoaderRegistry) {
     let (project_root, config, content) = match open_project(&project_path, &loader) {
         Ok(project) => project,
         Err(error) => {
-            eprintln!("failed to open project: {error:#}");
+            super::logging::startup_error("failed to open project", &error);
             return;
         }
     };
     let languages = match loader.languages(&config.adapter.script) {
         Ok(languages) => languages,
         Err(error) => {
-            eprintln!("failed to select script adapter: {error:#}");
+            super::logging::startup_error("failed to select script adapter", &error);
             return;
         }
     };
     let store = match loader.store(&config.adapter.store) {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("failed to select store adapter: {error:#}");
+            super::logging::startup_error("failed to select store adapter", &error);
             return;
         }
     };
@@ -73,10 +72,7 @@ pub fn run_with_loader(loader: LoaderRegistry) {
                 ..default()
             })
             .set(ImagePlugin::default())
-            .set(LogPlugin {
-                filter: "info".into(),
-                ..default()
-            }),
+            .set(super::logging::plugin()),
     )
     .add_plugins((
         webp,
@@ -90,8 +86,9 @@ pub fn run_with_loader(loader: LoaderRegistry) {
     .insert_resource(ScriptLanguages(languages))
     .insert_resource(StoreCodec(store))
     .insert_resource(GameConfigResource(config))
-    .add_systems(PreStartup, bootstrap_project)
-    .run();
+    .add_systems(PreStartup, bootstrap_project);
+    super::logging::install_runtime_diagnostics(&mut app);
+    app.run();
 }
 
 fn open_project(
@@ -141,6 +138,7 @@ fn bootstrap_project(
     project_root: Res<ProjectRoot>,
     content: Res<ContentProjectResource>,
     languages: Res<ScriptLanguages>,
+    config: Res<GameConfigResource>,
 ) {
     spawn_cameras(&mut commands);
 
@@ -148,10 +146,14 @@ fn bootstrap_project(
     crate::storage::gallery::load(&mut state, &project_root);
     state.read_dialogues = crate::storage::read_history::load(&project_root);
     let read_history_count = state.read_dialogues.len();
+    let mut scene_count = 0;
+    let mut action_count = 0;
     let mut manifest = LocalAssetManifest::default();
     match load_scenes_with(&content, &languages) {
         Ok(scenes) => {
             for scene in scenes {
+                scene_count += 1;
+                action_count += scene.actions.len();
                 for diagnostic in &scene.diagnostics {
                     let message = format!(
                         "{}:{}:{}: {}",
@@ -179,7 +181,15 @@ fn bootstrap_project(
     }
     ensure_playable_scene(&mut state);
     step::index_labels(&mut state);
-    step::step(&mut state);
+    // Loading scripts prepares the entry scene, but execution belongs to the
+    // title screen's START action. This also lets title assets and the first
+    // scene warm up without briefly exposing gameplay UI during startup.
+    state.ended = true;
+    log::info!(
+        "project ready · {} · {scene_count} scene(s) · {action_count} action(s) · {} source(s)",
+        config.title,
+        content.sources.len(),
+    );
     commands.insert_resource(GameState(state));
     commands.insert_resource(crate::storage::read_history::ReadHistoryWriter::loaded(
         read_history_count,
