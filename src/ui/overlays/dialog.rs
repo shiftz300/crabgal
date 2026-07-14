@@ -18,6 +18,8 @@ const FADE_DURATION: f32 = 0.2;
 const OVERLAY_ALPHA: f32 = 0.16;
 const PANEL_ALPHA: f32 = 0.78;
 const BUTTON_HOVER_ALPHA: f32 = 0.0625;
+const CONFIRM_LABEL: &str = "确定";
+const CANCEL_LABEL: &str = "取消";
 
 /// Which action to perform when the user confirms.
 #[derive(Clone, Copy, Debug)]
@@ -48,8 +50,8 @@ impl DialogRequest {
     pub fn confirmation(title: impl Into<String>, action: DialogAction) -> Self {
         Self {
             title: title.into(),
-            left_text: crate::ui::locale::dialog::CONFIRM.into(),
-            right_text: crate::ui::locale::dialog::CANCEL.into(),
+            left_text: CONFIRM_LABEL.into(),
+            right_text: CANCEL_LABEL.into(),
             action,
         }
     }

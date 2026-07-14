@@ -10,6 +10,12 @@ use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::exp_lerp;
 use crate::ui::textbox::ContentRoot;
 
+const QSAVE_LABEL: &str = "Q\u{00b7}SAVE";
+const QLOAD_LABEL: &str = "Q\u{00b7}LOAD";
+const QSAVE_TITLE: &str = "快速存档";
+const QLOAD_TITLE: &str = "快速读档";
+const RETURN_TO_TITLE: &str = "返回标题画面？";
+
 #[derive(Component)]
 pub(crate) struct ControlBarTop;
 #[derive(Component)]
@@ -195,32 +201,32 @@ pub(crate) const TOP_ITEMS: &[ControlItem] = &[
 pub(crate) const BOTTOM_ITEMS: &[ControlItem] = &[
     ControlItem {
         icon: '\u{f27e}',
-        label: crate::ui::locale::menu::QSAVE,
+        label: QSAVE_LABEL,
         action: ButtonAction::QuickSave,
     },
     ControlItem {
         icon: '\u{f281}',
-        label: crate::ui::locale::menu::QLOAD,
+        label: QLOAD_LABEL,
         action: ButtonAction::QuickLoad,
     },
     ControlItem {
         icon: '\u{f7e4}',
-        label: crate::ui::locale::menu::SAVE,
+        label: "SAVE",
         action: ButtonAction::Save,
     },
     ControlItem {
         icon: '\u{f3d8}',
-        label: crate::ui::locale::menu::LOAD,
+        label: "LOAD",
         action: ButtonAction::Load,
     },
     ControlItem {
         icon: '\u{f789}',
-        label: crate::ui::locale::menu::SYSTEM,
+        label: "SYSTEM",
         action: ButtonAction::System,
     },
     ControlItem {
         icon: '\u{f425}',
-        label: crate::ui::locale::menu::TITLE,
+        label: "TITLE",
         action: ButtonAction::Title,
     },
 ];
@@ -301,20 +307,20 @@ pub fn handle_button_click(
 
             ButtonAction::QuickSave => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::locale::dialog::QSAVE_TITLE,
+                    QSAVE_TITLE,
                     DialogAction::QuickSave,
                 ));
             }
             ButtonAction::QuickLoad => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::locale::dialog::QLOAD_TITLE,
+                    QLOAD_TITLE,
                     DialogAction::QuickLoad,
                 ));
             }
             ButtonAction::Save | ButtonAction::Load => {}
             ButtonAction::Title => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::locale::dialog::TITLE_TITLE,
+                    RETURN_TO_TITLE,
                     DialogAction::BackToTitle,
                 ));
             }

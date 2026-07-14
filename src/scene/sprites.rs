@@ -7,9 +7,12 @@ use crabgal_core::{Anchor, BlendMode};
 
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::runtime::viewport::DesignViewport;
-use crate::scene::components::SpriteNode;
 use crate::scene::effects::material::{StageMaterial, StageQuad, animation_uniform};
 use crate::scene::images::ImageDimensions;
+
+/// Marker for sprite entities with stable IDs used by diff-based synchronization.
+#[derive(Component)]
+pub(crate) struct SpriteNode(pub(crate) String);
 
 #[derive(Default)]
 pub(crate) struct SpriteRenderCache {

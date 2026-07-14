@@ -2,7 +2,6 @@ pub(crate) mod activity;
 pub(crate) mod foundation;
 pub(crate) mod input_scope;
 pub mod loading;
-pub(crate) mod locale;
 pub mod performance;
 #[cfg(feature = "ui-sounds")]
 pub(crate) mod sound;

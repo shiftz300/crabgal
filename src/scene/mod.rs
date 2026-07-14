@@ -1,7 +1,6 @@
 pub mod assets;
 pub mod audio;
 pub mod background;
-pub(crate) mod components;
 pub(crate) mod effects;
 pub(crate) mod images;
 pub mod sprites;

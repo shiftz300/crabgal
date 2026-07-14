@@ -1,6 +1,6 @@
 // Lightweight region-based Gaussian blur post-processing for Bevy 0.19.
 use crate::runtime::resources::GameState;
-use crate::scene::components::SpriteNode;
+use crate::scene::sprites::SpriteNode;
 use crate::ui::control_bar::{
     AutoHideTiming, BlurSource, BlurStrength, ToggleStates, UiBlurSource,
 };

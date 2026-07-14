@@ -9,7 +9,7 @@ pub use screens::{extra, save_load, settings_panel, title};
 pub use stage::{choice, control_bar, textbox};
 #[cfg(feature = "ui-sounds")]
 pub(crate) use support::sound;
-pub(crate) use support::{activity, foundation, input_scope, locale};
+pub(crate) use support::{activity, foundation, input_scope};
 pub use support::{loading, performance, text_style};
 
 #[cfg(feature = "ui-sounds")]

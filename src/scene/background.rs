@@ -7,8 +7,19 @@ use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::runtime::resources::GameState;
 use crate::runtime::viewport::DesignViewport;
-use crate::scene::components::{BackgroundLayer, BackgroundNode};
 use crate::scene::effects::material::{StageMaterial, StageQuad, animation_uniform};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum BackgroundLayer {
+    Previous,
+    Current,
+}
+
+#[derive(Component)]
+pub(crate) struct BackgroundNode {
+    pub(crate) layer: BackgroundLayer,
+    pub(crate) image: String,
+}
 
 #[derive(Default)]
 pub(crate) struct BackgroundRenderCache {

@@ -4,7 +4,6 @@ mod bootstrap;
 pub(crate) mod input;
 pub(crate) mod lifecycle;
 mod logging;
-pub(crate) mod resize;
 pub(crate) mod resources;
 pub(crate) mod tick;
 pub(crate) mod viewport;
@@ -33,7 +32,7 @@ impl Plugin for RuntimePlugin {
             .init_resource::<input::InputActions>();
         app.add_systems(PreUpdate, input::collect);
         app.add_systems(Update, tick::tick.in_set(GameSystemSet::Input));
-        app.add_systems(Update, resize::on_resize.in_set(GameSystemSet::Layout));
+        app.add_systems(Update, viewport::on_resize.in_set(GameSystemSet::Layout));
         app.add_systems(Last, lifecycle::update);
     }
 }
