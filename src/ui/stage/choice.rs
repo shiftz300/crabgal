@@ -16,6 +16,9 @@ const BORDER_ALPHA: f32 = 0.14;
 pub(crate) struct ChoiceRoot {
     menu: MenuState,
     selected: usize,
+    /// The key/click that advanced into a choice must not immediately confirm
+    /// its first option in the same frame.
+    input_armed: bool,
 }
 
 impl ChoiceRoot {
@@ -83,6 +86,7 @@ pub fn sync_choice(
                     .iter()
                     .position(|choice| choice.enabled)
                     .unwrap_or(0),
+                input_armed: false,
             },
             Node {
                 position_type: PositionType::Absolute,
@@ -175,6 +179,10 @@ pub fn handle_choice_input(
     if choice_count == 0 {
         return;
     }
+    if !root.input_armed {
+        root.input_armed = true;
+        return;
+    }
 
     let mut confirmed = None;
     for (interaction, button) in &interactions {
@@ -220,6 +228,9 @@ pub fn handle_choice_input(
         return;
     };
     step::select_choice(&mut state, index);
+    if state.menu.is_some() {
+        return;
+    }
     step::step(&mut state);
     commands.entity(root_entity).despawn();
 }

@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+#[cfg(feature = "audio-opus")]
+use bevy::audio::AudioPlayer;
 use bevy::audio::{AudioSink, AudioSinkPlayback, PlaybackMode, Volume};
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
@@ -56,7 +60,38 @@ pub(crate) struct ExtraFullCg;
 pub(crate) struct ExtraBgm(String);
 
 #[derive(Component)]
-pub(crate) struct ExtraBgmPlayer;
+pub(crate) struct ExtraBgmPlayer {
+    duration: Option<Duration>,
+}
+
+#[derive(Component)]
+pub(crate) struct ExtraBgmProgress;
+
+#[derive(Component)]
+pub(crate) struct ExtraBgmTime;
+
+#[derive(Component)]
+pub(crate) struct ExtraBgmName;
+
+#[derive(Component)]
+pub(crate) struct ExtraBgmProgressThumb;
+
+#[derive(Component, Default)]
+pub(crate) struct ExtraBgmSeekBar {
+    dragging: bool,
+    preview: Option<Duration>,
+}
+
+impl ExtraBgmSeekBar {
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+
+    fn reset(&mut self) {
+        self.dragging = false;
+        self.preview = None;
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct ExtraButtonVisual {
@@ -197,13 +232,13 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
                 top: Val::Percent(12.0),
                 width: Val::Percent(94.0),
                 height: Val::Percent(84.0),
+                display: Display::Grid,
+                grid_template_columns: vec![GridTrack::flex(1.0), GridTrack::flex(1.0)],
                 column_gap: Val::Px(24.0),
                 ..default()
             },))
                 .with_children(|body| {
-                    if !bgm.is_empty() {
-                        spawn_bgm_panel(body, &bgm, &context.ui, &context.fonts);
-                    }
+                    spawn_bgm_panel(body, &bgm, &context.ui, &context.fonts);
                     spawn_cg_panel(
                         body,
                         &cg,
@@ -259,7 +294,7 @@ fn spawn_bgm_panel(
 ) {
     body.spawn((
         Node {
-            width: Val::Percent(48.0),
+            min_width: Val::Px(0.0),
             height: Val::Percent(100.0),
             padding: UiRect::all(Val::Px(18.0)),
             flex_direction: FlexDirection::Column,
@@ -306,16 +341,85 @@ fn spawn_bgm_panel(
             });
         panel
             .spawn((Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(30.0),
+                column_gap: Val::Px(12.0),
+                align_items: AlignItems::Center,
+                ..default()
+            },))
+            .with_children(|progress| {
+                progress
+                    .spawn((
+                        Button,
+                        ExtraBgmSeekBar::default(),
+                        Node {
+                            flex_grow: 1.0,
+                            height: Val::Px(24.0),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|hit_area| {
+                        hit_area
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    height: Val::Px(4.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.18)),
+                            ))
+                            .with_children(|track| {
+                                track.spawn((
+                                    ExtraBgmProgress,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        left: Val::ZERO,
+                                        width: Val::Percent(0.0),
+                                        height: Val::Percent(100.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.76)),
+                                ));
+                                track.spawn((
+                                    ExtraBgmProgressThumb,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        left: Val::Percent(0.0),
+                                        top: Val::Px(-4.0),
+                                        width: Val::Px(12.0),
+                                        height: Val::Px(12.0),
+                                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                                        ..default()
+                                    },
+                                    UiTransform::from_translation(Val2::px(-6.0, 0.0)),
+                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                                ));
+                            });
+                    });
+                progress.spawn((
+                    ExtraBgmTime,
+                    Node {
+                        width: Val::Px(105.0),
+                        justify_content: JustifyContent::FlexEnd,
+                        ..default()
+                    },
+                    children![text("00:00 / 00:00", &fonts.text, 15.0, 0.58)],
+                ));
+            });
+        panel
+            .spawn((Node {
                 height: Val::Px(57.0),
                 align_items: AlignItems::Center,
                 ..default()
             },))
             .with_children(|controls| {
                 for (icon, action) in [
-                    ('\u{f3e3}', ExtraBgmControl::Previous),
+                    ('\u{f819}', ExtraBgmControl::Previous),
                     ('\u{f4f5}', ExtraBgmControl::Play),
-                    ('\u{f3e9}', ExtraBgmControl::Next),
-                    ('\u{f590}', ExtraBgmControl::Stop),
+                    ('\u{f7f4}', ExtraBgmControl::Next),
+                    ('\u{f593}', ExtraBgmControl::Stop),
                 ] {
                     controls
                         .spawn((
@@ -340,6 +444,7 @@ fn spawn_bgm_panel(
                     .and_then(|file| tracks.iter().find(|track| &track.0 == file))
                     .map_or("NO BGM", |track| track.1.as_str());
                 controls.spawn((
+                    ExtraBgmName,
                     Node {
                         flex_grow: 1.0,
                         padding: UiRect::left(Val::Px(12.0)),
@@ -363,7 +468,7 @@ fn spawn_cg_panel(
     let page_count = images.len().div_ceil(CG_PER_PAGE).max(1);
     let page = ui.page.clamp(1, page_count);
     body.spawn((Node {
-        flex_grow: 1.0,
+        min_width: Val::Px(0.0),
         height: Val::Percent(100.0),
         flex_direction: FlexDirection::Column,
         ..default()
@@ -562,8 +667,20 @@ pub(crate) struct ExtraBgmContext<'w, 's> {
     assets: Res<'w, AssetServer>,
     sinks: Query<'w, 's, &'static AudioSink, With<ExtraBgmPlayer>>,
     players: Query<'w, 's, Entity, With<ExtraBgmPlayer>>,
+    seek_bars: Query<'w, 's, &'static mut ExtraBgmSeekBar>,
     commands: Commands<'w, 's>,
 }
+
+#[cfg(feature = "audio-opus")]
+type ExtraOpusPlayerQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut ExtraBgmPlayer,
+        Option<&'static AudioSink>,
+        Option<&'static AudioPlayer<crate::runtime::audio::OpusAudio>>,
+    ),
+>;
 
 pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     let clicked = context.tracks.iter().find_map(|(interaction, track)| {
@@ -579,17 +696,19 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
         .cloned()
         .collect::<Vec<_>>();
     ordered.sort_unstable();
+    let ended = context.sinks.single().is_ok_and(AudioSinkPlayback::empty);
     let selected = match control {
         Some(ExtraBgmControl::Stop) => {
-            for entity in &context.players {
-                context.commands.entity(entity).despawn();
+            if let Ok(sink) = context.sinks.single() {
+                sink.pause();
             }
-            context.ui.selected_bgm = None;
             return;
         }
         Some(ExtraBgmControl::Play) if clicked.is_none() => {
-            if let Ok(sink) = context.sinks.single() {
-                sink.toggle_playback();
+            if let Ok(sink) = context.sinks.single()
+                && !sink.empty()
+            {
+                sink.play();
                 return;
             }
             context
@@ -615,17 +734,23 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
             };
             Some(ordered[next].clone())
         }
-        _ => clicked,
+        _ => clicked.or_else(|| ended.then(|| context.ui.selected_bgm.clone()).flatten()),
     };
     let Some(file) = selected else { return };
     for entity in &context.players {
         context.commands.entity(entity).despawn();
     }
+    for mut seek in &mut context.seek_bars {
+        seek.reset();
+    }
     let volume = context.settings.master_volume * context.settings.bgm_volume;
     let mut entity = context.commands.spawn((
-        ExtraBgmPlayer,
+        ExtraBgmPlayer { duration: None },
         PlaybackSettings {
-            mode: PlaybackMode::Loop,
+            // Bevy's Loop mode wraps the source in rodio::Buffered, which is
+            // intentionally not seekable. The lightweight restart above keeps
+            // gallery playback looping while preserving native Opus seeking.
+            mode: PlaybackMode::Once,
             volume: Volume::Linear(volume),
             ..default()
         },
@@ -636,6 +761,198 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
         context.config.bgm_path(&file),
     );
     context.ui.selected_bgm = Some(file);
+}
+
+pub(crate) fn sync_bgm_selection(
+    ui: Res<ExtraUi>,
+    state: Res<GameState>,
+    mut tracks: Query<(&ExtraBgm, &mut ExtraButtonVisual)>,
+    names: Query<&Children, With<ExtraBgmName>>,
+    mut labels: Query<&mut Text>,
+) {
+    if !ui.is_changed() && !state.is_changed() {
+        return;
+    }
+
+    let selected = ui.selected_bgm.as_deref();
+    for (track, mut visual) in &mut tracks {
+        visual.idle = if selected == Some(track.0.as_str()) {
+            0.19
+        } else {
+            0.0
+        };
+    }
+
+    let name = selected
+        .and_then(|file| state.unlocked_bgm.get(file))
+        .map_or("NO BGM", String::as_str);
+    for children in &names {
+        for child in children.iter() {
+            if let Ok(mut label) = labels.get_mut(child) {
+                label.0.clear();
+                label.0.push_str(name);
+            }
+        }
+    }
+}
+
+pub(crate) fn handle_bgm_seek(
+    mut bars: Query<
+        (
+            &Interaction,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &mut ExtraBgmSeekBar,
+        ),
+        With<Button>,
+    >,
+    windows: Query<&Window>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    players: Query<(&ExtraBgmPlayer, &AudioSink)>,
+) {
+    let Ok((interaction, node, transform, mut seek)) = bars.single_mut() else {
+        return;
+    };
+    let Ok(window) = windows.single() else { return };
+    if mouse.just_pressed(MouseButton::Left)
+        && matches!(interaction, Interaction::Hovered | Interaction::Pressed)
+    {
+        seek.dragging = true;
+    }
+    if seek.dragging
+        && mouse.pressed(MouseButton::Left)
+        && let Ok((player, _)) = players.single()
+        && let (Some(duration), Some(cursor)) = (player.duration, window.physical_cursor_position())
+        && let Some(point) = node.normalize_point(*transform, cursor)
+    {
+        let ratio = (point.x + 0.5).clamp(0.0, 1.0);
+        seek.preview = Some(duration.mul_f64(f64::from(ratio)));
+    }
+    if mouse.just_released(MouseButton::Left) {
+        if seek.dragging
+            && let Some(position) = seek.preview
+            && let Ok((_, sink)) = players.single()
+            && let Err(error) = sink.try_seek(position)
+        {
+            log::warn!("BGM seek failed: {error}");
+        }
+        seek.reset();
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+pub(crate) fn update_bgm_progress(
+    mut players: ExtraOpusPlayerQuery,
+    audio: Res<Assets<crate::runtime::audio::OpusAudio>>,
+    seek: Query<&ExtraBgmSeekBar>,
+    mut fills: Query<&mut Node, With<ExtraBgmProgress>>,
+    mut thumbs: Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
+    times: Query<&Children, With<ExtraBgmTime>>,
+    mut labels: Query<&mut Text>,
+) {
+    let Ok((mut player, sink, opus_player)) = players.single_mut() else {
+        set_bgm_progress(
+            &mut fills,
+            &mut thumbs,
+            &times,
+            &mut labels,
+            Duration::ZERO,
+            None,
+        );
+        return;
+    };
+    if player.duration.is_none() {
+        player.duration = opus_player
+            .and_then(|source| audio.get(&source.0))
+            .and_then(crate::runtime::audio::OpusAudio::duration);
+    }
+    let position = seek
+        .single()
+        .ok()
+        .and_then(|seek| seek.preview)
+        .unwrap_or_else(|| sink.map_or(Duration::ZERO, AudioSinkPlayback::position));
+    set_bgm_progress(
+        &mut fills,
+        &mut thumbs,
+        &times,
+        &mut labels,
+        position,
+        player.duration,
+    );
+}
+
+#[cfg(not(feature = "audio-opus"))]
+pub(crate) fn update_bgm_progress(
+    players: Query<(&ExtraBgmPlayer, Option<&AudioSink>)>,
+    seek: Query<&ExtraBgmSeekBar>,
+    mut fills: Query<&mut Node, With<ExtraBgmProgress>>,
+    mut thumbs: Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
+    times: Query<&Children, With<ExtraBgmTime>>,
+    mut labels: Query<&mut Text>,
+) {
+    let Ok((player, sink)) = players.single() else {
+        set_bgm_progress(
+            &mut fills,
+            &mut thumbs,
+            &times,
+            &mut labels,
+            Duration::ZERO,
+            None,
+        );
+        return;
+    };
+    let position = seek
+        .single()
+        .ok()
+        .and_then(|seek| seek.preview)
+        .unwrap_or_else(|| sink.map_or(Duration::ZERO, AudioSinkPlayback::position));
+    set_bgm_progress(
+        &mut fills,
+        &mut thumbs,
+        &times,
+        &mut labels,
+        position,
+        player.duration,
+    );
+}
+
+fn set_bgm_progress(
+    fills: &mut Query<&mut Node, With<ExtraBgmProgress>>,
+    thumbs: &mut Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
+    times: &Query<&Children, With<ExtraBgmTime>>,
+    labels: &mut Query<&mut Text>,
+    position: Duration,
+    duration: Option<Duration>,
+) {
+    let elapsed = duration.map_or(position, |duration| position.min(duration));
+    let percent = duration
+        .filter(|duration| !duration.is_zero())
+        .map_or(0.0, |duration| {
+            (elapsed.as_secs_f32() / duration.as_secs_f32() * 100.0).clamp(0.0, 100.0)
+        });
+    for mut fill in fills.iter_mut() {
+        fill.width = Val::Percent(percent);
+    }
+    for mut thumb in thumbs.iter_mut() {
+        thumb.left = Val::Percent(percent);
+    }
+    let value = format!(
+        "{} / {}",
+        format_bgm_time(elapsed),
+        duration.map_or_else(|| "--:--".to_owned(), format_bgm_time)
+    );
+    for children in times {
+        for child in children.iter() {
+            if let Ok(mut label) = labels.get_mut(child) {
+                label.0.clone_from(&value);
+            }
+        }
+    }
+}
+
+fn format_bgm_time(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 pub(crate) fn animate(
@@ -691,5 +1008,15 @@ pub(crate) fn animate_buttons(
             visual.current += (target - visual.current) * amount;
         }
         background.0 = Color::srgba(0.0, 0.0, 0.0, visual.current);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_bgm_time_without_fractional_jitter() {
+        assert_eq!(format_bgm_time(Duration::from_millis(62_999)), "01:02");
     }
 }

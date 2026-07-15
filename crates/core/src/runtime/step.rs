@@ -4,6 +4,8 @@
 // The key insight: VN execution pauses at user interaction points (click/choice),
 // NOT at every frame. This is how we achieve "frame rate insensitive" execution.
 
+use std::sync::Arc;
+
 use log::debug;
 
 use crate::action::Action;
@@ -47,17 +49,18 @@ pub fn step(state: &mut State) -> StepResult {
         return StepResult::AwaitPresentation;
     }
 
+    // Keep an independent handle to immutable script data. Actions can then be
+    // borrowed for dispatch while the rest of `state` is updated in place.
+    let program = Arc::clone(&state.program);
+
     for _ in 0..MAX_FORWARD_ACTIONS {
-        let Some(action) = state
-            .scenes
-            .get(&state.current_scene)
+        let Some(action) = program
+            .scene(&state.current_scene)
             .and_then(|scene| scene.get(state.cursor))
-            .cloned()
         else {
             if let Some(frame) = state.scene_stack.pop() {
                 state.current_scene = frame.scene;
                 state.cursor = frame.cursor;
-                index_labels(state);
                 continue;
             }
             return StepResult::EndOfScene;
@@ -67,7 +70,7 @@ pub fn step(state: &mut State) -> StepResult {
         let (action, next) = match action {
             Action::Flow { action, when, next } => {
                 if let Some(condition) = when {
-                    match evaluate(&condition, &state.vars, &state.global_vars) {
+                    match evaluate(condition, &state.vars, &state.global_vars) {
                         Ok(value) if value.truthy() => {}
                         Ok(_) => continue,
                         Err(error) => {
@@ -76,7 +79,7 @@ pub fn step(state: &mut State) -> StepResult {
                         }
                     }
                 }
-                (*action, next)
+                (action.as_ref(), *next)
             }
             action => (action, false),
         };
@@ -87,47 +90,54 @@ pub fn step(state: &mut State) -> StepResult {
                 transition,
                 transform,
             } => {
-                let image = interpolate(&image, &state.vars, &state.global_vars);
+                let transition = *transition;
+                let transform = *transform;
+                let image = interpolate(image, &state.vars, &state.global_vars);
                 debug!("ShowBg: {} ({:?})", image, transition);
                 let from = state.bg.take();
-                state.bg = Some(image.clone());
                 state.bg_transform = transform;
                 state.bg_transform_animation = None;
-                let rule_animation = state
-                    .transition_rules
-                    .get("bg-main")
-                    .and_then(|rule| rule.enter.clone().map(|preset| (preset, rule.duration)))
-                    .map(|(preset, duration)| PresetAnimation {
-                        preset,
+                let rule_animation = state.transition_rules.get("bg-main").and_then(|rule| {
+                    rule.enter.as_ref().map(|preset| PresetAnimation {
+                        preset: preset.clone(),
                         base: transform,
                         elapsed: 0.0,
-                        duration: duration.max(f32::EPSILON),
+                        duration: rule.duration.max(f32::EPSILON),
                         blocking: !next,
                         remove_on_finish: false,
-                    });
+                    })
+                });
                 let rule_blocks = rule_animation.is_some() && !next;
                 if let Some(animation) = &rule_animation {
                     state.bg_transform =
                         preset_initial_transform(animation.base, &animation.preset);
                 }
                 state.bg_animation = rule_animation;
-                state.bg_transition = (transition != Transition::Instant).then_some(BgTransition {
-                    from,
-                    to: image,
-                    progress: 0.0,
-                    kind: transition,
-                    blocking: !next,
-                });
+                state.bg_transition = if transition == Transition::Instant {
+                    None
+                } else {
+                    Some(BgTransition {
+                        from,
+                        to: image.clone(),
+                        progress: 0.0,
+                        kind: transition,
+                        blocking: !next,
+                    })
+                };
+                state.bg = Some(image);
                 if rule_blocks || (!next && transition != Transition::Instant) {
                     return StepResult::AwaitPresentation;
                 }
             }
             Action::HideBg { transition } => {
-                if let Some((preset, duration)) = state
-                    .transition_rules
-                    .get("bg-main")
-                    .and_then(|rule| rule.exit.clone().map(|preset| (preset, rule.duration)))
-                    && state.bg.is_some()
+                let transition = *transition;
+                if state.bg.is_some()
+                    && let Some((preset, duration)) =
+                        state.transition_rules.get("bg-main").and_then(|rule| {
+                            rule.exit
+                                .as_ref()
+                                .map(|preset| (preset.clone(), rule.duration))
+                        })
                 {
                     state.bg_animation = Some(PresetAnimation {
                         preset,
@@ -165,11 +175,14 @@ pub fn step(state: &mut State) -> StepResult {
                 duration,
                 easing,
             } => {
-                let id = interpolate(&id, &state.vars, &state.global_vars);
+                let duration = *duration;
+                let easing = *easing;
+                let id = interpolate(id, &state.vars, &state.global_vars);
                 debug!("SetTransform: {} -> {:?}", id, target);
                 let mut started = false;
                 if matches!(id.as_str(), "bg-main" | "background") {
                     started = true;
+                    let target = target.apply_to(state.bg_transform);
                     if duration > 0.0 {
                         state.bg_transform_animation = Some(TransformAnimation {
                             from: state.bg_transform,
@@ -185,6 +198,7 @@ pub fn step(state: &mut State) -> StepResult {
                     }
                 } else if let Some(sprite) = state.sprites.get_mut(&id) {
                     started = true;
+                    let target = target.apply_to(sprite.transform);
                     if duration > 0.0 {
                         sprite.transform_animation = Some(TransformAnimation {
                             from: sprite.transform,
@@ -212,8 +226,13 @@ pub fn step(state: &mut State) -> StepResult {
                 z_index,
                 blend,
             } => {
-                let id = interpolate(&id, &state.vars, &state.global_vars);
-                let image = interpolate(&image, &state.vars, &state.global_vars);
+                let position = *position;
+                let transition = *transition;
+                let transform = *transform;
+                let z_index = *z_index;
+                let blend = *blend;
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let image = interpolate(image, &state.vars, &state.global_vars);
                 debug!("ShowSprite: {} {} at {:?}", id, image, position);
                 let transition_offset_x = match (position.x, transition) {
                     (Anchor::Left(_), Transition::SlideFromLeft(_)) => -400.0,
@@ -225,10 +244,9 @@ pub fn step(state: &mut State) -> StepResult {
                 } else {
                     0.0
                 };
-                let rule = state.transition_rules.get(&id).cloned();
-                let rule_animation = rule.as_ref().and_then(|rule| {
-                    rule.enter.clone().map(|preset| PresetAnimation {
-                        preset,
+                let rule_animation = state.transition_rules.get(&id).and_then(|rule| {
+                    rule.enter.as_ref().map(|preset| PresetAnimation {
+                        preset: preset.clone(),
                         base: transform,
                         elapsed: 0.0,
                         duration: rule.duration.max(f32::EPSILON),
@@ -263,24 +281,30 @@ pub fn step(state: &mut State) -> StepResult {
                 }
             }
             Action::HideSprite { id, transition } => {
-                let id = interpolate(&id, &state.vars, &state.global_vars);
+                let transition = *transition;
+                let id = interpolate(id, &state.vars, &state.global_vars);
                 debug!("HideSprite: {}", id);
-                let rule = state.transition_rules.get(&id).cloned();
-                if let Some((sprite, preset, duration)) = state
-                    .sprites
-                    .get_mut(&id)
-                    .zip(rule.and_then(|rule| rule.exit.map(|preset| (preset, rule.duration))))
-                    .map(|(sprite, (preset, duration))| (sprite, preset, duration))
+                let exit_rule = state
+                    .transition_rules
+                    .get(&id)
+                    .and_then(|rule| rule.exit.as_ref().map(|preset| (preset, rule.duration)));
+                if let Some((sprite, (preset, duration))) =
+                    state.sprites.get_mut(&id).zip(exit_rule)
                 {
                     sprite.animation = Some(PresetAnimation {
-                        preset,
+                        preset: preset.clone(),
                         base: sprite.transform,
                         elapsed: 0.0,
                         duration: duration.max(f32::EPSILON),
                         blocking: !next,
                         remove_on_finish: true,
                     });
-                    sprite.entering = false;
+                    // The preset owns the entire exit lifecycle. Keep the
+                    // sprite fully present until it finishes so the ordinary
+                    // transition cleanup cannot remove it on the first frame
+                    // (especially when its original transition was Instant).
+                    sprite.entering = true;
+                    sprite.transition_progress = 1.0;
                     sprite.transition_blocking = false;
                     if !next {
                         return StepResult::AwaitPresentation;
@@ -310,8 +334,8 @@ pub fn step(state: &mut State) -> StepResult {
                     state.textbox_hidden = false;
                     state.textbox_auto_hidden = false;
                 }
-                let mut speaker = resolve_speaker(&speaker, state);
-                let mut markup = interpolate(&text, &state.vars, &state.global_vars)
+                let mut speaker = resolve_speaker(speaker, state);
+                let mut markup = interpolate(text, &state.vars, &state.global_vars)
                     .replace("<br/>", "\n")
                     .replace("<br>", "\n");
                 let mut text = compile_rich_text(&markup);
@@ -339,7 +363,8 @@ pub fn step(state: &mut State) -> StepResult {
                     visible_chars: 0,
                     vocal: options
                         .vocal
-                        .map(|vocal| interpolate(&vocal, &state.vars, &state.global_vars)),
+                        .as_deref()
+                        .map(|vocal| interpolate(vocal, &state.vars, &state.global_vars)),
                     volume: options.volume.clamp(0.0, 1.0),
                     auto_advance: options.auto_advance,
                 });
@@ -351,11 +376,11 @@ pub fn step(state: &mut State) -> StepResult {
             }
             Action::Menu { prompt, choices } => {
                 let choices = choices
-                    .into_iter()
+                    .iter()
                     .filter(|choice| condition_matches(choice.show_when.as_deref(), state))
                     .map(|choice| MenuChoice {
                         text: interpolate(&choice.text, &state.vars, &state.global_vars),
-                        target: interpolate_choice_target(choice.target, state),
+                        target: interpolate_choice_target(&choice.target, state),
                         enabled: condition_matches(choice.enable_when.as_deref(), state),
                     })
                     .collect::<Vec<_>>();
@@ -365,15 +390,15 @@ pub fn step(state: &mut State) -> StepResult {
                 }
                 debug!("Menu: {} visible choices", choices.len());
                 state.menu = Some(MenuState {
-                    prompt: interpolate(&prompt, &state.vars, &state.global_vars),
+                    prompt: interpolate(prompt, &state.vars, &state.global_vars),
                     choices,
                 });
                 state.dialogue = None;
                 return StepResult::AwaitChoice;
             }
             Action::Jump(label) => {
-                let label = interpolate(&label, &state.vars, &state.global_vars);
-                if let Some(&idx) = state.labels.get(&label) {
+                let label = interpolate(label, &state.vars, &state.global_vars);
+                if let Some(idx) = program.label(&state.current_scene, &label) {
                     debug!("Jump: {} -> {}", label, idx);
                     state.cursor = idx;
                 } else {
@@ -385,14 +410,14 @@ pub fn step(state: &mut State) -> StepResult {
                 debug!("Label: {}", name);
             }
             Action::ChangeScene(scene) => {
-                let scene = interpolate(&scene, &state.vars, &state.global_vars);
+                let scene = interpolate(scene, &state.vars, &state.global_vars);
                 debug!("ChangeScene: {}", scene);
                 enter_scene(state, &scene);
             }
             Action::CallScene(scene) => {
-                let scene = interpolate(&scene, &state.vars, &state.global_vars);
+                let scene = interpolate(scene, &state.vars, &state.global_vars);
                 debug!("CallScene: {}", scene);
-                if state.scenes.contains_key(&scene) {
+                if program.contains_scene(&scene) {
                     state.scene_stack.push(SceneFrame {
                         scene: state.current_scene.clone(),
                         cursor: state.cursor,
@@ -412,15 +437,19 @@ pub fn step(state: &mut State) -> StepResult {
                 volume,
                 fade_seconds,
             } => {
-                let file = interpolate(&file, &state.vars, &state.global_vars);
+                let file = interpolate(file, &state.vars, &state.global_vars);
                 state.bgm.file = (file != "none" && !file.is_empty()).then_some(file);
                 state.bgm.volume = volume.clamp(0.0, 1.0);
                 state.bgm.fade_seconds = fade_seconds.max(0.0);
                 state.bgm.revision = state.bgm.revision.wrapping_add(1);
             }
             Action::Effect { file, volume, id } => {
-                let id = id.map(|id| interpolate(&id, &state.vars, &state.global_vars));
-                let file = file.map(|file| interpolate(&file, &state.vars, &state.global_vars));
+                let id = id
+                    .as_deref()
+                    .map(|id| interpolate(id, &state.vars, &state.global_vars));
+                let file = file
+                    .as_deref()
+                    .map(|file| interpolate(file, &state.vars, &state.global_vars));
                 match (id, file) {
                     (Some(id), Some(file)) => {
                         state.looping_effects.insert(
@@ -450,11 +479,11 @@ pub fn step(state: &mut State) -> StepResult {
                 expression,
                 global,
             } => {
-                let name = interpolate(&name, &state.vars, &state.global_vars);
-                match evaluate(&expression, &state.vars, &state.global_vars) {
+                let name = interpolate(name, &state.vars, &state.global_vars);
+                match evaluate(expression, &state.vars, &state.global_vars) {
                     Ok(value) => {
                         debug!("Set: {} = {:?}", name, value);
-                        if global {
+                        if *global {
                             assign_value(&mut state.global_vars, &name, value);
                         } else {
                             assign_value(&mut state.vars, &name, value);
@@ -465,7 +494,7 @@ pub fn step(state: &mut State) -> StepResult {
             }
             Action::MiniAvatar { image } => {
                 debug!("MiniAvatar: {}", image);
-                state.mini_avatar = Some(image);
+                state.mini_avatar = Some(image.clone());
                 state.mini_avatar_progress = 0.0;
             }
             Action::HideMiniAvatar => {
@@ -478,7 +507,8 @@ pub fn step(state: &mut State) -> StepResult {
                 preset,
                 duration,
             } => {
-                let target = interpolate(&target, &state.vars, &state.global_vars);
+                let duration = *duration;
+                let target = interpolate(target, &state.vars, &state.global_vars);
                 let animation = |base| PresetAnimation {
                     preset: preset.clone(),
                     base,
@@ -512,22 +542,22 @@ pub fn step(state: &mut State) -> StepResult {
                 exit,
                 duration,
             } => {
-                let target = interpolate(&target, &state.vars, &state.global_vars);
+                let target = interpolate(target, &state.vars, &state.global_vars);
                 state.transition_rules.insert(
                     target,
                     TransitionRule {
-                        enter,
-                        exit,
+                        enter: enter.clone(),
+                        exit: exit.clone(),
                         duration: duration.max(f32::EPSILON),
                     },
                 );
             }
             Action::SetFilter { target, filter } => {
-                let target = interpolate(&target, &state.vars, &state.global_vars);
+                let target = interpolate(target, &state.vars, &state.global_vars);
                 if is_background_target(&target) {
-                    state.bg_filter = filter;
+                    state.bg_filter = *filter;
                 } else if let Some(sprite) = state.sprites.get_mut(&target) {
-                    sprite.filter = filter;
+                    sprite.filter = *filter;
                 } else {
                     log::warn!("filter target does not exist: {target}");
                 }
@@ -541,29 +571,30 @@ pub fn step(state: &mut State) -> StepResult {
             }
             Action::Intro { pages, hold } => {
                 let pages = pages
-                    .into_iter()
-                    .map(|page| interpolate(&page, &state.vars, &state.global_vars))
+                    .iter()
+                    .map(|page| interpolate(page, &state.vars, &state.global_vars))
                     .collect();
                 state.dialogue = None;
                 state.intro = Some(IntroState {
                     pages,
                     page: 0,
                     elapsed: 0.0,
-                    hold,
+                    hold: *hold,
                     blocking: !next,
                 });
                 if !next {
                     return StepResult::AwaitPresentation;
                 }
             }
-            Action::FilmMode { enabled } => state.film_mode = enabled,
+            Action::FilmMode { enabled } => state.film_mode = *enabled,
             Action::Particle { effect } => {
-                state.particle_effect =
-                    effect.map(|effect| interpolate(&effect, &state.vars, &state.global_vars));
+                state.particle_effect = effect
+                    .as_deref()
+                    .map(|effect| interpolate(effect, &state.vars, &state.global_vars));
             }
             Action::SetTextbox { visible, auto } => {
-                state.textbox_hidden = !visible;
-                state.textbox_auto_hidden = !visible && auto;
+                state.textbox_hidden = !*visible;
+                state.textbox_auto_hidden = !*visible && *auto;
             }
             Action::UserInput {
                 variable,
@@ -571,17 +602,17 @@ pub fn step(state: &mut State) -> StepResult {
                 button,
             } => {
                 state.user_input = Some(crate::state::UserInputState {
-                    variable: interpolate(&variable, &state.vars, &state.global_vars),
-                    title: interpolate(&title, &state.vars, &state.global_vars),
-                    button: interpolate(&button, &state.vars, &state.global_vars),
+                    variable: interpolate(variable, &state.vars, &state.global_vars),
+                    title: interpolate(title, &state.vars, &state.global_vars),
+                    button: interpolate(button, &state.vars, &state.global_vars),
                     value: String::new(),
                 });
                 return StepResult::AwaitInput;
             }
             Action::Comment => {}
             Action::Unlock { kind, file, name } => {
-                let file = interpolate(&file, &state.vars, &state.global_vars);
-                let name = interpolate(&name, &state.vars, &state.global_vars);
+                let file = interpolate(file, &state.vars, &state.global_vars);
+                let name = interpolate(name, &state.vars, &state.global_vars);
                 match kind {
                     crate::types::UnlockKind::Cg => {
                         state.unlocked_cg.insert(file, name);
@@ -656,7 +687,7 @@ fn assign_value(
 }
 
 fn enter_scene(state: &mut State, scene: &str) -> bool {
-    if !state.scenes.contains_key(scene) {
+    if !state.program.contains_scene(scene) {
         log::warn!("scene target does not exist: {scene}");
         return false;
     }
@@ -664,7 +695,6 @@ fn enter_scene(state: &mut State, scene: &str) -> bool {
     state.cursor = 0;
     state.dialogue = None;
     state.menu = None;
-    index_labels(state);
     true
 }
 
@@ -700,7 +730,7 @@ pub fn end_game(state: &mut State) {
     state.looping_effects.clear();
     state.effect_queue.clear();
     state.vars.clear();
-    state.cursor = state.scenes.get(&state.current_scene).map_or(0, Vec::len);
+    state.cursor = state.program.scene_len(&state.current_scene).unwrap_or(0);
     state.ended = true;
 }
 
@@ -729,7 +759,7 @@ pub fn select_choice(state: &mut State, index: usize) {
     state.menu = None;
     match target {
         ChoiceTarget::Label(label) => {
-            if let Some(&cursor) = state.labels.get(&label) {
+            if let Some(cursor) = state.program.label(&state.current_scene, &label) {
                 state.cursor = cursor;
             }
         }
@@ -737,7 +767,7 @@ pub fn select_choice(state: &mut State, index: usize) {
             enter_scene(state, &scene);
         }
         ChoiceTarget::CallScene(scene) => {
-            if state.scenes.contains_key(&scene) {
+            if state.program.contains_scene(&scene) {
                 state.scene_stack.push(SceneFrame {
                     scene: state.current_scene.clone(),
                     cursor: state.cursor,
@@ -761,8 +791,8 @@ fn condition_matches(condition: Option<&str>, state: &State) -> bool {
     }
 }
 
-fn interpolate_choice_target(target: ChoiceTarget, state: &State) -> ChoiceTarget {
-    let interpolate_target = |value: String| interpolate(&value, &state.vars, &state.global_vars);
+fn interpolate_choice_target(target: &ChoiceTarget, state: &State) -> ChoiceTarget {
+    let interpolate_target = |value: &str| interpolate(value, &state.vars, &state.global_vars);
     match target {
         ChoiceTarget::Label(value) => ChoiceTarget::Label(interpolate_target(value)),
         ChoiceTarget::ChangeScene(value) => ChoiceTarget::ChangeScene(interpolate_target(value)),
@@ -816,30 +846,20 @@ fn compile_rich_text(source: &str) -> String {
     output
 }
 
-/// Re-index labels for the current scene (called after script changes).
-pub fn index_labels(state: &mut State) {
-    state.labels.clear();
-    let Some(scene) = state.scenes.get(&state.current_scene) else {
-        return;
-    };
-    for (i, action) in scene.iter().enumerate() {
-        if let Action::Label(name) = action {
-            state.labels.insert(name.clone(), i);
-        }
-    }
-}
+/// Compatibility no-op. Labels are indexed once when `Program` is built.
+pub fn index_labels(_state: &mut State) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Value;
     use crate::action::{Choice, SayOptions};
-    use crate::types::{BlendMode, Position, SpriteTransform};
+    use crate::types::{BlendMode, Easing, Position, SpriteTransform, TransformPatch};
 
     fn state_with(actions: Vec<Action>) -> State {
         let mut state = State::new();
         state.current_scene = "main".into();
-        state.scenes.insert("main".into(), actions);
+        state.insert_scene("main".into(), actions);
         index_labels(&mut state);
         state
     }
@@ -980,6 +1000,93 @@ mod tests {
     }
 
     #[test]
+    fn transform_animation_targets_a_sparse_patch_of_current_sprite_state() {
+        let base = SpriteTransform {
+            offset_x: 15.0,
+            offset_y: -20.0,
+            alpha: 0.7,
+            scale_x: 1.2,
+            scale_y: 0.85,
+            rotation: 0.1,
+            blur: 5.0,
+        };
+        let mut patch = TransformPatch::default();
+        patch.set_offset_x(160.0);
+        patch.set_alpha(0.3);
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "hero.webp".into(),
+                position: Position::center(0.0),
+                transition: Transition::Instant,
+                transform: base,
+                z_index: 0,
+                blend: BlendMode::Alpha,
+            },
+            Action::SetTransform {
+                id: "hero".into(),
+                transform: patch,
+                duration: 0.5,
+                easing: Easing::EaseOut,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        let sprite = &state.sprites["hero"];
+        let animation = sprite.transform_animation.as_ref().unwrap();
+        assert_eq!(animation.from, base);
+        assert_eq!(
+            animation.to,
+            SpriteTransform {
+                offset_x: 160.0,
+                alpha: 0.3,
+                ..base
+            }
+        );
+        assert_eq!(animation.duration, 0.5);
+        assert_eq!(animation.easing, Easing::EaseOut);
+    }
+
+    #[test]
+    fn zero_duration_transform_patch_is_applied_immediately_to_background() {
+        let base = SpriteTransform {
+            offset_y: 40.0,
+            alpha: 0.8,
+            scale_x: 1.1,
+            scale_y: 1.1,
+            blur: 7.0,
+            ..SpriteTransform::default()
+        };
+        let mut patch = TransformPatch::default();
+        patch.set_rotation(0.4);
+        patch.set_blur(0.0);
+        let mut state = state_with(vec![
+            Action::ShowBg {
+                image: "room.webp".into(),
+                transition: Transition::Instant,
+                transform: base,
+            },
+            Action::SetTransform {
+                id: "bg-main".into(),
+                transform: patch,
+                duration: 0.0,
+                easing: Easing::EaseInOut,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(
+            state.bg_transform,
+            SpriteTransform {
+                rotation: 0.4,
+                blur: 0.0,
+                ..base
+            }
+        );
+        assert!(state.bg_transform_animation.is_none());
+    }
+
+    #[test]
     fn change_scene_replaces_current_flow() {
         let mut state = state_with(vec![
             Action::ChangeScene("chapter".into()),
@@ -989,7 +1096,7 @@ mod tests {
                 options: SayOptions::default(),
             },
         ]);
-        state.scenes.insert(
+        state.insert_scene(
             "chapter".into(),
             vec![Action::Say {
                 speaker: String::new(),
@@ -1014,7 +1121,7 @@ mod tests {
                 options: SayOptions::default(),
             },
         ]);
-        state.scenes.insert(
+        state.insert_scene(
             "aside".into(),
             vec![Action::Say {
                 speaker: String::new(),
@@ -1036,7 +1143,7 @@ mod tests {
     #[test]
     fn nested_scene_calls_restore_in_lifo_order() {
         let mut state = state_with(vec![Action::CallScene("first".into())]);
-        state.scenes.insert(
+        state.insert_scene(
             "first".into(),
             vec![
                 Action::CallScene("second".into()),
@@ -1047,7 +1154,7 @@ mod tests {
                 },
             ],
         );
-        state.scenes.insert("second".into(), Vec::new());
+        state.insert_scene("second".into(), Vec::new());
 
         assert_eq!(step(&mut state), StepResult::AwaitClick);
         assert_eq!(state.current_scene, "first");
@@ -1069,7 +1176,7 @@ mod tests {
                 options: SayOptions::default(),
             },
         ]);
-        state.scenes.insert("ending".into(), vec![Action::End]);
+        state.insert_scene("ending".into(), vec![Action::End]);
 
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert_eq!(state.current_scene, "ending");
@@ -1175,7 +1282,7 @@ mod tests {
                 },
             ],
         }]);
-        state.scenes.insert(
+        state.insert_scene(
             "chapter".into(),
             vec![Action::Say {
                 speaker: String::new(),
@@ -1276,6 +1383,41 @@ mod tests {
         assert!(state.film_mode);
         assert_eq!(state.particle_effect.as_deref(), Some("rain"));
         assert_eq!(state.wait_remaining, 0.5);
+    }
+
+    #[test]
+    fn borrowed_non_copy_action_payloads_persist_in_runtime_state() {
+        use crate::types::AnimationPreset;
+
+        let mut state = state_with(vec![
+            Action::SetTransition {
+                target: "hero".into(),
+                enter: Some(AnimationPreset::Custom("soft-enter".into())),
+                exit: Some(AnimationPreset::Custom("soft-exit".into())),
+                duration: 0.3,
+            },
+            Action::MiniAvatar {
+                image: "avatar.webp".into(),
+            },
+            Action::Animate {
+                target: "bg-main".into(),
+                preset: AnimationPreset::Custom("ambient-drift".into()),
+                duration: 0.4,
+            },
+        ]);
+        let program = Arc::clone(&state.program);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(Arc::ptr_eq(&program, &state.program));
+        assert_eq!(state.mini_avatar.as_deref(), Some("avatar.webp"));
+        assert!(matches!(
+            state.transition_rules["hero"].enter.as_ref(),
+            Some(AnimationPreset::Custom(name)) if name == "soft-enter"
+        ));
+        assert!(matches!(
+            state.bg_animation.as_ref().map(|animation| &animation.preset),
+            Some(AnimationPreset::Custom(name)) if name == "ambient-drift"
+        ));
     }
 
     #[test]

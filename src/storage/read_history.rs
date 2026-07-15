@@ -5,13 +5,22 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bevy::prelude::*;
 use crabgal_core::state::DialogueKey;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::resources::{GameState, ProjectRoot};
 
+const VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct HistoryFile {
+    version: u32,
+    entries: HashSet<DialogueKey>,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct ReadHistoryWriter {
-    saved_len: usize,
-    dirty_seconds: f32,
+    pub(super) saved_len: usize,
+    pub(super) dirty_seconds: f32,
 }
 
 impl ReadHistoryWriter {
@@ -27,7 +36,14 @@ pub(crate) fn load(project_root: &Path) -> HashSet<DialogueKey> {
     let path = history_path(project_root);
     fs::read(&path)
         .map_err(anyhow::Error::from)
-        .and_then(|bytes| bincode::deserialize(&bytes).map_err(anyhow::Error::from))
+        .and_then(|bytes| postcard::from_bytes::<HistoryFile>(&bytes).map_err(anyhow::Error::from))
+        .map(|file| {
+            if file.version == VERSION {
+                file.entries
+            } else {
+                HashSet::new()
+            }
+        })
         .map_err(|error| log::debug!("read history unavailable at {}: {error:#}", path.display()))
         .unwrap_or_default()
 }
@@ -55,12 +71,24 @@ pub(crate) fn persist_read_history(
     }
 }
 
+pub(super) fn reset_memory(state: &mut crabgal_core::State, writer: &mut ReadHistoryWriter) {
+    state.read_dialogues.clear();
+    writer.saved_len = 0;
+    writer.dirty_seconds = 0.0;
+}
+
 fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
     let path = history_path(project_root);
     let temporary = path.with_extension("bin.tmp");
     let parent = path.parent().context("read history path has no parent")?;
     fs::create_dir_all(parent)?;
-    fs::write(&temporary, bincode::serialize(history)?)?;
+    fs::write(
+        &temporary,
+        postcard::to_stdvec(&HistoryFile {
+            version: VERSION,
+            entries: history.clone(),
+        })?,
+    )?;
     fs::rename(&temporary, &path)?;
     Ok(())
 }

@@ -2,7 +2,7 @@
 use crate::runtime::resources::GameState;
 use crate::scene::sprites::SpriteNode;
 use crate::ui::control_bar::{
-    AutoHideTiming, BlurSource, BlurStrength, ToggleStates, UiBlurSource,
+    AutoHideTiming, BlurSource, BlurStrength, HideContentBg, UiBlurSource,
 };
 use crate::ui::dialog::DialogRequest;
 use bevy::ecs::system::SystemParam;
@@ -490,6 +490,7 @@ type BlurNodeQuery<'w, 's> = Query<
         &'static ComputedNode,
         &'static UiGlobalTransform,
         Option<&'static BlurStrength>,
+        Option<&'static HideContentBg>,
         &'static InheritedVisibility,
     ),
     With<BlurSource>,
@@ -505,9 +506,9 @@ pub(crate) struct BlurRegionScratch {
 pub struct BlurBehavior<'w> {
     dialog: Option<Res<'w, DialogRequest>>,
     timing: Res<'w, AutoHideTiming>,
-    toggles: Res<'w, ToggleStates>,
     state: Res<'w, GameState>,
     textbox_fade: Res<'w, crate::ui::textbox::TextboxOverlayFade>,
+    initial_textbox_fade: Res<'w, crate::ui::textbox::InitialTextboxFade>,
 }
 
 #[derive(SystemParam)]
@@ -594,12 +595,6 @@ pub fn update_blur_regions(
         return;
     };
 
-    // Skip blur when hide content is mostly gone
-    if behavior.toggles.hide && behavior.timing.hide_alpha < 0.5 {
-        bc.count = 0;
-        return;
-    }
-
     scratch.scene.clear();
     if behavior.state.bg_transform.blur > 0.0 {
         scratch.scene.push(BlurRect {
@@ -638,11 +633,17 @@ pub fn update_blur_regions(
             _pad: Vec3::ZERO,
         });
     }
-    for (node, transform, strength, visibility) in &sources.blur_nodes {
-        if behavior.textbox_fade.alpha < 0.01 {
+    for (node, transform, strength, hide_content, visibility) in &sources.blur_nodes {
+        let alpha = blur_node_alpha(
+            hide_content.is_some(),
+            behavior.textbox_fade.alpha,
+            behavior.timing.hide_alpha,
+            behavior.initial_textbox_fade.alpha,
+        );
+        if alpha < 0.01 {
             continue;
         }
-        let strength = strength.map_or(30.0, |strength| strength.0) * behavior.textbox_fade.alpha;
+        let strength = strength.map_or(30.0, |strength| strength.0) * alpha;
         let size = node.size(); // physical pixels
         if !visibility.get() || strength <= f32::EPSILON || size.x <= 0.0 || size.y <= 0.0 {
             continue;
@@ -659,6 +660,19 @@ pub fn update_blur_regions(
         });
     }
     write_regions(&mut bc, &mut scratch.scene);
+}
+
+fn blur_node_alpha(
+    follows_textbox_content: bool,
+    overlay_alpha: f32,
+    hide_alpha: f32,
+    initial_alpha: f32,
+) -> f32 {
+    if follows_textbox_content {
+        overlay_alpha * hide_alpha * initial_alpha
+    } else {
+        overlay_alpha
+    }
 }
 
 fn clamp_blur(strength: f32) -> f32 {
@@ -747,6 +761,19 @@ mod tests {
             coc,
             _pad: Vec3::ZERO,
         }
+    }
+
+    #[test]
+    fn textbox_blur_follows_initial_and_hide_fades() {
+        assert_eq!(blur_node_alpha(true, 1.0, 1.0, 0.0), 0.0);
+        assert_eq!(blur_node_alpha(true, 1.0, 1.0, 0.5), 0.5);
+        assert_eq!(blur_node_alpha(true, 0.8, 0.5, 0.5), 0.2);
+    }
+
+    #[test]
+    fn non_textbox_blur_ignores_textbox_specific_fades() {
+        assert_eq!(blur_node_alpha(false, 1.0, 0.0, 0.0), 1.0);
+        assert_eq!(blur_node_alpha(false, 0.4, 0.0, 0.0), 0.4);
     }
 
     #[test]

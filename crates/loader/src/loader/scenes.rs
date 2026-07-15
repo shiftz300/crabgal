@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use crabgal_core::Action;
@@ -55,9 +55,7 @@ fn load_directory(
     scripts: &ContentMount,
     languages: &ScriptLanguageRegistry,
 ) -> Result<Vec<LoadedScene>> {
-    let mut paths = scripts.read_directory(Path::new(""))?;
-    paths.retain(|path| languages.supports(path));
-    paths.sort();
+    let paths = script_paths(scripts, languages)?;
 
     let scenes = paths
         .into_iter()
@@ -74,6 +72,16 @@ fn load_directory(
         }
     }
     Ok(scenes)
+}
+
+fn script_paths(
+    scripts: &ContentMount,
+    languages: &ScriptLanguageRegistry,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = scripts.recursive_files()?;
+    paths.retain(|path| languages.supports(path));
+    paths.sort();
+    Ok(paths)
 }
 
 fn validate_scene_references(scenes: &mut [LoadedScene]) {
@@ -107,11 +115,12 @@ fn load_scene(
         .with_context(|| format!("failed to read script {}", path.display()))?;
     let source = String::from_utf8(bytes)
         .with_context(|| format!("script is not UTF-8: {}", path.display()))?;
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .with_context(|| format!("script has no valid UTF-8 stem: {}", path.display()))?
-        .to_owned();
+    let mut name_path = path.clone();
+    name_path.set_extension("");
+    let name = name_path
+        .to_str()
+        .with_context(|| format!("script has no valid UTF-8 path: {}", path.display()))?
+        .replace('\\', "/");
 
     let report = language.parse(&source);
     Ok(LoadedScene {
@@ -127,10 +136,11 @@ fn load_scene(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crabgal_core::{State, StepResult, step};
+    use crabgal_core::{Program, State, StepResult, step};
 
     fn project(root: &Path) -> ContentProject {
         ContentProject {
@@ -188,11 +198,12 @@ mod tests {
         fs::write(root.join("aside.txt"), "Aside: inside;").unwrap();
 
         let mut state = State::new();
-        state.scenes = load_scenes(&project(&project_root))
-            .unwrap()
-            .into_iter()
-            .map(|scene| (scene.name, scene.actions))
-            .collect();
+        state.install_program(Program::from_scenes(
+            load_scenes(&project(&project_root))
+                .unwrap()
+                .into_iter()
+                .map(|scene| (scene.name, scene.actions)),
+        ));
         state.current_scene = "main".into();
         step::index_labels(&mut state);
 
@@ -203,6 +214,120 @@ mod tests {
         assert_eq!(step::step(&mut state), StepResult::AwaitClick);
         assert_eq!(state.current_scene, "main");
         assert_eq!(state.dialogue.as_ref().unwrap().text, "returned");
+
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn recursively_loads_and_executes_deeply_nested_scene_paths() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("crabgal-nested-scenes-{nonce}"));
+        let root = project_root.join("scripts");
+        let nested_scene = "chapter_01/act_02/branch_03/part_04";
+        fs::create_dir_all(root.join("chapter_01/act_02/branch_03")).unwrap();
+        fs::write(
+            root.join("main.txt"),
+            format!("callScene:{nested_scene}.txt;\nMain:returned;"),
+        )
+        .unwrap();
+        fs::write(
+            root.join(format!("{nested_scene}.txt")),
+            "Guide:inside nested scene;",
+        )
+        .unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+        assert_eq!(
+            scenes
+                .iter()
+                .map(|scene| scene.name.as_str())
+                .collect::<Vec<_>>(),
+            [nested_scene, "main"]
+        );
+        assert!(scenes.iter().all(|scene| scene.diagnostics.is_empty()));
+
+        let mut state = State::new();
+        state.install_program(Program::from_scenes(
+            scenes.into_iter().map(|scene| (scene.name, scene.actions)),
+        ));
+        state.current_scene = "main".into();
+
+        assert_eq!(step::step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.current_scene, nested_scene);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "inside nested scene");
+        step::advance(&mut state);
+        assert_eq!(step::step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.current_scene, "main");
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "returned");
+
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_scan_ignores_symlink_cycles_and_mount_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("crabgal-scene-links-{nonce}"));
+        let outside_root =
+            std::env::temp_dir().join(format!("crabgal-scene-links-outside-{nonce}"));
+        let scripts = project_root.join("scripts");
+        let nested = scripts.join("chapter");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(nested.join("inside.txt"), "Guide:inside mount;").unwrap();
+        fs::write(outside_root.join("outside.txt"), "Intruder:outside mount;").unwrap();
+
+        symlink(&scripts, nested.join("cycle")).unwrap();
+        symlink(&outside_root, scripts.join("escaped-directory")).unwrap();
+        symlink(
+            outside_root.join("outside.txt"),
+            scripts.join("escaped-file.txt"),
+        )
+        .unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+
+        assert_eq!(
+            scenes
+                .iter()
+                .map(|scene| scene.name.as_str())
+                .collect::<Vec<_>>(),
+            ["chapter/inside"]
+        );
+
+        let _ = fs::remove_dir_all(project_root);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn same_stem_in_different_directories_has_distinct_scene_names() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("crabgal-scene-stems-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(root.join("chapter_a")).unwrap();
+        fs::create_dir_all(root.join("chapter_b")).unwrap();
+        fs::write(root.join("chapter_a/part.txt"), "A:first;").unwrap();
+        fs::write(root.join("chapter_b/part.txt"), "B:second;").unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+        assert_eq!(
+            scenes
+                .iter()
+                .map(|scene| scene.name.as_str())
+                .collect::<Vec<_>>(),
+            ["chapter_a/part", "chapter_b/part"]
+        );
 
         let _ = fs::remove_dir_all(project_root);
     }

@@ -6,6 +6,7 @@ use crate::runtime::resources::{AssetLoadingGate, GameState};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
 use crate::ui::control_bar::{AutoHideTiming, ToggleStates};
+use crate::ui::user_input::UserInputCaretBlink;
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum RuntimeActivity {
@@ -24,6 +25,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     audio: Res<'w, AudioAnimationActivity>,
     toggles: Res<'w, ToggleStates>,
     auto_hide: Res<'w, AutoHideTiming>,
+    input_caret: Res<'w, UserInputCaretBlink>,
     real_time: Res<'w, Time<Real>>,
     windows: Query<'w, 's, &'static Window>,
 }
@@ -38,6 +40,11 @@ pub(crate) fn update(
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
+    let reactive_wait = auto_hide.1.min(
+        context
+            .input_caret
+            .next_toggle_in(context.real_time.elapsed_secs()),
+    );
     let next = if !focused {
         RuntimeActivity::Background
     } else if context.loading.blocked {
@@ -57,7 +64,7 @@ pub(crate) fn update(
     let focused_mode = match next {
         RuntimeActivity::Active | RuntimeActivity::Loading => UpdateMode::Continuous,
         RuntimeActivity::Idle | RuntimeActivity::Background => {
-            UpdateMode::reactive_low_power(auto_hide.1)
+            UpdateMode::reactive_low_power(reactive_wait)
         }
     };
     if winit.focused_mode != focused_mode {

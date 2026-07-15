@@ -6,8 +6,8 @@ mod loader;
 mod report;
 
 pub use adapter::{
-    CrabgalStore, FormatAdapter, LoaderRegistry, StoreAdapter, StoreMetadata, StoreStatus,
-    WebGalLanguage, mount_hexz, parse_webgal, parse_webgal_report,
+    CrabgalStore, FormatAdapter, LoaderRegistry, SavedState, StoreAdapter, StoreMetadata,
+    StoreStatus, WebGalLanguage, mount_hexz, parse_webgal, parse_webgal_report,
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{

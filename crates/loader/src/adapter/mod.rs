@@ -15,7 +15,7 @@ use crate::loader::SourceMount;
 
 pub use asset::mount_hexz;
 pub use script::{WebGalLanguage, parse_webgal, parse_webgal_report};
-pub use store::{CrabgalStore, StoreAdapter, StoreMetadata, StoreStatus};
+pub use store::{CrabgalStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
 /// Physical layout/container rules owned by one format adapter.
 pub trait FormatAdapter: Send + Sync {

@@ -31,6 +31,15 @@ impl SpriteRenderCache {
     }
 }
 
+fn sprite_center_y(
+    position_y: f32,
+    base_height: f32,
+    project_offset_y: f32,
+    transform_offset_y: f32,
+) -> f32 {
+    position_y + base_height * 0.5 + project_offset_y + transform_offset_y
+}
+
 #[derive(SystemParam)]
 pub(crate) struct SpriteRenderResources<'w> {
     asset_server: Res<'w, AssetServer>,
@@ -101,10 +110,15 @@ pub(crate) fn sync_sprites(
                 crabgal_core::DESIGN_WIDTH - offset.max(config.layout.anchor_offset) - width * 0.5
             }
         };
-        let center_y = data.position.y + base_height * 0.5;
+        let center_y = sprite_center_y(
+            data.position.y,
+            base_height,
+            config.layout.sprite_y_offset,
+            transform.offset_y,
+        );
         let world_position = viewport.world_from_design(Vec2::new(
             center_x + transform.offset_x + transition_x,
-            center_y + transform.offset_y,
+            center_y,
         ));
         let z =
             0.1 + data.z_index as f32 * 0.001 + data.position.y.clamp(-999.0, 999.0) * 0.000_000_01;
@@ -194,5 +208,24 @@ pub(crate) fn sync_sprites(
                 entity.insert((sprite, entity_transform));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sprite_center_y;
+
+    #[test]
+    fn project_offset_moves_the_shared_sprite_baseline() {
+        let center = sprite_center_y(0.0, 1080.0, -90.0, 0.0);
+
+        assert_eq!(center, 450.0);
+        assert_eq!(center - 540.0, -90.0);
+        assert_eq!(center + 540.0, 990.0);
+    }
+
+    #[test]
+    fn script_transform_remains_relative_to_the_project_offset() {
+        assert_eq!(sprite_center_y(12.0, 1080.0, -90.0, 24.0), 486.0);
     }
 }

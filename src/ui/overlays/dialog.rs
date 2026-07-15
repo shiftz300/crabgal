@@ -129,6 +129,9 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     settings: ResMut<'w, crate::storage::settings::RuntimeSettings>,
     toggles: ResMut<'w, crate::ui::control_bar::ToggleStates>,
     pending_window: ResMut<'w, crate::ui::settings_panel::PendingWindowMode>,
+    profile_writer: ResMut<'w, crate::storage::profile::ProfileWriter>,
+    read_history_writer: ResMut<'w, crate::storage::read_history::ReadHistoryWriter>,
+    gallery_snapshot: ResMut<'w, crate::storage::gallery::GallerySnapshot>,
 }
 
 #[derive(SystemParam)]
@@ -350,6 +353,7 @@ pub fn handle_dialog_click(
     buttons: Query<(&Interaction, &DialogButton), Changed<Interaction>>,
     request: Option<Res<DialogRequest>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut context: QuickSaveContext,
 ) {
     let left_clicked = buttons.iter().any(|(interaction, button)| {
@@ -357,7 +361,8 @@ pub fn handle_dialog_click(
     }) || keys.just_pressed(KeyCode::Enter);
     let right_clicked = buttons.iter().any(|(interaction, button)| {
         matches!(interaction, Interaction::Pressed) && *button == DialogButton::Cancel
-    }) || keys.just_pressed(KeyCode::Escape);
+    }) || keys.just_pressed(KeyCode::Escape)
+        || mouse.just_pressed(MouseButton::Right);
 
     if !left_clicked && !right_clicked {
         return;
@@ -376,7 +381,9 @@ pub fn handle_dialog_click(
                 ) {
                     log::error!("quick save failed: {error:#}");
                 } else {
-                    context.preview.state = Some((**context.state).clone());
+                    context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
+                        &**context.state,
+                    ));
                     context.preview.image = None;
                     if let Ok(window) = context.windows.single() {
                         let size = Vec2::new(window.width(), window.height());
@@ -395,7 +402,15 @@ pub fn handle_dialog_click(
                     QUICK_SAVE_SLOT,
                     &context.project_root,
                 ) {
-                    Ok(loaded) => **context.state = loaded,
+                    Ok(loaded) => {
+                        if let Err(error) = loaded.restore_into(&mut context.state) {
+                            log::error!("quick load rejected: {error}");
+                            commands.insert_resource(DialogRequest::confirmation(
+                                "存档属于不同的脚本版本",
+                                DialogAction::Noop,
+                            ));
+                        }
+                    }
                     Err(error) => log::error!("quick load failed: {error:#}"),
                 }
             }
@@ -427,10 +442,16 @@ pub fn handle_dialog_click(
                     *slot,
                     &context.project_root,
                 ) {
-                    Ok(loaded) => {
-                        **context.state = loaded;
-                        context.save_load.mode = None;
-                    }
+                    Ok(loaded) => match loaded.restore_into(&mut context.state) {
+                        Ok(()) => context.save_load.mode = None,
+                        Err(error) => {
+                            log::error!("load slot {slot} rejected: {error}");
+                            commands.insert_resource(DialogRequest::confirmation(
+                                "存档属于不同的脚本版本",
+                                DialogAction::Noop,
+                            ));
+                        }
+                    },
                     Err(error) => log::error!("load slot {slot} failed: {error:#}"),
                 }
             }
@@ -466,23 +487,26 @@ pub fn handle_dialog_click(
                 );
             }
             DialogAction::ClearAll => {
-                if let Err(error) = crate::storage::save::clear_games(
-                    context.store.0.as_ref(),
-                    &context.project_root,
-                ) {
-                    log::error!("failed to clear save slots: {error:#}");
-                } else {
-                    context.preview.state = None;
-                    context.preview.image = None;
-                    context.save_previews.clear();
-                    context.save_load.set_changed();
-                }
                 crate::ui::settings_panel::reset_runtime_settings(
                     &mut context.settings,
                     &mut context.toggles,
                     &mut context.pending_window,
                     &context.project_root,
                 );
+                if let Err(error) = crate::storage::reset_all(
+                    &context.project_root,
+                    &mut context.state,
+                    &mut context.settings,
+                    &mut context.profile_writer,
+                    &mut context.read_history_writer,
+                    &mut context.gallery_snapshot,
+                ) {
+                    log::error!("failed to clear all persistent data: {error:#}");
+                }
+                context.preview.state = None;
+                context.preview.image = None;
+                context.save_previews.clear();
+                context.save_load.set_changed();
             }
             DialogAction::Noop => {}
             DialogAction::ExitGame => {

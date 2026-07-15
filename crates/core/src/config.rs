@@ -123,12 +123,16 @@ pub struct LayoutConfig {
     /// Height of standing sprites in design pixels.
     #[serde(default = "default_sprite_height")]
     pub sprite_height: f32,
+    /// Project-wide vertical sprite baseline offset in design pixels.
+    /// Positive values move figures up; negative values move them down.
+    #[serde(default = "default_sprite_y_offset")]
+    pub sprite_y_offset: f32,
 
     // ── Textbox positioning (percent of the 1920×1080 design area) ──
-    /// Textbox left edge when no dodge (%).
+    /// Textbox left edge when no mini avatar is displayed (%).
     #[serde(default = "default_textbox_left")]
     pub textbox_left: f32,
-    /// Textbox left edge when dodged (%).
+    /// Textbox left edge while a mini avatar occupies the leading edge (%).
     #[serde(default = "default_textbox_dodge_left")]
     pub textbox_dodge_left: f32,
     /// Textbox distance from bottom (%).
@@ -148,8 +152,11 @@ fn default_anchor_offset() -> f32 {
 fn default_sprite_height() -> f32 {
     825.0
 }
+fn default_sprite_y_offset() -> f32 {
+    0.0
+}
 fn default_textbox_left() -> f32 {
-    7.0
+    0.0
 }
 fn default_textbox_dodge_left() -> f32 {
     10.0
@@ -169,6 +176,7 @@ impl Default for LayoutConfig {
         Self {
             anchor_offset: default_anchor_offset(),
             sprite_height: default_sprite_height(),
+            sprite_y_offset: default_sprite_y_offset(),
             textbox_left: default_textbox_left(),
             textbox_dodge_left: default_textbox_dodge_left(),
             textbox_bottom: default_textbox_bottom(),
@@ -295,8 +303,8 @@ impl Default for StyleConfig {
 
 impl GameConfig {
     /// Parse project configuration from an arbitrary content source.
-    pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
-        serde_yaml::from_str(yaml)
+    pub fn from_yaml(yaml: &str) -> Result<Self, noyalib::Error> {
+        noyalib::from_str(yaml)
     }
 
     /// Load from a YAML file, falling back to defaults.
@@ -372,6 +380,8 @@ mod tests {
         assert_eq!(cfg.title, "crabgal");
         assert_eq!(cfg.styles.typewriter_speed, 45.0);
         assert_eq!(cfg.adapter, AdapterConfig::default());
+        assert_eq!(cfg.layout.textbox_left, 0.0);
+        assert_eq!(cfg.layout.textbox_dodge_left, 10.0);
     }
 
     #[test]
@@ -381,10 +391,24 @@ title: "Test Game"
 styles:
   typewriter_speed: 60.0
 "#;
-        let cfg: GameConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
         assert_eq!(cfg.title, "Test Game");
         assert_eq!(cfg.styles.typewriter_speed, 60.0);
         assert_eq!(cfg.adapter, AdapterConfig::default());
+        assert_eq!(cfg.layout.sprite_y_offset, 0.0);
+    }
+
+    #[test]
+    fn parses_project_wide_sprite_y_offset() {
+        let cfg = GameConfig::from_yaml(
+            r#"
+layout:
+  sprite_y_offset: -90
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.layout.sprite_y_offset, -90.0);
     }
 
     #[test]
@@ -412,7 +436,7 @@ adapter:
   script: webgal
   store: crabgal
 "#;
-        let cfg: GameConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
         assert_eq!(cfg.adapter.asset.len(), 3);
         assert_eq!(cfg.adapter.asset[1].format, "fs");
         assert_eq!(cfg.adapter.asset[2].format, "hexz");

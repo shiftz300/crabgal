@@ -1,14 +1,27 @@
+use std::time::Duration;
+
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
-use crate::render::blur::DialogCamera;
+use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::GameState;
+use crate::ui::FULLSCREEN_BLUR_STRENGTH;
+use crate::ui::control_bar::{BlurStrength, UiBlurSource};
+use crate::ui::dialog::DialogButtonVisual;
 use crate::ui::foundation::UiFonts;
+
+const CARET_PERIOD_SECONDS: f32 = 1.0;
+const CARET_VISIBLE_SECONDS: f32 = 0.55;
+const CARET_ALPHA: f32 = 0.8;
 
 #[derive(Component)]
 pub(crate) struct UserInputRoot;
+#[derive(Component)]
+pub(crate) struct UserInputBlur;
 #[derive(Component)]
 pub(crate) struct UserInputTitle;
 #[derive(Component)]
@@ -16,14 +29,80 @@ pub(crate) struct UserInputValue;
 #[derive(Component)]
 pub(crate) struct UserInputConfirm;
 
+#[derive(Component)]
+pub(crate) struct UserInputCaret;
+
+#[derive(Resource, Default)]
+pub(crate) struct UserInputCaretBlink {
+    started_at: f32,
+    active: bool,
+}
+
+impl UserInputCaretBlink {
+    fn reset(&mut self, now: f32) {
+        self.started_at = now;
+        self.active = true;
+    }
+
+    fn stop(&mut self) {
+        self.active = false;
+    }
+
+    fn phase(&self, now: f32) -> f32 {
+        (now - self.started_at)
+            .max(0.0)
+            .rem_euclid(CARET_PERIOD_SECONDS)
+    }
+
+    fn alpha(&self, now: f32) -> f32 {
+        if self.active && self.phase(now) < CARET_VISIBLE_SECONDS {
+            CARET_ALPHA
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn next_toggle_in(&self, now: f32) -> Duration {
+        if !self.active {
+            return Duration::MAX;
+        }
+        let phase = self.phase(now);
+        let seconds = if phase < CARET_VISIBLE_SECONDS {
+            CARET_VISIBLE_SECONDS - phase
+        } else {
+            CARET_PERIOD_SECONDS - phase
+        };
+        Duration::from_secs_f32(seconds.max(0.001))
+    }
+}
+
 pub(crate) fn setup(
     mut commands: Commands,
     fonts: Res<UiFonts>,
     cameras: Query<Entity, With<DialogCamera>>,
+    blur_cameras: Query<Entity, With<UiBlurCamera>>,
 ) {
-    let Ok(camera) = cameras.single() else {
+    let (Ok(camera), Ok(blur_camera)) = (cameras.single(), blur_cameras.single()) else {
         return;
     };
+    commands.spawn((
+        Name::new("user_input_blur"),
+        UserInputBlur,
+        UiBlurSource,
+        BlurStrength(FULLSCREEN_BLUR_STRENGTH),
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Px(DESIGN_WIDTH),
+            height: Val::Px(DESIGN_HEIGHT),
+            display: Display::None,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.36)),
+        FocusPolicy::Pass,
+        UiTargetCamera(blur_camera),
+        RenderLayers::layer(1),
+        GlobalZIndex(979),
+    ));
     commands
         .spawn((
             Name::new("user_input_overlay"),
@@ -37,7 +116,8 @@ pub(crate) fn setup(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.72)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.05)),
+            FocusPolicy::Block,
             UiTargetCamera(camera),
             RenderLayers::layer(2),
             GlobalZIndex(980),
@@ -45,13 +125,23 @@ pub(crate) fn setup(
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: Val::Px(705.0),
-                    padding: UiRect::all(Val::Px(36.0)),
+                    width: Val::Percent(100.0),
+                    padding: UiRect::axes(Val::Px(75.0), Val::Px(24.0)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(21.0),
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(7.5),
+                    border: UiRect::top(Val::Px(15.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.035, 0.04, 0.055, 0.94)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.19)),
+                BorderColor::all(Color::srgba(0.0, 0.0, 0.0, 0.19)),
+                BoxShadow::new(
+                    Color::srgba(0.0, 0.0, 0.0, 0.25),
+                    Val::ZERO,
+                    Val::ZERO,
+                    Val::ZERO,
+                    Val::Px(25.0),
+                ),
             ))
             .with_children(|panel| {
                 panel.spawn((
@@ -59,89 +149,139 @@ pub(crate) fn setup(
                     Text::new("INPUT"),
                     TextFont {
                         font: fonts.text.clone().into(),
-                        font_size: FontSize::Px(28.5),
+                        font_size: FontSize::Px(45.0),
                         ..default()
                     },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.88)),
+                    TextColor(Color::WHITE),
                 ));
+                panel
+                    .spawn((
+                        Node {
+                            min_width: Val::Percent(50.0),
+                            min_height: Val::Px(66.0),
+                            padding: UiRect::axes(Val::Px(15.0), Val::Px(3.75)),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            border: UiRect::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.19)),
+                        BorderColor::all(Color::NONE),
+                        BoxShadow::new(
+                            Color::srgba(0.0, 0.0, 0.0, 0.25),
+                            Val::ZERO,
+                            Val::ZERO,
+                            Val::ZERO,
+                            Val::Px(25.0),
+                        ),
+                    ))
+                    .with_children(|field| {
+                        field.spawn((
+                            UserInputValue,
+                            Text::new(""),
+                            TextFont {
+                                font: fonts.text.clone().into(),
+                                font_size: FontSize::Px(39.75),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.67)),
+                            TextLayout::justify(Justify::Center),
+                        ));
+                        field.spawn((
+                            UserInputCaret,
+                            Text::new("▌"),
+                            TextFont {
+                                font: fonts.text.clone().into(),
+                                font_size: FontSize::Px(39.75),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, CARET_ALPHA)),
+                        ));
+                    });
                 panel.spawn((
+                    UserInputConfirm,
+                    DialogButtonVisual::default(),
+                    Button,
                     Node {
-                        width: Val::Percent(100.0),
-                        min_height: Val::Px(69.0),
-                        padding: UiRect::axes(Val::Px(21.0), Val::Px(13.5)),
-                        align_items: AlignItems::Center,
+                        min_width: Val::Px(112.5),
+                        padding: UiRect::axes(Val::Px(15.0), Val::Px(2.25)),
+                        justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.09)),
+                    BackgroundColor(Color::NONE),
                     children![(
-                        UserInputValue,
-                        Text::new(""),
+                        Text::new("OK"),
                         TextFont {
                             font: fonts.text.clone().into(),
                             font_size: FontSize::Px(30.0),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
-                    )],
-                ));
-                panel.spawn((
-                    UserInputConfirm,
-                    Button,
-                    Node {
-                        align_self: AlignSelf::FlexEnd,
-                        min_width: Val::Px(157.5),
-                        padding: UiRect::axes(Val::Px(25.5), Val::Px(13.5)),
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.16)),
-                    children![(
-                        Text::new("OK"),
-                        TextFont {
-                            font: fonts.text.clone().into(),
-                            font_size: FontSize::Px(22.5),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
                     )],
                 ));
             });
         });
 }
 
-pub(crate) fn sync(
-    state: Res<GameState>,
-    mut roots: Query<&mut Node, With<UserInputRoot>>,
-    mut titles: Query<&mut Text, (With<UserInputTitle>, Without<UserInputValue>)>,
-    mut values: Query<&mut Text, (With<UserInputValue>, Without<UserInputTitle>)>,
-    confirm: Query<&Children, With<UserInputConfirm>>,
-    mut texts: Query<&mut Text, (Without<UserInputTitle>, Without<UserInputValue>)>,
-) {
-    if !state.is_changed() {
+#[derive(SystemParam)]
+pub(crate) struct UserInputSyncContext<'w, 's> {
+    state: Res<'w, GameState>,
+    real_time: Res<'w, Time<Real>>,
+    blink: ResMut<'w, UserInputCaretBlink>,
+    roots: Query<'w, 's, &'static mut Node, With<UserInputRoot>>,
+    blurs: Query<'w, 's, &'static mut Node, (With<UserInputBlur>, Without<UserInputRoot>)>,
+    titles: Query<'w, 's, &'static mut Text, (With<UserInputTitle>, Without<UserInputValue>)>,
+    values: Query<'w, 's, &'static mut Text, (With<UserInputValue>, Without<UserInputTitle>)>,
+    confirm: Query<'w, 's, &'static Children, With<UserInputConfirm>>,
+    texts: Query<'w, 's, &'static mut Text, (Without<UserInputTitle>, Without<UserInputValue>)>,
+}
+
+pub(crate) fn sync(mut context: UserInputSyncContext) {
+    if !context.state.is_changed() {
         return;
     }
-    for mut root in &mut roots {
-        root.display = if state.user_input.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
+    if context.state.user_input.is_some() {
+        context.blink.reset(context.real_time.elapsed_secs());
+    } else {
+        context.blink.stop();
     }
-    let Some(input) = &state.user_input else {
+    let display = if context.state.user_input.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut root in &mut context.roots {
+        root.display = display;
+    }
+    for mut blur in &mut context.blurs {
+        blur.display = display;
+    }
+    let Some(input) = &context.state.user_input else {
         return;
     };
-    for mut title in &mut titles {
+    for mut title in &mut context.titles {
         title.0.clone_from(&input.title);
     }
-    for mut value in &mut values {
-        value.0 = format!("{}▌", input.value);
+    for mut value in &mut context.values {
+        value.0.clone_from(&input.value);
     }
-    for children in &confirm {
+    for children in &context.confirm {
         for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
+            if let Ok(mut text) = context.texts.get_mut(child) {
                 text.0.clone_from(&input.button);
             }
         }
+    }
+}
+
+pub(crate) fn animate_caret(
+    real_time: Res<Time<Real>>,
+    blink: Res<UserInputCaretBlink>,
+    mut carets: Query<&mut TextColor, With<UserInputCaret>>,
+) {
+    let alpha = blink.alpha(real_time.elapsed_secs());
+    for mut color in &mut carets {
+        color.0 = Color::srgba(1.0, 1.0, 1.0, alpha);
     }
 }
 
@@ -154,26 +294,62 @@ pub(crate) fn handle(
         return;
     }
     let mut submit = buttons.iter().any(|value| *value == Interaction::Pressed);
-    let Some(input) = state.user_input.as_mut() else {
-        return;
+    let changed = {
+        let state_value = state.bypass_change_detection();
+        let input = state_value
+            .user_input
+            .as_mut()
+            .expect("user input was checked before mutation");
+        let mut changed = false;
+        for event in keyboard.read() {
+            if !event.state.is_pressed() {
+                continue;
+            }
+            match &event.logical_key {
+                Key::Character(value) if input.value.chars().count() < 64 => {
+                    input.value.push_str(value);
+                    changed = true;
+                }
+                Key::Space if input.value.chars().count() < 64 => {
+                    input.value.push(' ');
+                    changed = true;
+                }
+                Key::Backspace => {
+                    changed |= input.value.pop().is_some();
+                }
+                Key::Enter => submit = true,
+                _ => {}
+            }
+        }
+        if submit && !input.value.trim().is_empty() {
+            crabgal_core::step::submit_user_input(state_value);
+            crabgal_core::step::step(state_value);
+            changed = true;
+        }
+        changed
     };
-    for event in keyboard.read() {
-        if !event.state.is_pressed() {
-            continue;
-        }
-        match &event.logical_key {
-            Key::Character(value) if input.value.chars().count() < 64 => {
-                input.value.push_str(value);
-            }
-            Key::Backspace => {
-                input.value.pop();
-            }
-            Key::Enter => submit = true,
-            _ => {}
-        }
+    if changed {
+        state.set_changed();
     }
-    if submit && !input.value.trim().is_empty() {
-        crabgal_core::step::submit_user_input(&mut state);
-        crabgal_core::step::step(&mut state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caret_blinks_on_real_time_deadlines() {
+        let mut blink = UserInputCaretBlink::default();
+        blink.reset(10.0);
+
+        assert_eq!(blink.alpha(10.0), CARET_ALPHA);
+        assert_eq!(blink.alpha(10.54), CARET_ALPHA);
+        assert_eq!(blink.alpha(10.56), 0.0);
+        assert_eq!(blink.alpha(11.01), CARET_ALPHA);
+        assert!(blink.next_toggle_in(10.2) < Duration::from_millis(400));
+
+        blink.stop();
+        assert_eq!(blink.alpha(20.0), 0.0);
+        assert_eq!(blink.next_toggle_in(20.0), Duration::MAX);
     }
 }

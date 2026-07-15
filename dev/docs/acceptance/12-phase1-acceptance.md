@@ -15,8 +15,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -- dev projects/test-project
 ```
 
-预期：43 个测试通过，Clippy 无 warning；窗口打开后使用 `start.txt`，终端没有缺失场景、
-脚本解析或资源加载错误。Asset watcher 未启用的提示不影响脚本自身的热重载。
+预期：workspace 测试全部通过，Clippy 无 warning；当前准确基线见
+[`../webgal-compatibility/test-results.md`](../webgal-compatibility/test-results.md)。窗口打开后使用
+`start.txt`，终端没有缺失场景、脚本解析或资源加载错误。Asset watcher 未启用的提示不影响脚本自身的热重载。
 
 ## 2. 首屏、变量和本地语音
 

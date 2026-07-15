@@ -3,8 +3,8 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use crabgal_core::config::GameConfig;
-use crabgal_core::{Anchor, DESIGN_HEIGHT, DESIGN_WIDTH};
+use crabgal_core::config::{GameConfig, LayoutConfig};
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -113,12 +113,14 @@ type TextboxOverlayFilter = Or<(
 
 #[derive(SystemParam)]
 pub(crate) struct TextboxUpdateResources<'w> {
+    time: Res<'w, Time>,
     state: Res<'w, GameState>,
     config: Res<'w, GameConfigResource>,
     settings: Res<'w, RuntimeSettings>,
     auto_hide: Res<'w, AutoHideTiming>,
     overlay: Res<'w, TextboxOverlayFade>,
     fonts: Res<'w, UiFonts>,
+    layout_motion: ResMut<'w, TextboxLayoutMotion>,
 }
 
 #[derive(Default)]
@@ -130,6 +132,47 @@ pub(crate) struct TextboxRenderCache {
     left: Option<f32>,
     textbox_alpha: Option<f32>,
     dialogue_size: Option<f32>,
+}
+
+const MINI_AVATAR_SIZE: f32 = 210.0;
+const TEXTBOX_LAYOUT_RATE: f32 = 18.0;
+const TEXTBOX_LAYOUT_EPSILON: f32 = 0.01;
+
+#[derive(Resource, Debug, Default)]
+pub(crate) struct TextboxLayoutMotion {
+    current_left: f32,
+    target_left: f32,
+    initialized: bool,
+}
+
+impl TextboxLayoutMotion {
+    fn advance(&mut self, target_left: f32, delta_seconds: f32) -> f32 {
+        self.target_left = target_left;
+        if !self.initialized {
+            self.current_left = target_left;
+            self.initialized = true;
+            return target_left;
+        }
+
+        self.current_left += (target_left - self.current_left)
+            * exp_lerp(delta_seconds.max(0.0), TEXTBOX_LAYOUT_RATE);
+        if (self.current_left - target_left).abs() <= TEXTBOX_LAYOUT_EPSILON {
+            self.current_left = target_left;
+        }
+        self.current_left
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.initialized && (self.current_left - self.target_left).abs() > TEXTBOX_LAYOUT_EPSILON
+    }
+}
+
+fn textbox_left(layout: &LayoutConfig, has_mini_avatar: bool) -> f32 {
+    if has_mini_avatar {
+        layout.textbox_dodge_left
+    } else {
+        layout.textbox_left
+    }
 }
 
 pub fn setup_textbox(
@@ -178,9 +221,9 @@ fn spawn_mini_avatar(root: &mut ChildSpawnerCommands, config: &GameConfig) {
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Percent(config.layout.textbox_bottom),
-            left: Val::Percent(config.layout.textbox_left),
-            width: Val::Px(210.0),
-            height: Val::Px(210.0),
+            left: Val::Px(0.0),
+            width: Val::Px(MINI_AVATAR_SIZE),
+            height: Val::Px(MINI_AVATAR_SIZE),
             display: Display::None,
             ..default()
         },
@@ -579,7 +622,7 @@ fn spawn_quick_preview(layer: &mut ChildSpawnerCommands, owner: ButtonAction, as
     reason = "independent ECS queries keep overlapping UI component access explicit"
 )]
 pub fn update_textbox(
-    resources: TextboxUpdateResources,
+    mut resources: TextboxUpdateResources,
     mut cache: Local<TextboxRenderCache>,
     mut commands: Commands,
     mut content_root: Query<&mut Node, ContentRootFilter>,
@@ -612,16 +655,11 @@ pub fn update_textbox(
             )
         });
 
-    let has_left_sprite = state
-        .sprites
-        .values()
-        .any(|sprite| matches!(sprite.position.x, Anchor::Left(_)));
     let layout = &config.layout;
-    let left = if has_left_sprite {
-        layout.textbox_dodge_left
-    } else {
-        layout.textbox_left
-    };
+    let target_left = textbox_left(layout, state.mini_avatar.is_some());
+    let left = resources
+        .layout_motion
+        .advance(target_left, resources.time.delta_secs());
     let width = 100.0 - left;
     let speaker_changed = cache.speaker != speaker;
     let dialogue_changed = cache.dialogue != markup;
@@ -659,7 +697,6 @@ pub fn update_textbox(
             }
         }
     }
-
     if speaker_changed && let Ok(mut text) = speaker_text.single_mut() {
         text.0.clear();
         text.0.push_str(speaker);
@@ -1135,6 +1172,51 @@ pub fn apply_hide_toggle(
 #[cfg(test)]
 mod rich_text_tests {
     use super::*;
+
+    #[test]
+    fn narration_without_mini_avatar_uses_the_full_width_origin() {
+        let layout = crabgal_core::config::LayoutConfig {
+            textbox_left: 0.0,
+            textbox_dodge_left: 10.0,
+            ..default()
+        };
+        assert_eq!(textbox_left(&layout, false), 0.0);
+        assert_eq!(textbox_left(&layout, true), 10.0);
+    }
+
+    #[test]
+    fn textbox_layout_stretches_smoothly_and_keeps_its_right_edge_fixed() {
+        let mut motion = TextboxLayoutMotion::default();
+        assert_eq!(motion.advance(0.0, 0.0), 0.0);
+
+        let entering = motion.advance(10.0, 1.0 / 60.0);
+        assert!(entering > 0.0 && entering < 10.0);
+        assert!((entering + (100.0 - entering) - 100.0).abs() < f32::EPSILON);
+        assert!(motion.is_animating());
+
+        let before_reverse = motion.current_left;
+        assert_eq!(motion.advance(0.0, 0.0), before_reverse);
+        let leaving = motion.advance(0.0, 1.0 / 60.0);
+        assert!(leaving > 0.0 && leaving < before_reverse);
+    }
+
+    #[test]
+    fn textbox_layout_motion_is_frame_rate_independent() {
+        fn sample(frames: usize, delta_seconds: f32) -> f32 {
+            let mut motion = TextboxLayoutMotion::default();
+            motion.advance(0.0, 0.0);
+            for _ in 0..frames {
+                motion.advance(10.0, delta_seconds);
+            }
+            motion.current_left
+        }
+
+        let at_30_fps = sample(9, 1.0 / 30.0);
+        let at_60_fps = sample(18, 1.0 / 60.0);
+        let at_120_fps = sample(36, 1.0 / 120.0);
+        assert!((at_30_fps - at_60_fps).abs() < 0.001);
+        assert!((at_60_fps - at_120_fps).abs() < 0.001);
+    }
 
     #[test]
     fn separates_ruby_and_style_without_polluting_plain_text() {

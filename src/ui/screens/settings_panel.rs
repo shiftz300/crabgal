@@ -1960,6 +1960,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
                 pending_window.target = Some(settings.fullscreen);
                 pending_window.delay_frames = 1;
             }
+            state.global_vars = crate::storage::profile::load(&project_root);
             state.read_dialogues = crate::storage::read_history::load(&project_root);
             state.unlocked_cg.clear();
             state.unlocked_bgm.clear();
@@ -1969,7 +1970,9 @@ pub fn handle_setting_action(context: SettingActionContext) {
                 crate::storage::save::QUICK_SAVE_SLOT,
                 &project_root,
             )
-            .ok();
+            .ok()
+            .filter(|saved| saved.snapshot().program_fingerprint == state.program_fingerprint)
+            .map(|saved| crate::ui::control_bar::QuickSaveSnapshot::from(saved.snapshot()));
             quick_preview.image = None;
             save_previews.clear();
             for entity in &title_entities {

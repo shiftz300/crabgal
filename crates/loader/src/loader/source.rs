@@ -138,6 +138,19 @@ impl ContentMount {
             .collect()
     }
 
+    /// Recursively collects every file below this mount.
+    ///
+    /// Hexz mounts filter the archive's in-memory file index once instead of
+    /// rescanning the complete package for every directory. Filesystem mounts
+    /// follow links only when their canonical target stays inside the mount;
+    /// canonical directory identities prevent links from creating cycles.
+    pub(crate) fn recursive_files(&self) -> Result<Vec<PathBuf>> {
+        match &self.backend {
+            ContentBackend::FileSystem(root) => collect_filesystem_files(&root.join(&self.prefix)),
+            ContentBackend::Hexz(archive) => Ok(archive.files_under(&self.prefix)),
+        }
+    }
+
     pub fn filesystem_root(&self) -> Option<PathBuf> {
         self.backend
             .filesystem_root()
@@ -245,6 +258,86 @@ impl HexzArchive {
             .into_iter()
             .collect()
     }
+
+    fn files_under(&self, prefix: &Path) -> Vec<PathBuf> {
+        relative_files_under(&self.files, prefix)
+    }
+}
+
+fn relative_files_under(files: &HashSet<PathBuf>, prefix: &Path) -> Vec<PathBuf> {
+    files
+        .iter()
+        .filter_map(|file| file.strip_prefix(prefix).ok())
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_owned)
+        .collect()
+}
+
+fn collect_filesystem_files(mount_root: &Path) -> Result<Vec<PathBuf>> {
+    let mount_root = mount_root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve content mount {}", mount_root.display()))?;
+    if !mount_root.is_dir() {
+        bail!("content mount is not a directory: {}", mount_root.display());
+    }
+
+    let mut visited = HashSet::from([mount_root.clone()]);
+    let mut directories = vec![(PathBuf::new(), mount_root.clone())];
+    let mut files = Vec::new();
+
+    while let Some((logical_directory, physical_directory)) = directories.pop() {
+        let mut entries = fs::read_dir(&physical_directory)
+            .with_context(|| format!("failed to read {}", physical_directory.display()))?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+
+        for entry in entries {
+            let file_type = entry.file_type().with_context(|| {
+                format!(
+                    "failed to inspect directory entry {}",
+                    entry.path().display()
+                )
+            })?;
+            let logical_path = logical_directory.join(entry.file_name());
+
+            if file_type.is_file() {
+                files.push(logical_path);
+                continue;
+            }
+
+            if file_type.is_dir() {
+                let canonical = entry.path().canonicalize().with_context(|| {
+                    format!("failed to resolve directory {}", entry.path().display())
+                })?;
+                if canonical.starts_with(&mount_root) && visited.insert(canonical.clone()) {
+                    directories.push((logical_path, canonical));
+                }
+                continue;
+            }
+
+            if !file_type.is_symlink() {
+                continue;
+            }
+
+            // Broken links and direct symlink loops are not content entries.
+            let Ok(canonical) = entry.path().canonicalize() else {
+                continue;
+            };
+            if !canonical.starts_with(&mount_root) {
+                continue;
+            }
+            let metadata = fs::metadata(&canonical).with_context(|| {
+                format!("failed to inspect symlink target {}", canonical.display())
+            })?;
+            if metadata.is_file() {
+                files.push(logical_path);
+            } else if metadata.is_dir() && visited.insert(canonical.clone()) {
+                directories.push((logical_path, canonical));
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 /// Seekable file view used by Bevy without materializing the resource.
@@ -411,5 +504,31 @@ mod tests {
     fn rejects_paths_that_escape_a_source() {
         assert!(safe_relative(Path::new("../secret")).is_err());
         assert!(safe_relative(Path::new("assets/bg.webp")).is_ok());
+    }
+
+    #[test]
+    fn collects_nested_hexz_files_relative_to_a_mount_in_one_pass() {
+        let files = [
+            "project/scripts/main.txt",
+            "project/scripts/chapter/act/scene.txt",
+            "project/scripts/chapter/notes.md",
+            "project/assets/background.webp",
+            "other/scripts/ignored.txt",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<HashSet<_>>();
+
+        let mut relative = relative_files_under(&files, Path::new("project/scripts"));
+        relative.sort();
+
+        assert_eq!(
+            relative,
+            [
+                PathBuf::from("chapter/act/scene.txt"),
+                PathBuf::from("chapter/notes.md"),
+                PathBuf::from("main.txt"),
+            ]
+        );
     }
 }

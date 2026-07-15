@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::runtime::resources::{GameConfigResource, ProjectRoot};
 use crate::ui::control_bar::{SkipMode, ToggleStates};
 
-const SETTINGS_VERSION: u32 = 2;
+const SETTINGS_VERSION: u32 = 3;
 
-#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+#[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeSettings {
     pub master_volume: f32,
     pub vocal_volume: f32,
@@ -77,14 +77,14 @@ pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
         version: SETTINGS_VERSION,
         settings: settings.clone(),
     };
-    fs::write(&temporary, bincode::serialize(&file)?)?;
+    fs::write(&temporary, postcard::to_stdvec(&file)?)?;
     fs::rename(&temporary, &path)?;
     Ok(())
 }
 
 pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
     let bytes = fs::read(path(project_root)).ok()?;
-    let file: SettingsFile = bincode::deserialize(&bytes).ok()?;
+    let file: SettingsFile = postcard::from_bytes(&bytes).ok()?;
     (file.version == SETTINGS_VERSION).then_some(file.settings)
 }
 
@@ -98,6 +98,10 @@ pub(crate) fn sanitize(settings: &mut RuntimeSettings) {
     settings.auto_delay = settings.auto_delay.clamp(0.5, 5.0);
     settings.text_size = settings.text_size.min(2);
     settings.textbox_opacity = settings.textbox_opacity.clamp(0.0, 1.0);
+}
+
+pub(super) fn reset_memory(settings: &mut RuntimeSettings) {
+    *settings = RuntimeSettings::default();
 }
 
 fn path(project_root: &Path) -> std::path::PathBuf {
@@ -157,7 +161,7 @@ mod tests {
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(
             path(&root),
-            bincode::serialize(&RuntimeSettings::default()).unwrap(),
+            postcard::to_stdvec(&RuntimeSettings::default()).unwrap(),
         )
         .unwrap();
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct BackupBundle {
@@ -40,7 +40,7 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
         Err(error) => return Err(error).context("failed to open save data directory"),
     }
     files.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-    let bytes = bincode::serialize(&BackupBundle {
+    let bytes = postcard::to_stdvec(&BackupBundle {
         version: VERSION,
         files,
     })?;
@@ -56,7 +56,7 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
 
 pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
     let bytes = fs::read(source)?;
-    let bundle: BackupBundle = bincode::deserialize(&bytes).context("invalid backup file")?;
+    let bundle: BackupBundle = postcard::from_bytes(&bytes).context("invalid backup file")?;
     if bundle.version != VERSION {
         bail!("unsupported backup version {}", bundle.version);
     }

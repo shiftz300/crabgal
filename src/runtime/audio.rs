@@ -23,11 +23,15 @@ use symphonia::core::codecs::registry::CodecRegistry;
 #[cfg(feature = "audio-opus")]
 use symphonia::core::errors::Error as SymphoniaError;
 #[cfg(feature = "audio-opus")]
-use symphonia::core::formats::{FormatOptions, FormatReader, TrackType, probe::Hint};
+use symphonia::core::formats::{
+    FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint,
+};
 #[cfg(feature = "audio-opus")]
 use symphonia::core::io::MediaSourceStream;
 #[cfg(feature = "audio-opus")]
 use symphonia::core::meta::MetadataOptions;
+#[cfg(feature = "audio-opus")]
+use symphonia::core::units::{Time as SymphoniaTime, TimeBase, Timestamp};
 #[cfg(feature = "audio-opus")]
 use symphonia_adapter_libopus::OpusDecoder;
 
@@ -37,6 +41,14 @@ use symphonia_adapter_libopus::OpusDecoder;
 #[cfg(feature = "audio-opus")]
 pub(crate) struct OpusAudio {
     bytes: Arc<[u8]>,
+    duration: Option<Duration>,
+}
+
+#[cfg(feature = "audio-opus")]
+impl OpusAudio {
+    pub(crate) fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
 }
 
 #[derive(Default, TypePath)]
@@ -63,8 +75,10 @@ impl AssetLoader for OpusAudioLoader {
                 "empty Opus asset",
             ));
         }
+        let bytes: Arc<[u8]> = bytes.into();
         Ok(OpusAudio {
-            bytes: bytes.into(),
+            duration: probe_opus_duration(bytes.clone()),
+            bytes,
         })
     }
 
@@ -141,6 +155,8 @@ pub(crate) struct OpusStream {
     channels: ChannelCount,
     sample_rate: SampleRate,
     ended: bool,
+    duration: Option<Duration>,
+    time_base: Option<TimeBase>,
 }
 
 #[cfg(feature = "audio-opus")]
@@ -176,6 +192,8 @@ impl OpusStream {
         let sample_rate =
             SampleRate::new(params.sample_rate.unwrap_or(48_000)).unwrap_or(SampleRate::MIN);
         let track_id = track.id;
+        let duration = track_duration(track);
+        let time_base = track.time_base;
 
         let mut codecs = CodecRegistry::new();
         codecs.register_audio_decoder::<OpusDecoder>();
@@ -190,6 +208,8 @@ impl OpusStream {
             channels,
             sample_rate,
             ended: false,
+            duration,
+            time_base,
         })
     }
 
@@ -203,6 +223,8 @@ impl OpusStream {
             channels: ChannelCount::new(2).expect("stereo channel count is non-zero"),
             sample_rate: SampleRate::new(48_000).expect("Opus sample rate is non-zero"),
             ended: true,
+            duration: None,
+            time_base: None,
         }
     }
 
@@ -294,8 +316,98 @@ impl Source for OpusStream {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        None
+        self.duration
     }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        let active_channel = self.position % usize::from(self.channels.get());
+        let target = self
+            .duration
+            .map_or(position, |duration| position.min(duration));
+        let seconds = i64::try_from(target.as_secs()).unwrap_or(i64::MAX);
+        let time =
+            SymphoniaTime::try_new(seconds, target.subsec_nanos()).unwrap_or(SymphoniaTime::MAX);
+        let seeked = self
+            .format
+            .as_mut()
+            .ok_or(rodio::source::SeekError::NotSupported {
+                underlying_source: std::any::type_name::<Self>(),
+            })?
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
+                },
+            )
+            .map_err(opus_seek_error)?;
+
+        let time_base = self.time_base;
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or(rodio::source::SeekError::NotSupported {
+                underlying_source: std::any::type_name::<Self>(),
+            })?;
+        decoder.reset();
+        self.samples.clear();
+        self.position = 0;
+        self.ended = false;
+
+        // The demuxer seeks to the nearest packet before the target. Decode
+        // and discard that short remainder so dragging lands on the requested
+        // sample rather than merely on the preceding Opus packet.
+        let frames_to_skip = time_base
+            .zip(seeked.required_ts.duration_from(seeked.actual_ts))
+            .and_then(|(time_base, delta)| {
+                Timestamp::try_from(delta.get())
+                    .ok()
+                    .map(|timestamp| (time_base, timestamp))
+            })
+            .and_then(|(time_base, delta)| time_base.calc_time(delta))
+            .map_or(0usize, |delta| {
+                (delta.as_secs_f64().max(0.0) * f64::from(self.sample_rate.get())).ceil() as usize
+            });
+        let samples_to_skip = frames_to_skip.saturating_mul(usize::from(self.channels.get()));
+        for _ in 0..samples_to_skip.saturating_add(active_channel) {
+            if self.next().is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+fn opus_seek_error(error: SymphoniaError) -> rodio::source::SeekError {
+    rodio::source::SeekError::Other(Arc::new(io::Error::other(error.to_string())))
+}
+
+#[cfg(feature = "audio-opus")]
+fn probe_opus_duration(bytes: Arc<[u8]>) -> Option<Duration> {
+    let source = Box::new(Cursor::new(bytes));
+    let stream = MediaSourceStream::new(source, Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("opus");
+    let format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            stream,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .ok()?;
+    track_duration(format.default_track(TrackType::Audio)?)
+}
+
+#[cfg(feature = "audio-opus")]
+fn track_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
+    let time_base = track.time_base?;
+    let ticks = i64::try_from(track.duration?.get()).ok()?;
+    let nanos = time_base
+        .calc_time(symphonia::core::units::Timestamp::new(ticks))?
+        .as_nanos();
+    u64::try_from(nanos).ok().map(Duration::from_nanos)
 }
 
 #[cfg(all(test, feature = "audio-opus"))]
@@ -309,10 +421,14 @@ mod tests {
                 .as_slice()
                 .into();
         let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
+        let duration = stream
+            .total_duration()
+            .expect("seekable Ogg Opus should expose its duration");
         let samples = stream.by_ref().take(4_800).collect::<Vec<_>>();
 
         assert_eq!(stream.channels().get(), 1);
         assert_eq!(stream.sample_rate().get(), 48_000);
+        assert!(duration > Duration::from_millis(100));
         assert_eq!(samples.len(), 4_800);
         assert!(samples.iter().any(|sample| sample.abs() > f32::EPSILON));
     }
@@ -336,5 +452,30 @@ mod tests {
             let seconds = samples.len() as f32 / channels as f32 / sample_rate as f32;
             assert!(seconds >= minimum_seconds, "decoded only {seconds:.3}s");
         }
+    }
+
+    #[test]
+    fn opus_stream_can_seek_forward_and_back_to_the_start() {
+        let bytes: Arc<[u8]> =
+            include_bytes!("../../projects/test-project/content/shared/vocal/v16.opus")
+                .as_slice()
+                .into();
+        let mut fresh = OpusStream::new(bytes.clone()).expect("test Opus asset should open");
+        let duration = fresh.total_duration().expect("test Opus has a duration");
+        let full_sample_count = fresh.by_ref().count();
+
+        let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
+        stream
+            .try_seek(duration / 2)
+            .expect("forward seek should be supported");
+        let remaining_sample_count = stream.by_ref().count();
+        assert!(remaining_sample_count > full_sample_count / 4);
+        assert!(remaining_sample_count < full_sample_count * 3 / 4);
+        stream
+            .try_seek(Duration::ZERO)
+            .expect("rewind should be supported");
+        let actual = stream.by_ref().take(2_400).collect::<Vec<_>>();
+        assert_eq!(actual.len(), 2_400);
+        assert!(actual.iter().any(|sample| sample.abs() > f32::EPSILON));
     }
 }

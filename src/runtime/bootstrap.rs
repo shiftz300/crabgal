@@ -9,8 +9,7 @@ use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin}
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use crabgal_core::config::GameConfig;
-use crabgal_core::step;
-use crabgal_core::{Action, State};
+use crabgal_core::{Action, Program, State};
 use crabgal_loader::{
     ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_hexz_project_from_archive,
     load_project_with, load_scenes_with,
@@ -143,6 +142,7 @@ fn bootstrap_project(
     spawn_cameras(&mut commands);
 
     let mut state = State::new();
+    state.global_vars = crate::storage::profile::load(&project_root);
     crate::storage::gallery::load(&mut state, &project_root);
     state.read_dialogues = crate::storage::read_history::load(&project_root);
     let read_history_count = state.read_dialogues.len();
@@ -151,6 +151,7 @@ fn bootstrap_project(
     let mut manifest = LocalAssetManifest::default();
     match load_scenes_with(&content, &languages) {
         Ok(scenes) => {
+            let mut program_scenes = Vec::with_capacity(scenes.len());
             for scene in scenes {
                 scene_count += 1;
                 action_count += scene.actions.len();
@@ -174,13 +175,13 @@ fn bootstrap_project(
                         sub_scenes: scene.sub_scenes,
                     },
                 );
-                state.scenes.insert(scene.name, scene.actions);
+                program_scenes.push((scene.name, scene.actions));
             }
+            state.install_program(Program::from_scenes(program_scenes));
         }
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }
     ensure_playable_scene(&mut state);
-    step::index_labels(&mut state);
     // Loading scripts prepares the entry scene, but execution belongs to the
     // title screen's START action. This also lets title assets and the first
     // scene warm up without briefly exposing gameplay UI during startup.
@@ -190,10 +191,12 @@ fn bootstrap_project(
         config.title,
         content.sources.len(),
     );
+    let profile_writer = crate::storage::profile::ProfileWriter::loaded(&state.global_vars);
     commands.insert_resource(GameState(state));
     commands.insert_resource(crate::storage::read_history::ReadHistoryWriter::loaded(
         read_history_count,
     ));
+    commands.insert_resource(profile_writer);
     commands.insert_resource(manifest);
     commands.insert_resource(LocalAssetCache::default());
 
@@ -252,8 +255,8 @@ fn create_project_directories(project_root: &Path, script_dir: &Path) {
 }
 
 fn ensure_playable_scene(state: &mut State) {
-    if state.scenes.is_empty() {
-        state.scenes.insert(
+    if state.program.is_empty() {
+        state.insert_scene(
             "main".into(),
             vec![
                 Action::ShowBg {

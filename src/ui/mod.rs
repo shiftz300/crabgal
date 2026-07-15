@@ -3,6 +3,7 @@ mod screens;
 mod stage;
 mod support;
 
+pub(crate) use overlays::user_input;
 pub use overlays::{backlog, dialog};
 pub(crate) use screens::menu;
 pub use screens::{extra, save_load, settings_panel, title};
@@ -69,6 +70,8 @@ fn init_resources(app: &mut App) {
         .init_resource::<control_bar::QuickSavePreview>()
         .init_resource::<textbox::TextboxOverlayFade>()
         .init_resource::<textbox::InitialTextboxFade>()
+        .init_resource::<textbox::TextboxLayoutMotion>()
+        .init_resource::<user_input::UserInputCaretBlink>()
         .init_resource::<backlog::BacklogUiState>()
         .init_resource::<save_load::SaveLoadUi>()
         .init_resource::<save_load::SavePreviewCache>()
@@ -130,8 +133,14 @@ fn add_stage_systems(app: &mut App) {
             control_bar::update_lock_icon,
             loading::update_loading,
             overlays::presentation::sync,
-            overlays::user_input::sync,
-            overlays::user_input::handle,
+            (
+                overlays::user_input::handle
+                    .run_if(loading::assets_ready)
+                    .run_if(input_scope::user_input_allowed),
+                overlays::user_input::sync,
+                overlays::user_input::animate_caret,
+            )
+                .chain(),
             text_style::apply_text_shadows,
             (
                 choice::sync_choice,
@@ -186,11 +195,14 @@ fn add_overlay_systems(app: &mut App) {
                 // has already begun its fade when the title leaves.
                 .before(textbox::update_textbox),
             (
-                extra::handle_navigation,
-                extra::handle_page,
-                extra::handle_cg,
-                extra::handle_bgm,
+                extra::handle_navigation.run_if(input_scope::extra_allowed),
+                extra::handle_page.run_if(input_scope::extra_allowed),
+                extra::handle_cg.run_if(input_scope::extra_allowed),
+                extra::handle_bgm.run_if(input_scope::extra_allowed),
+                extra::sync_bgm_selection,
+                extra::handle_bgm_seek.run_if(input_scope::extra_allowed),
                 extra::sync,
+                extra::update_bgm_progress,
                 extra::animate,
                 extra::animate_buttons,
             )
@@ -211,33 +223,45 @@ fn add_menu_systems(app: &mut App) {
         Update,
         (
             (
-                save_load::toggle_save_load.run_if(loading::assets_ready),
-                settings_panel::toggle_settings.run_if(loading::assets_ready),
+                save_load::toggle_save_load
+                    .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed),
+                settings_panel::toggle_settings
+                    .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed),
                 save_load::handle_save_load_page
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 save_load::animate_page_transition,
                 save_load::handle_save_load_slot
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 save_load::handle_save_delete
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 settings_panel::handle_setting_action
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 settings_panel::handle_language_dropdown
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 settings_panel::handle_about_repository_link
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 settings_panel::apply_pending_window_mode,
                 settings_panel::handle_settings_page
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 settings_panel::handle_setting_sliders
                     .run_if(loading::assets_ready)
+                    .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
                 save_load::sync_save_load,
             )

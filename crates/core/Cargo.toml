@@ -6,5 +6,6 @@ description = "Language-neutral visual-novel model and deterministic state machi
 
 [dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+noyalib = { workspace = true }
 log = { workspace = true }
+postcard = { workspace = true }

@@ -241,6 +241,92 @@ impl SpriteTransform {
     }
 }
 
+/// Sparse update for an existing [`SpriteTransform`].
+///
+/// WebGAL's `setTransform` keeps every field that is absent from the command.
+/// A compact presence mask avoids the per-field overhead of `Option<f32>` while
+/// keeping application allocation-free in the runtime hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct TransformPatch {
+    values: SpriteTransform,
+    fields: u8,
+}
+
+impl TransformPatch {
+    const OFFSET_X: u8 = 1 << 0;
+    const OFFSET_Y: u8 = 1 << 1;
+    const ALPHA: u8 = 1 << 2;
+    const SCALE_X: u8 = 1 << 3;
+    const SCALE_Y: u8 = 1 << 4;
+    const ROTATION: u8 = 1 << 5;
+    const BLUR: u8 = 1 << 6;
+
+    pub fn is_empty(self) -> bool {
+        self.fields == 0
+    }
+
+    pub fn set_offset_x(&mut self, value: f32) {
+        self.values.offset_x = value;
+        self.fields |= Self::OFFSET_X;
+    }
+
+    pub fn set_offset_y(&mut self, value: f32) {
+        self.values.offset_y = value;
+        self.fields |= Self::OFFSET_Y;
+    }
+
+    pub fn set_alpha(&mut self, value: f32) {
+        self.values.alpha = value;
+        self.fields |= Self::ALPHA;
+    }
+
+    pub fn set_scale_x(&mut self, value: f32) {
+        self.values.scale_x = value;
+        self.fields |= Self::SCALE_X;
+    }
+
+    pub fn set_scale_y(&mut self, value: f32) {
+        self.values.scale_y = value;
+        self.fields |= Self::SCALE_Y;
+    }
+
+    pub fn set_rotation(&mut self, value: f32) {
+        self.values.rotation = value;
+        self.fields |= Self::ROTATION;
+    }
+
+    pub fn set_blur(&mut self, value: f32) {
+        self.values.blur = value;
+        self.fields |= Self::BLUR;
+    }
+
+    /// Applies only the fields present in this patch to `base`.
+    pub fn apply_to(self, mut base: SpriteTransform) -> SpriteTransform {
+        if self.fields & Self::OFFSET_X != 0 {
+            base.offset_x = self.values.offset_x;
+        }
+        if self.fields & Self::OFFSET_Y != 0 {
+            base.offset_y = self.values.offset_y;
+        }
+        if self.fields & Self::ALPHA != 0 {
+            base.alpha = self.values.alpha;
+        }
+        if self.fields & Self::SCALE_X != 0 {
+            base.scale_x = self.values.scale_x;
+        }
+        if self.fields & Self::SCALE_Y != 0 {
+            base.scale_y = self.values.scale_y;
+        }
+        if self.fields & Self::ROTATION != 0 {
+            base.rotation = self.values.rotation;
+        }
+        if self.fields & Self::BLUR != 0 {
+            base.blur = self.values.blur;
+        }
+        base
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum Easing {
     #[default]
@@ -288,5 +374,48 @@ impl Default for SpriteTransform {
             rotation: 0.0,
             blur: 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod transform_patch_tests {
+    use super::*;
+
+    #[test]
+    fn sparse_patch_preserves_absent_fields() {
+        let base = SpriteTransform {
+            offset_x: 12.0,
+            offset_y: -8.0,
+            alpha: 0.65,
+            scale_x: 1.3,
+            scale_y: 0.9,
+            rotation: 0.2,
+            blur: 4.0,
+        };
+        let mut patch = TransformPatch::default();
+        patch.set_offset_x(100.0);
+        patch.set_blur(0.0);
+
+        assert_eq!(
+            patch.apply_to(base),
+            SpriteTransform {
+                offset_x: 100.0,
+                blur: 0.0,
+                ..base
+            }
+        );
+    }
+
+    #[test]
+    fn empty_patch_is_identity_and_compact() {
+        let base = SpriteTransform {
+            offset_x: 42.0,
+            ..SpriteTransform::default()
+        };
+        let patch = TransformPatch::default();
+
+        assert!(patch.is_empty());
+        assert_eq!(patch.apply_to(base), base);
+        assert_eq!(std::mem::size_of::<TransformPatch>(), 32);
     }
 }

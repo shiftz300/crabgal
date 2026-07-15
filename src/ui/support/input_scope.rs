@@ -21,6 +21,16 @@ pub(crate) enum UiInputScope {
     Stage,
 }
 
+impl UiInputScope {
+    pub(crate) const fn allows_backlog(self) -> bool {
+        matches!(self, Self::Stage | Self::Backlog)
+    }
+
+    pub(crate) const fn allows_menu(self) -> bool {
+        matches!(self, Self::Stage | Self::Menu)
+    }
+}
+
 #[derive(SystemParam)]
 pub(crate) struct InputScopeContext<'w> {
     loading: Res<'w, AssetLoadingGate>,
@@ -36,10 +46,10 @@ pub(crate) struct InputScopeContext<'w> {
 pub(crate) fn sync(mut context: InputScopeContext) {
     *context.scope = if context.loading.blocked {
         UiInputScope::Loading
-    } else if context.state.user_input.is_some() {
-        UiInputScope::UserInput
     } else if context.dialog.is_some() {
         UiInputScope::Dialog
+    } else if context.state.user_input.is_some() {
+        UiInputScope::UserInput
     } else if context.settings.open || context.save_load.mode.is_some() {
         UiInputScope::Menu
     } else if context.backlog.open {
@@ -54,7 +64,19 @@ pub(crate) fn sync(mut context: InputScopeContext) {
 }
 
 pub(crate) fn backlog_allowed(scope: Res<UiInputScope>) -> bool {
-    matches!(*scope, UiInputScope::Stage | UiInputScope::Backlog)
+    scope.allows_backlog()
+}
+
+pub(crate) fn menu_allowed(scope: Res<UiInputScope>) -> bool {
+    scope.allows_menu()
+}
+
+pub(crate) fn user_input_allowed(scope: Res<UiInputScope>) -> bool {
+    *scope == UiInputScope::UserInput
+}
+
+pub(crate) fn extra_allowed(scope: Res<UiInputScope>) -> bool {
+    *scope == UiInputScope::Extra
 }
 
 pub(crate) fn stage_allowed(scope: Res<UiInputScope>) -> bool {
@@ -67,4 +89,22 @@ pub(crate) fn title_allowed(scope: Res<UiInputScope>) -> bool {
 
 pub(crate) fn dialog_allowed(scope: Res<UiInputScope>) -> bool {
     *scope == UiInputScope::Dialog
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_and_backlog_scopes_do_not_accept_modal_input() {
+        assert!(UiInputScope::Stage.allows_menu());
+        assert!(UiInputScope::Menu.allows_menu());
+        assert!(!UiInputScope::Dialog.allows_menu());
+        assert!(!UiInputScope::UserInput.allows_menu());
+
+        assert!(UiInputScope::Stage.allows_backlog());
+        assert!(UiInputScope::Backlog.allows_backlog());
+        assert!(!UiInputScope::Menu.allows_backlog());
+        assert!(!UiInputScope::Dialog.allows_backlog());
+    }
 }

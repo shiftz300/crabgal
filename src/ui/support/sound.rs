@@ -8,9 +8,8 @@ use crate::ui::foundation::UiSoundStyle;
 const CLICK_PATH: &str = "embedded://crabgal/assets/audio/click.opus";
 const HOVER_PATH: &str = "embedded://crabgal/assets/audio/mouse-enter.opus";
 const SWITCH_PATH: &str = "embedded://crabgal/assets/audio/switch.opus";
-// WebGAL K defaults its UI-SE bus to 50. Keep the source cues at the same
 // perceived baseline while preserving the full user-facing slider range.
-const UI_CUE_GAIN: f32 = 0.2;
+const UI_CUE_GAIN: f32 = 0.1;
 
 #[derive(Component)]
 pub(crate) struct UiSoundPlayer;

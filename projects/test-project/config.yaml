@@ -33,7 +33,7 @@ styles:
 layout:
   anchor_offset: 30
   sprite_height: 825
-  textbox_left: 7.0
+  textbox_left: 0.0
   textbox_dodge_left: 10.0
   textbox_bottom: 1.0
   textbox_height: 22.0

@@ -12,6 +12,6 @@ pub use runtime::{dissolve, expression, step};
 pub use model::types::*;
 pub use model::{
     Action, BgmState, ChoiceTarget, EffectCue, EffectEvent, EffectState, MenuChoice, MenuState,
-    SayOptions, SceneFrame, State,
+    Program, RestoreError, SayOptions, SceneFrame, State,
 };
 pub use runtime::StepResult;

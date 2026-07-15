@@ -104,6 +104,7 @@ struct SaveContentContext<'a> {
     font: &'a Handle<Font>,
     project_root: &'a ProjectRoot,
     store: &'a dyn crabgal_loader::StoreAdapter,
+    program_fingerprint: u64,
     preview_cache: &'a mut SavePreviewCache,
 }
 
@@ -253,6 +254,7 @@ pub(crate) struct SaveLoadSyncContext<'w, 's> {
     fonts: Res<'w, UiFonts>,
     project_root: Res<'w, ProjectRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
+    state: Res<'w, crate::runtime::resources::GameState>,
     preview_cache: ResMut<'w, SavePreviewCache>,
     fades: Query<'w, 's, &'static mut MenuFade>,
     watermarks: Query<
@@ -440,6 +442,7 @@ pub fn sync_save_load(
                     font: &context.fonts.text,
                     project_root: &context.project_root,
                     store: context.store.0.as_ref(),
+                    program_fingerprint: context.state.program_fingerprint,
                     preview_cache: &mut context.preview_cache,
                 },
             );
@@ -542,6 +545,7 @@ pub fn sync_save_load(
                     font: &font,
                     project_root: &context.project_root,
                     store: context.store.0.as_ref(),
+                    program_fingerprint: context.state.program_fingerprint,
                     preview_cache: &mut context.preview_cache,
                 },
             );
@@ -633,15 +637,7 @@ fn spawn_slot_grid(
         .with_children(|grid| {
             for slot in first..first + SLOTS_PER_PAGE {
                 let preview = request_preview(context.project_root, slot, context.preview_cache);
-                spawn_slot(
-                    grid,
-                    slot,
-                    mode,
-                    context.font,
-                    context.project_root,
-                    context.store,
-                    preview,
-                );
+                spawn_slot(grid, slot, mode, context, preview);
             }
         });
 }
@@ -885,20 +881,21 @@ fn spawn_slot(
     grid: &mut ChildSpawnerCommands,
     slot: u32,
     mode: SaveLoadMode,
-    font: &Handle<Font>,
-    project_root: &ProjectRoot,
-    store: &dyn crabgal_loader::StoreAdapter,
+    context: &SaveContentContext,
     preview: Option<Handle<Image>>,
 ) {
     use crate::storage::save::SlotStatus;
 
-    let status = crate::storage::save::inspect_slot(store, slot, project_root);
+    let status = crate::storage::save::inspect_slot(context.store, slot, context.project_root);
     let empty = matches!(status, SlotStatus::Empty);
-    let preview = matches!(status, SlotStatus::Ready(_))
-        .then_some(preview)
-        .flatten();
-    let enabled = mode == SaveLoadMode::Save || matches!(status, SlotStatus::Ready(_));
-    let ready = matches!(status, SlotStatus::Ready(_));
+    let compatible = matches!(
+        &status,
+        SlotStatus::Ready(metadata)
+            if metadata.program_fingerprint == context.program_fingerprint
+    );
+    let preview = compatible.then_some(preview).flatten();
+    let enabled = mode == SaveLoadMode::Save || compatible;
+    let ready = compatible;
     let primary_text_alpha = if ready {
         0.72
     } else if empty {
@@ -930,6 +927,9 @@ fn spawn_slot(
         SlotStatus::Corrupt => "CORRUPT SLOT\nSave here to replace it".to_owned(),
         SlotStatus::Unsupported(version) => {
             format!("NEWER SAVE · v{version}\nCannot load in this engine")
+        }
+        SlotStatus::Ready(_) if !compatible => {
+            "DIFFERENT SCRIPT BUILD\nSave here to replace it".to_owned()
         }
         SlotStatus::Ready(meta) => meta.text.clone(),
     };
@@ -975,7 +975,7 @@ fn spawn_slot(
                     }),
                     children![text_weight(
                         slot.to_string(),
-                        font,
+                        context.font,
                         21.75,
                         primary_text_alpha,
                         FontWeight::BOLD,
@@ -994,7 +994,12 @@ fn spawn_slot(
                     } else {
                         Color::srgba(0.0, 0.0, 0.0, 0.32)
                     }),
-                    children![text(slot_time(&status), font, 15.75, secondary_text_alpha,)]
+                    children![text(
+                        slot_time(&status),
+                        context.font,
+                        15.75,
+                        secondary_text_alpha,
+                    )]
                 )
             ],
         ));
@@ -1025,12 +1030,12 @@ fn spawn_slot(
             children![
                 text_weight(
                     slot_speaker(&status),
-                    font,
+                    context.font,
                     19.5,
                     primary_text_alpha,
                     FontWeight::BOLD,
                 ),
-                text(detail, font, 17.25, secondary_text_alpha)
+                text(detail, context.font, 17.25, secondary_text_alpha)
             ],
         ));
     });
@@ -1264,7 +1269,13 @@ pub fn handle_save_load_slot(
     if mode == SaveLoadMode::Save && context.state.ended {
         return;
     }
-    if mode == SaveLoadMode::Load && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
+    if mode == SaveLoadMode::Load
+        && !matches!(
+            &status,
+            crate::storage::save::SlotStatus::Ready(metadata)
+                if metadata.program_fingerprint == context.state.program_fingerprint
+        )
+    {
         return;
     }
     if mode == SaveLoadMode::Save && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
@@ -1308,11 +1319,12 @@ pub fn handle_save_delete(
     mouse: Res<ButtonInput<MouseButton>>,
     slots: Query<(&Interaction, &SaveLoadSlot)>,
     ui: Res<SaveLoadUi>,
+    request: Option<Res<DialogRequest>>,
     project_root: Res<ProjectRoot>,
     store: Res<crate::runtime::resources::StoreCodec>,
     mut commands: Commands,
 ) {
-    if ui.mode.is_none() || !mouse.just_pressed(MouseButton::Right) {
+    if ui.mode.is_none() || request.is_some() || !mouse.just_pressed(MouseButton::Right) {
         return;
     }
     let Some(slot) = slots

@@ -53,9 +53,9 @@ use crabgal_core::State;
 pub fn entry_scene(state: &State) -> String {
     ["start", "main"]
         .into_iter()
-        .find(|name| state.scenes.contains_key(*name))
+        .find(|name| state.program.contains_scene(name))
         .map(str::to_owned)
-        .or_else(|| state.scenes.keys().min().cloned())
+        .or_else(|| state.program.scene_names().min().map(str::to_owned))
         .unwrap_or_default()
 }
 
@@ -66,10 +66,10 @@ mod tests {
     #[test]
     fn entry_scene_prefers_start_then_main() {
         let mut state = State::new();
-        state.scenes.insert("chapter".into(), Vec::new());
-        state.scenes.insert("main".into(), Vec::new());
+        state.insert_scene("chapter".into(), Vec::new());
+        state.insert_scene("main".into(), Vec::new());
         assert_eq!(entry_scene(&state), "main");
-        state.scenes.insert("start".into(), Vec::new());
+        state.insert_scene("start".into(), Vec::new());
         assert_eq!(entry_scene(&state), "start");
     }
 }

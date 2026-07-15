@@ -37,7 +37,7 @@ crabgal/
 - **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
 - **WebGAL migration path** — parse and execute a growing, explicitly tracked subset of `.txt` scripts
 - **Hot reload** — script file changes are watched during development
-- **Quick save/load** — confirmation UI, persisted stage-snapshot preview and bincode serialization
+- **Quick save/load** — v5 Postcard slots, Program fingerprints, confirmation UI and independent WebP previews
 - **Sprite animations** — fade, slide, instant transitions
 - **Choice UI** — deterministic choice state with mouse and keyboard interaction
 - **Scene flow** — `changeScene`, nested `callScene` returns and terminal `end`
@@ -46,7 +46,7 @@ crabgal/
 - **Local vocal playback** — WebGAL vocal shorthand and per-line volume
 - **Unified Opus distribution** — streaming decode for BGM, voice, effects and engine UI audio
 - **Project-sized audio build** — release packaging compiles only the codecs used by project assets
-- **Auto / Skip modes** — A for auto-advance, Ctrl for skip
+- **Auto / Skip modes** — A toggles auto, S toggles skip, Shift+S switches Read/All, Ctrl temporarily skips
 - **Rich dialogue** — styled spans, ruby/furigana, concatenation and player input
 - **Unified input** — keyboard, mouse, touch and gamepad actions behind one runtime API
 - **Native packaging** — standalone engine binary, `.hxz` projects and macOS app bundles
@@ -54,7 +54,7 @@ crabgal/
 
 ## Tech Stack
 
-Rust | Bevy 0.19 | wgpu | notify | serde | bincode
+Rust | Bevy 0.19 | wgpu | notify | serde | Postcard
 
 ## Project Structure
 
@@ -67,6 +67,11 @@ my-game/
 │   └── fonts/      .ttf font files used by Bevy UI
 └── config.yaml     title, font and layout configuration
 ```
+
+`layout.sprite_y_offset` sets the project-wide standing-sprite baseline in
+1920×1080 design pixels (`0` by default; negative values move figures down).
+It is a crabgal project-layout extension: per-line WebGAL `transform.position.y`
+remains a relative offset and is applied afterward.
 
 Multiple content roots can be layered in `config.yaml`; later sources override
 earlier assets and scene names:
@@ -86,9 +91,10 @@ adapter:
 
 ## Implementation Phases
 
-See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The
-[WebGAL_K gap audit](dev/docs/reference/10-webgal-k-gap-analysis.md) records actual compatibility, and
-[engine advantages](dev/docs/reference/11-engine-advantages.md) defines the product and technical strategy.
+See [dev/docs/TODO.md](dev/docs/TODO.md) for detailed tracking. The current
+[WebGAL compatibility matrix](dev/docs/webgal-compatibility/semantic-matrix.md) records actual compatibility,
+the [WebGAL_K gap audit](dev/docs/reference/10-webgal-k-gap-analysis.md) remains a crabgal 0.2.0 historical snapshot,
+and [engine advantages](dev/docs/reference/11-engine-advantages.md) defines the product and technical strategy.
 
 | Phase | Status | Focus |
 |-------|--------|-------|

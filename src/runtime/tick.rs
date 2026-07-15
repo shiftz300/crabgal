@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::State;
 use crabgal_core::step;
+use crabgal_core::{Program, State};
 use crabgal_loader::DiagnosticLevel;
 
 use crate::runtime::input::InputActions;
@@ -197,7 +197,7 @@ fn reload_scripts_if_changed(
         return false;
     };
     asset_manifest.clear();
-    state.scenes.clear();
+    let mut program_scenes = Vec::with_capacity(scenes.len());
     for scene in scenes {
         for diagnostic in &scene.diagnostics {
             let message = format!(
@@ -219,25 +219,47 @@ fn reload_scripts_if_changed(
                 sub_scenes: scene.sub_scenes,
             },
         );
-        state.scenes.insert(scene.name, scene.actions);
+        program_scenes.push((scene.name, scene.actions));
     }
-    state.scene_stack.retain_mut(|frame| {
-        let Some(scene) = state.scenes.get(&frame.scene) else {
-            return false;
-        };
-        frame.cursor = frame.cursor.min(scene.len());
-        true
-    });
-
-    if !state.scenes.contains_key(&state.current_scene) {
-        state.current_scene = crate::scene::entry_scene(state);
-        state.cursor = 0;
-    } else if let Some(scene) = state.scenes.get(&state.current_scene) {
-        state.cursor = state.cursor.min(scene.len());
-    }
-    step::index_labels(state);
+    restart_after_program_reload(state, Program::from_scenes(program_scenes));
     log::info!("reloaded {} changed script file(s)", changes.len());
     true
+}
+
+/// Re-enter one scene against the new Program without carrying presentation
+/// or interaction state produced by the previous script fingerprint.
+///
+/// Development reload keeps local/global variables and durable gallery
+/// unlocks so authors can iterate near the current branch. Execution frames,
+/// read positions, backlog, stage, audio and open UI interactions are rebuilt
+/// from the beginning of the selected scene.
+fn restart_after_program_reload(state: &mut State, program: Program) {
+    let previous_scene = state.current_scene.clone();
+    let was_ended = state.ended;
+    let vars = std::mem::take(&mut state.vars);
+    let global_vars = std::mem::take(&mut state.global_vars);
+    let unlocked_cg = std::mem::take(&mut state.unlocked_cg);
+    let unlocked_bgm = std::mem::take(&mut state.unlocked_bgm);
+
+    let mut restarted = State {
+        vars,
+        global_vars,
+        unlocked_cg,
+        unlocked_bgm,
+        ..State::new()
+    };
+    restarted.install_program(program);
+    restarted.current_scene = if restarted.program.contains_scene(&previous_scene) {
+        previous_scene
+    } else {
+        crate::scene::entry_scene(&restarted)
+    };
+    restarted.ended = was_ended || restarted.current_scene.is_empty();
+    restarted.effect_queue.push(crabgal_core::EffectEvent::Stop);
+    if !restarted.ended {
+        step::step(&mut restarted);
+    }
+    *state = restarted;
 }
 
 fn skip_once(state: &mut State, toggles: &mut ToggleStates) -> bool {
@@ -547,6 +569,9 @@ fn sample_preset(
 #[cfg(test)]
 mod tests {
     use crabgal_core::state::Dialogue;
+    use crabgal_core::{
+        Action, AnimationPreset, BlendMode, Position, SpriteTransform, Transition, Value,
+    };
 
     use super::*;
 
@@ -615,5 +640,108 @@ mod tests {
 
         assert!(toggles.skip);
         assert_eq!(state.dialogue.unwrap().visible_chars, 10);
+    }
+
+    #[test]
+    fn custom_exit_animation_keeps_sprite_until_its_last_frame() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::SetTransition {
+                    target: "hero".into(),
+                    enter: None,
+                    exit: Some(AnimationPreset::Exit),
+                    duration: 1.0,
+                },
+                Action::ShowSprite {
+                    id: "hero".into(),
+                    image: "hero.webp".into(),
+                    position: Position::center(0.0),
+                    transition: Transition::Instant,
+                    transform: SpriteTransform::default(),
+                    z_index: 0,
+                    blend: BlendMode::Alpha,
+                },
+                Action::HideSprite {
+                    id: "hero".into(),
+                    transition: Transition::Instant,
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+
+        assert_eq!(
+            step::step(&mut state),
+            crabgal_core::StepResult::AwaitPresentation
+        );
+        assert!(state.sprites.contains_key("hero"));
+
+        update_transitions(&mut state, 0.5, false);
+        let halfway = &state.sprites["hero"];
+        assert!(halfway.animation.is_some());
+        assert!(halfway.transform.alpha > 0.0);
+
+        update_transitions(&mut state, 0.5, false);
+        assert!(!state.sprites.contains_key("hero"));
+        assert!(!state.presentation_blocked());
+    }
+
+    #[test]
+    fn program_reload_rebuilds_interaction_state_from_the_new_scene() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::Say {
+                speaker: "old".into(),
+                text: "old line".into(),
+                options: Default::default(),
+            }],
+        )]));
+        state.current_scene = "main".into();
+        state.vars.insert("route".into(), Value::Str("kept".into()));
+        state.global_vars.insert("chapter".into(), Value::Int(2));
+        state.unlocked_cg.insert("old.webp".into(), "Old".into());
+        assert_eq!(step::step(&mut state), crabgal_core::StepResult::AwaitClick);
+        state.record_dialogue(0);
+        state.mark_current_dialogue_read();
+
+        restart_after_program_reload(
+            &mut state,
+            Program::from_scenes([(
+                "main".into(),
+                vec![
+                    Action::ShowBg {
+                        image: "new.webp".into(),
+                        transition: Transition::Instant,
+                        transform: SpriteTransform::default(),
+                    },
+                    Action::Say {
+                        speaker: "new".into(),
+                        text: "new line".into(),
+                        options: Default::default(),
+                    },
+                ],
+            )]),
+        );
+
+        assert_eq!(state.current_scene, "main");
+        assert_eq!(state.bg.as_deref(), Some("new.webp"));
+        assert_eq!(
+            state.dialogue.as_ref().map(|line| line.text.as_str()),
+            Some("new line")
+        );
+        assert_eq!(state.vars.get("route"), Some(&Value::Str("kept".into())));
+        assert!(state.global_vars.contains_key("chapter"));
+        assert!(state.unlocked_cg.contains_key("old.webp"));
+        assert!(state.scene_stack.is_empty());
+        assert_eq!(state.backlog.len(), 1);
+        assert_eq!(state.backlog[0].text, "new line");
+        assert_eq!(
+            state.backlog[0].snapshot.program_fingerprint,
+            state.program_fingerprint
+        );
+        assert!(state.read_dialogues.is_empty());
+        assert_eq!(state.effect_queue, [crabgal_core::EffectEvent::Stop]);
     }
 }

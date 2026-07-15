@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
+use crate::runtime::input::InputActions;
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
 use crate::runtime::viewport::DesignViewport;
 use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePreview};
@@ -150,7 +151,8 @@ pub struct TitleSyncContext<'w, 's> {
 #[derive(SystemParam)]
 pub struct TitleInputContext<'w, 's> {
     buttons: Query<'w, 's, (&'static Interaction, &'static TitleAction), Changed<Interaction>>,
-    keys: Res<'w, ButtonInput<KeyCode>>,
+    keys: ResMut<'w, ButtonInput<KeyCode>>,
+    actions: ResMut<'w, InputActions>,
     state: ResMut<'w, GameState>,
     project_root: Res<'w, ProjectRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
@@ -244,7 +246,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                 },))
                 .with_children(|menu| {
                     spawn_title_button(menu, "START", Some(TitleAction::Start), &font, None);
-                    if context.preview.state.is_some() {
+                    if context.preview.is_compatible(state.program_fingerprint) {
                         spawn_title_button(
                             menu,
                             "CONTINUE",
@@ -386,9 +388,8 @@ fn spawn_continue_preview(
             let (speaker, dialogue) = preview
                 .state
                 .as_ref()
-                .and_then(|state| state.dialogue.as_ref())
-                .map_or(("NO SAVE DATA", ""), |dialogue| {
-                    (dialogue.speaker.as_str(), dialogue.text.as_str())
+                .map_or(("NO SAVE DATA", ""), |state| {
+                    (state.speaker.as_str(), state.dialogue.as_str())
                 });
             panel
                 .spawn((Node {
@@ -428,8 +429,7 @@ pub fn handle_title_input(mut context: TitleInputContext) {
         context.commands.remove_resource::<PendingTitleAction>();
         return;
     }
-    if context.keys.just_pressed(KeyCode::Enter) || context.keys.just_pressed(KeyCode::Space) {
-        start_game(&mut context.state);
+    if start_game_from_keyboard(&mut context.keys, &mut context.actions, &mut context.state) {
         return;
     }
     let action = if let Some(mut pending) = context.pending {
@@ -456,7 +456,15 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                 crate::storage::save::QUICK_SAVE_SLOT,
                 &context.project_root,
             ) {
-                **context.state = loaded;
+                if let Err(error) = loaded.restore_into(&mut context.state) {
+                    log::error!("continue rejected: {error}");
+                    context
+                        .commands
+                        .insert_resource(DialogRequest::confirmation(
+                            "Save data belongs to a different script build",
+                            DialogAction::Noop,
+                        ));
+                }
             } else {
                 context
                     .commands
@@ -542,6 +550,82 @@ fn start_game(state: &mut GameState) {
     state.backlog.clear();
     state.current_scene = crate::scene::entry_scene(state);
     state.cursor = 0;
-    crabgal_core::step::index_labels(state);
     crabgal_core::step::step(state);
+}
+
+fn start_game_from_keyboard(
+    keys: &mut ButtonInput<KeyCode>,
+    actions: &mut InputActions,
+    state: &mut GameState,
+) -> bool {
+    const START_KEYS: [KeyCode; 2] = [KeyCode::Enter, KeyCode::Space];
+    if !keys.any_just_pressed(START_KEYS) {
+        return false;
+    }
+
+    // `InputActions` was collected earlier in this frame. Clear both the raw
+    // edge and its translated action so the key that leaves the title cannot
+    // also advance the first stage presentation. The held state is preserved;
+    // releasing and pressing again still creates a normal intro advance edge.
+    for key in START_KEYS {
+        keys.clear_just_pressed(key);
+    }
+    actions.advance = false;
+    start_game(state);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crabgal_core::{Action, Program, State};
+
+    #[test]
+    fn keyboard_start_consumes_only_the_launch_edge_before_a_held_intro() {
+        let mut state = GameState(State::new());
+        state.install_program(Program::from_scenes([(
+            "start".into(),
+            vec![Action::Intro {
+                pages: vec!["first".into(), "second".into()],
+                hold: true,
+            }],
+        )]));
+        state.ended = true;
+
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Enter);
+        let mut actions = InputActions {
+            advance: true,
+            ..Default::default()
+        };
+
+        assert!(start_game_from_keyboard(
+            &mut keys,
+            &mut actions,
+            &mut state,
+        ));
+        assert_eq!(state.intro.as_ref().unwrap().page, 0);
+        assert!(state.intro.as_ref().unwrap().hold);
+        assert!(!state.ended);
+        assert!(!actions.advance);
+        assert!(!keys.just_pressed(KeyCode::Enter));
+        assert!(keys.pressed(KeyCode::Enter));
+
+        actions.advance = keys.any_just_pressed([KeyCode::Space, KeyCode::Enter]);
+        assert!(
+            !actions.advance,
+            "collecting input again must not replay the title launch edge"
+        );
+
+        keys.release(KeyCode::Enter);
+        keys.clear();
+        keys.press(KeyCode::Enter);
+        actions.advance = keys.just_pressed(KeyCode::Enter);
+
+        assert!(
+            actions.advance,
+            "a later Enter press must advance the intro"
+        );
+        assert_eq!(state.intro.as_ref().unwrap().page, 0);
+    }
 }

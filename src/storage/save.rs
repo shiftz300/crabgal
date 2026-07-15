@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use crabgal_core::State;
-use crabgal_loader::{StoreAdapter, StoreStatus};
+use crabgal_loader::{SavedState, StoreAdapter, StoreStatus};
 
 use crate::runtime::resources::{GameState, ProjectRoot, StoreCodec};
 
@@ -55,7 +55,7 @@ pub fn save_game(
     Ok(())
 }
 
-pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<State> {
+pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<SavedState> {
     let path = slot_path(store, project_root, slot);
     let bytes =
         fs::read(&path).with_context(|| format!("failed to open save {}", path.display()))?;
@@ -144,13 +144,28 @@ pub fn clear_games(store: &dyn StoreAdapter, project_root: &Path) -> Result<()> 
     Ok(())
 }
 
+/// Deletes the complete project persistence directory, including save slots,
+/// previews, settings, profile, read history, gallery and interrupted writes.
+pub(crate) fn clear_all_data(project_root: &Path) -> Result<()> {
+    let directory = project_root.join("saves");
+    match fs::remove_dir_all(&directory) {
+        Ok(()) => {
+            log::info!("cleared all persistent project data");
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to delete save directory {}", directory.display())),
+    }
+}
+
 fn inspect_file(store: &dyn StoreAdapter, path: &Path) -> Result<SlotStatus> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    let mut file = match File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(SlotStatus::Empty),
         Err(error) => return Err(error.into()),
     };
-    Ok(match store.inspect(&bytes) {
+    Ok(match store.inspect(&mut file)? {
         StoreStatus::Ready(metadata) => SlotStatus::Ready(metadata),
         StoreStatus::Corrupt => SlotStatus::Corrupt,
         StoreStatus::Unsupported(version) => SlotStatus::Unsupported(version),
@@ -191,7 +206,10 @@ mod tests {
         let state = sample_state();
         save_game(&CrabgalStore, &state, 3, &root).unwrap();
 
-        assert_eq!(load_game(&CrabgalStore, 3, &root).unwrap(), state);
+        assert_eq!(
+            load_game(&CrabgalStore, 3, &root).unwrap().snapshot(),
+            &state
+        );
         assert!(
             matches!(inspect_slot(&CrabgalStore, 3, &root), SlotStatus::Ready(meta) if meta.scene == "demo")
         );
@@ -199,12 +217,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_old_and_corrupt_files() {
+    fn rejects_legacy_files_and_defers_state_integrity_to_load() {
         let root = temp_root("invalid");
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(
             slot_path(&CrabgalStore, &root, 1),
-            bincode::serialize(&sample_state()).unwrap(),
+            postcard::to_stdvec(&sample_state()).unwrap(),
         )
         .unwrap();
         save_game(&CrabgalStore, &sample_state(), 2, &root).unwrap();
@@ -213,6 +231,10 @@ mod tests {
         fs::write(slot_path(&CrabgalStore, &root, 2), bytes).unwrap();
 
         assert_eq!(inspect_slot(&CrabgalStore, 1, &root), SlotStatus::Corrupt);
+        assert!(matches!(
+            inspect_slot(&CrabgalStore, 2, &root),
+            SlotStatus::Ready(_)
+        ));
         assert!(load_game(&CrabgalStore, 1, &root).is_err());
         assert!(load_game(&CrabgalStore, 2, &root).is_err());
         let _ = fs::remove_dir_all(root);
@@ -266,8 +288,10 @@ mod tests {
         app.update();
 
         assert_eq!(
-            load_game(&CrabgalStore, QUICK_SAVE_SLOT, &root).unwrap(),
-            state
+            load_game(&CrabgalStore, QUICK_SAVE_SLOT, &root)
+                .unwrap()
+                .snapshot(),
+            &state
         );
 
         app.world_mut().resource_mut::<GameState>().ended = true;

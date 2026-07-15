@@ -4,10 +4,14 @@
 //   WebGAL's command DSL (simplicity)
 //   Siglus's command dispatch (structure)
 
+use std::collections::HashMap;
+use std::io::{self, Write};
+
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, VisualFilter,
+    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, TransformPatch, Transition,
+    VisualFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,8 +132,8 @@ pub enum Action {
     SetTransform {
         /// Target sprite id (e.g. "fig-center", "fig-left", or custom id).
         id: String,
-        /// Transform fields to apply (partial — only non-default fields have effect).
-        transform: SpriteTransform,
+        /// Sparse transform fields to apply; absent fields inherit current state.
+        transform: TransformPatch,
         duration: f32,
         easing: Easing,
     },
@@ -203,4 +207,182 @@ pub enum ChoiceTarget {
     Label(String),
     ChangeScene(String),
     CallScene(String),
+}
+
+/// Immutable, adapter-neutral script program shared by every runtime snapshot.
+///
+/// Actions are packed once and labels are indexed during construction. Runtime
+/// state keeps this behind an `Arc`, so cloning a snapshot is O(1) with respect
+/// to script size and persisted saves never duplicate project scripts.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Program {
+    scenes: HashMap<String, Scene>,
+    fingerprint: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Scene {
+    actions: Box<[Action]>,
+    labels: HashMap<String, usize>,
+}
+
+impl Program {
+    pub fn from_scenes(scenes: impl IntoIterator<Item = (String, Vec<Action>)>) -> Self {
+        let scenes = scenes
+            .into_iter()
+            .map(|(name, actions)| (name, Scene::new(actions)))
+            .collect();
+        let fingerprint = program_fingerprint(&scenes);
+        Self {
+            scenes,
+            fingerprint,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scenes.is_empty()
+    }
+
+    pub fn insert_scene(&mut self, name: String, actions: Vec<Action>) {
+        self.scenes.insert(name, Scene::new(actions));
+        self.fingerprint = program_fingerprint(&self.scenes);
+    }
+
+    pub fn scene_count(&self) -> usize {
+        self.scenes.len()
+    }
+
+    pub fn action_count(&self) -> usize {
+        self.scenes.values().map(|scene| scene.actions.len()).sum()
+    }
+
+    /// Stable content identity used to reject saves and rollback checkpoints
+    /// compiled against a different script layout.
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
+    }
+
+    pub fn contains_scene(&self, name: &str) -> bool {
+        self.scenes.contains_key(name)
+    }
+
+    pub fn scene(&self, name: &str) -> Option<&[Action]> {
+        self.scenes.get(name).map(|scene| scene.actions.as_ref())
+    }
+
+    pub fn scene_len(&self, name: &str) -> Option<usize> {
+        self.scenes.get(name).map(|scene| scene.actions.len())
+    }
+
+    pub fn label(&self, scene: &str, label: &str) -> Option<usize> {
+        self.scenes
+            .get(scene)
+            .and_then(|scene| scene.labels.get(label))
+            .copied()
+    }
+
+    pub fn scene_names(&self) -> impl Iterator<Item = &str> {
+        self.scenes.keys().map(String::as_str)
+    }
+}
+
+impl Scene {
+    fn new(actions: Vec<Action>) -> Self {
+        let labels = actions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, action)| match action {
+                Action::Label(name) => Some((name.clone(), index)),
+                _ => None,
+            })
+            .collect();
+        Self {
+            actions: actions.into_boxed_slice(),
+            labels,
+        }
+    }
+}
+
+/// FNV-1a is intentionally small and deterministic. This is a compatibility
+/// identity, not a cryptographic signature; the save payload has its own CRC.
+fn program_fingerprint(scenes: &HashMap<String, Scene>) -> u64 {
+    if scenes.is_empty() {
+        return 0;
+    }
+
+    let mut names = scenes.keys().collect::<Vec<_>>();
+    names.sort_unstable();
+    let mut writer = Fnv64::default();
+    for name in names {
+        let scene = &scenes[name];
+        postcard::to_io(&(name.as_str(), scene.actions.as_ref()), &mut writer)
+            .expect("serializing typed actions into a fingerprint cannot fail");
+    }
+    writer.finish()
+}
+
+struct Fnv64(u64);
+
+impl Default for Fnv64 {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Fnv64 {
+    fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+impl Write for Fnv64 {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod program_tests {
+    use super::*;
+
+    #[test]
+    fn packs_scenes_and_indexes_labels_once() {
+        let program = Program::from_scenes([(
+            "main".into(),
+            vec![Action::Label("start".into()), Action::Comment],
+        )]);
+
+        assert_eq!(program.scene_count(), 1);
+        assert_eq!(program.action_count(), 2);
+        assert_eq!(program.label("main", "start"), Some(0));
+        assert!(program.contains_scene("main"));
+        assert_ne!(program.fingerprint(), 0);
+    }
+
+    #[test]
+    fn fingerprint_is_order_independent_and_changes_with_action_layout() {
+        let first = Program::from_scenes([
+            ("b".into(), vec![Action::Comment]),
+            ("a".into(), vec![Action::Label("start".into())]),
+        ]);
+        let reordered = Program::from_scenes([
+            ("a".into(), vec![Action::Label("start".into())]),
+            ("b".into(), vec![Action::Comment]),
+        ]);
+        let changed = Program::from_scenes([
+            ("a".into(), vec![Action::Comment]),
+            ("b".into(), vec![Action::Label("start".into())]),
+        ]);
+
+        assert_eq!(first.fingerprint(), reordered.fingerprint());
+        assert_ne!(first.fingerprint(), changed.fingerprint());
+    }
 }

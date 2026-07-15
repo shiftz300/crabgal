@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::resources::{GameState, ProjectRoot};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Default)]
 struct GalleryFile {
@@ -16,17 +16,17 @@ struct GalleryFile {
     bgm: HashMap<String, String>,
 }
 
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub(crate) struct GallerySnapshot {
-    cg: HashMap<String, String>,
-    bgm: HashMap<String, String>,
+    pub(super) cg: HashMap<String, String>,
+    pub(super) bgm: HashMap<String, String>,
 }
 
 pub(crate) fn load(state: &mut crabgal_core::State, project_root: &Path) {
     let Ok(bytes) = fs::read(path(project_root)) else {
         return;
     };
-    let Ok(file) = bincode::deserialize::<GalleryFile>(&bytes) else {
+    let Ok(file) = postcard::from_bytes::<GalleryFile>(&bytes) else {
         return;
     };
     if file.version == VERSION {
@@ -38,7 +38,7 @@ pub(crate) fn load(state: &mut crabgal_core::State, project_root: &Path) {
 pub(crate) fn persist(
     state: Res<GameState>,
     project_root: Res<ProjectRoot>,
-    mut previous: Local<GallerySnapshot>,
+    mut previous: ResMut<GallerySnapshot>,
 ) {
     if !state.is_changed()
         || (previous.cg == state.unlocked_cg && previous.bgm == state.unlocked_bgm)
@@ -60,13 +60,20 @@ pub(crate) fn persist(
         log::error!("failed to create gallery directory: {error}");
         return;
     }
-    let result = bincode::serialize(&file)
+    let result = postcard::to_stdvec(&file)
         .map_err(anyhow::Error::from)
         .and_then(|bytes| fs::write(&temporary, bytes).map_err(anyhow::Error::from))
         .and_then(|()| fs::rename(&temporary, &target).map_err(anyhow::Error::from));
     if let Err(error) = result {
         log::error!("failed to persist gallery: {error:#}");
     }
+}
+
+pub(super) fn reset_memory(state: &mut crabgal_core::State, snapshot: &mut GallerySnapshot) {
+    state.unlocked_cg.clear();
+    state.unlocked_bgm.clear();
+    snapshot.cg.clear();
+    snapshot.bgm.clear();
 }
 
 fn path(project_root: &Path) -> std::path::PathBuf {

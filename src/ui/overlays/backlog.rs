@@ -13,6 +13,7 @@ use crate::scene::audio::VocalPlayer;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, UiBlurSource};
 use crate::ui::foundation::{UiFonts, exp_lerp, smoothstep};
+use crate::ui::input_scope::UiInputScope;
 use crate::ui::{BACKLOG_BACKDROP_ALPHA, FULLSCREEN_BLUR_STRENGTH};
 
 const PANEL_ENTER_SECONDS: f32 = 0.2;
@@ -558,15 +559,20 @@ pub fn scroll_backlog(
     mut wheel: MessageReader<MouseWheel>,
     keys: Res<ButtonInput<KeyCode>>,
     loading: Res<crate::runtime::resources::AssetLoadingGate>,
+    scope: Res<UiInputScope>,
     mut ui: ResMut<BacklogUiState>,
     mut scroll: Query<(&mut ScrollPosition, &ComputedNode), With<BacklogScroll>>,
 ) {
-    if loading.blocked {
+    if loading.blocked || !scope.allows_backlog() {
         wheel.read().for_each(drop);
         return;
     }
+    let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let mut delta = 0.0;
     for event in wheel.read() {
+        if control_pressed {
+            continue;
+        }
         if !ui.open {
             if event.y > 0.0 {
                 ui.open = true;

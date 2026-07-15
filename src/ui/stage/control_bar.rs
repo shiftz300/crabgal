@@ -1,6 +1,6 @@
 // WebGAL-style control bar icon definitions and interaction.
 // Both top and bottom bars spawn as children of TextBoxRoot in textbox.rs.
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use crabgal_core::State;
 use std::time::Duration;
 
@@ -42,8 +42,39 @@ pub(crate) enum ButtonAction {
 
 #[derive(Resource, Default)]
 pub(crate) struct QuickSavePreview {
-    pub(crate) state: Option<State>,
+    pub(crate) state: Option<QuickSaveSnapshot>,
     pub(crate) image: Option<Handle<Image>>,
+}
+
+impl QuickSavePreview {
+    pub(crate) fn is_compatible(&self, program_fingerprint: u64) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.program_fingerprint == program_fingerprint)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct QuickSaveSnapshot {
+    program_fingerprint: u64,
+    pub(crate) background: Option<String>,
+    pub(crate) speaker: String,
+    pub(crate) dialogue: String,
+}
+
+impl From<&State> for QuickSaveSnapshot {
+    fn from(state: &State) -> Self {
+        let (speaker, dialogue) = state.dialogue.as_ref().map_or_else(
+            || (String::new(), String::new()),
+            |dialogue| (dialogue.speaker.clone(), dialogue.text.clone()),
+        );
+        Self {
+            program_fingerprint: state.program_fingerprint,
+            background: state.bg.clone(),
+            speaker,
+            dialogue,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -91,6 +122,21 @@ type EmptyPreviewQuery<'w, 's> = Query<
         Without<QuickPreviewImage>,
     ),
 >;
+
+#[derive(SystemParam)]
+pub(crate) struct QuickPreviewContentQueries<'w, 's> {
+    images: Query<'w, 's, (&'static mut ImageNode, &'static mut Node), With<QuickPreviewImage>>,
+    contents:
+        Query<'w, 's, &'static mut Node, (With<QuickPreviewContent>, Without<QuickPreviewImage>)>,
+    speakers: Query<'w, 's, &'static mut Text, With<QuickPreviewSpeaker>>,
+    dialogues: Query<
+        'w,
+        's,
+        &'static mut Text,
+        (With<QuickPreviewDialogue>, Without<QuickPreviewSpeaker>),
+    >,
+    empty: EmptyPreviewQuery<'w, 's>,
+}
 
 type PreviewAnimationQuery<'w, 's> = Query<
     'w,
@@ -332,18 +378,27 @@ pub fn handle_button_click(
 pub fn load_quick_save_preview(
     project_root: Res<ProjectRoot>,
     store: Res<crate::runtime::resources::StoreCodec>,
+    state: Option<Res<crate::runtime::resources::GameState>>,
     mut images: ResMut<Assets<Image>>,
     mut preview: ResMut<QuickSavePreview>,
 ) {
+    let current_fingerprint = state.as_ref().map(|state| state.program_fingerprint);
     preview.state =
-        crate::storage::save::load_game(store.0.as_ref(), QUICK_SAVE_SLOT, &project_root).ok();
-    let path = crate::storage::save::preview_path(&project_root, QUICK_SAVE_SLOT);
-    preview.image = std::fs::read(&path)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| crate::scene::images::decode_preview(&bytes).map_err(anyhow::Error::from))
-        .map(|image| images.add(image))
-        .map_err(|error| log::debug!("quick-save preview unavailable: {error:#}"))
-        .ok();
+        crate::storage::save::load_game(store.0.as_ref(), QUICK_SAVE_SLOT, &project_root)
+            .ok()
+            .filter(|saved| Some(saved.snapshot().program_fingerprint) == current_fingerprint)
+            .map(|saved| QuickSaveSnapshot::from(saved.snapshot()));
+    preview.image = preview.state.as_ref().and_then(|_| {
+        let path = crate::storage::save::preview_path(&project_root, QUICK_SAVE_SLOT);
+        std::fs::read(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| {
+                crate::scene::images::decode_preview(&bytes).map_err(anyhow::Error::from)
+            })
+            .map(|image| images.add(image))
+            .map_err(|error| log::debug!("quick-save preview unavailable: {error:#}"))
+            .ok()
+    });
 }
 
 pub fn show_quick_preview(
@@ -459,56 +514,57 @@ pub fn position_quick_previews(
 
 pub fn sync_quick_preview(
     preview: Res<QuickSavePreview>,
+    game_state: Res<crate::runtime::resources::GameState>,
     asset_server: Res<AssetServer>,
-    mut images: Query<(&mut ImageNode, &mut Node), With<QuickPreviewImage>>,
-    mut contents: Query<&mut Node, (With<QuickPreviewContent>, Without<QuickPreviewImage>)>,
-    mut speakers: Query<&mut Text, With<QuickPreviewSpeaker>>,
-    mut dialogues: Query<&mut Text, (With<QuickPreviewDialogue>, Without<QuickPreviewSpeaker>)>,
-    mut empty: EmptyPreviewQuery,
+    mut last_program_fingerprint: Local<Option<u64>>,
+    mut content: QuickPreviewContentQueries,
 ) {
-    if !preview.is_changed() {
+    let program_fingerprint = game_state.program_fingerprint;
+    if !preview.is_changed() && *last_program_fingerprint == Some(program_fingerprint) {
         return;
     }
+    *last_program_fingerprint = Some(program_fingerprint);
 
-    let Some(state) = &preview.state else {
-        for (_, mut node) in &mut images {
+    let Some(state) = preview
+        .state
+        .as_ref()
+        .filter(|state| state.program_fingerprint == program_fingerprint)
+    else {
+        for (_, mut node) in &mut content.images {
             node.display = Display::None;
         }
-        for mut node in &mut contents {
+        for mut node in &mut content.contents {
             node.display = Display::None;
         }
-        for mut node in &mut empty {
+        for mut node in &mut content.empty {
             node.display = Display::Flex;
         }
         return;
     };
 
-    for (mut image, mut node) in &mut images {
+    for (mut image, mut node) in &mut content.images {
         if let Some(preview_image) = &preview.image {
             image.image = preview_image.clone();
             node.display = Display::Flex;
-        } else if let Some(background) = &state.bg {
+        } else if let Some(background) = &state.background {
             image.image = asset_server.load(format!("background/{background}"));
             node.display = Display::Flex;
         } else {
             node.display = Display::None;
         }
     }
-    for mut node in &mut contents {
+    for mut node in &mut content.contents {
         node.display = Display::Flex;
     }
-    for mut node in &mut empty {
+    for mut node in &mut content.empty {
         node.display = Display::None;
     }
 
-    let (speaker, dialogue) = state.dialogue.as_ref().map_or(("", ""), |dialogue| {
-        (dialogue.speaker.as_str(), dialogue.text.as_str())
-    });
-    for mut text in &mut speakers {
-        **text = speaker.to_owned();
+    for mut text in &mut content.speakers {
+        **text = state.speaker.clone();
     }
-    for mut text in &mut dialogues {
-        **text = dialogue.to_owned();
+    for mut text in &mut content.dialogues {
+        **text = state.dialogue.clone();
     }
 }
 

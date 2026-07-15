@@ -1,3 +1,4 @@
+use bevy::audio::{AudioSink, AudioSinkPlayback};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -6,7 +7,7 @@ use crate::ui::backlog::{BacklogButtonVisual, BacklogClose, BacklogRoot, Backlog
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
 use crate::ui::dialog::{DialogButtonVisual, DialogFade};
-use crate::ui::extra::{ExtraButtonVisual, ExtraMotion};
+use crate::ui::extra::{ExtraBgmPlayer, ExtraBgmSeekBar, ExtraButtonVisual, ExtraMotion};
 use crate::ui::foundation::ButtonPressFeedback;
 use crate::ui::menu::{MenuFade, MenuRouteTransition};
 use crate::ui::save_load::{
@@ -18,7 +19,7 @@ use crate::ui::settings_panel::{
     SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual, SettingsPageTransition,
     SettingsUi, SettingsWatermark,
 };
-use crate::ui::textbox::{InitialTextboxFade, TextboxOverlayFade};
+use crate::ui::textbox::{InitialTextboxFade, TextboxLayoutMotion, TextboxOverlayFade};
 use crate::ui::title::{PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion};
 
 const SETTLED_EPSILON: f32 = 0.001;
@@ -34,6 +35,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     runtime_settings: Res<'w, RuntimeSettings>,
     textbox_fade: Res<'w, TextboxOverlayFade>,
     textbox_initial_fade: Res<'w, InitialTextboxFade>,
+    textbox_layout: Res<'w, TextboxLayoutMotion>,
     hovers: Query<'w, 's, &'static HoverAlpha>,
     previews: Query<'w, 's, &'static QuickPreviewFade>,
     menu_fades: Query<'w, 's, &'static MenuFade>,
@@ -101,6 +103,8 @@ pub(crate) struct UiActivityContext<'w, 's> {
     >,
     extra_motions: Query<'w, 's, &'static ExtraMotion>,
     extra_buttons: Query<'w, 's, (&'static Interaction, &'static ExtraButtonVisual)>,
+    extra_players: Query<'w, 's, Option<&'static AudioSink>, With<ExtraBgmPlayer>>,
+    extra_seek: Query<'w, 's, &'static ExtraBgmSeekBar>,
     save_load_transition: Res<'w, SaveLoadPageTransition>,
     menu_route_transition: Res<'w, MenuRouteTransition>,
     pending_title: Option<Res<'w, PendingTitleAction>>,
@@ -158,9 +162,15 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .extra_buttons
             .iter()
             .any(|(interaction, visual)| visual.is_animating(*interaction))
+        || context
+            .extra_players
+            .iter()
+            .any(|sink| sink.is_none_or(|sink| !sink.is_paused()))
+        || context.extra_seek.iter().any(ExtraBgmSeekBar::is_dragging)
         || context.pending_window.is_pending()
         || context.active_slider.is_active()
         || context.textbox_initial_fade.is_animating()
+        || context.textbox_layout.is_animating()
         || !is_endpoint(context.textbox_fade.alpha);
 }
 
