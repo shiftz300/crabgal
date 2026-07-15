@@ -9,7 +9,7 @@ use bevy::window::{MonitorSelection, WindowMode};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, ProjectRoot};
-use crate::storage::settings::RuntimeSettings;
+use crate::storage::settings::{RuntimeSettings, UiLocale};
 use crate::ui::control_bar::{BlurStrength, ButtonAction, SkipMode, ToggleStates, UiBlurSource};
 use crate::ui::foundation::{
     UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text_weight,
@@ -19,6 +19,7 @@ use crate::ui::menu::{
     PersistentMenu, active_route, root_node, spawn_header, surface_transform,
 };
 use crate::ui::save_load::SaveLoadUi;
+use crate::ui::support::i18n::{UiText, tr};
 
 const OPTION_TRANSITION_RATE: f32 = 18.0;
 const OPTION_TEXT_IDLE: f32 = 0.376;
@@ -28,6 +29,10 @@ const PAGE_TEXT_IDLE: f32 = 0.175;
 const PAGE_TEXT_HOVER: f32 = 0.5;
 const PAGE_TEXT_ACTIVE: f32 = 0.8;
 const SETTINGS_COLUMNS: u16 = 3;
+const SETTINGS_COLUMN_GAP: f32 = 30.0;
+const SETTINGS_ROW_GAP: f32 = 24.0;
+const SETTING_LABEL_SIZE: f32 = 30.0;
+const SETTING_OPTION_SIZE: f32 = 24.0;
 
 #[derive(Clone, Copy)]
 struct SettingsGridCell {
@@ -314,6 +319,19 @@ pub(crate) enum SettingKind {
 }
 
 impl SettingKind {
+    fn label(self) -> UiText {
+        match self {
+            Self::MasterVolume => UiText::MasterVolume,
+            Self::VocalVolume => UiText::VoiceVolume,
+            Self::BgmVolume => UiText::BgmVolume,
+            Self::SeVolume => UiText::SoundEffectVolume,
+            Self::UiSeVolume => UiText::UiSoundVolume,
+            Self::TextSpeed => UiText::TextSpeed,
+            Self::AutoDelay => UiText::AutoPlaySpeed,
+            Self::TextboxOpacity => UiText::TextboxOpacity,
+        }
+    }
+
     fn ratio(self, settings: &RuntimeSettings) -> f32 {
         match self {
             Self::MasterVolume => settings.master_volume,
@@ -351,45 +369,36 @@ impl SettingKind {
 
 #[derive(Clone, Copy)]
 struct SliderSpec {
-    label: &'static str,
     kind: SettingKind,
 }
 
 const SYSTEM_SLIDERS: &[SliderSpec] = &[SliderSpec {
-    label: "AUTO PLAY SPEED",
     kind: SettingKind::AutoDelay,
 }];
 
 const DISPLAY_SLIDERS: &[SliderSpec] = &[
     SliderSpec {
-        label: "TEXT SPEED",
         kind: SettingKind::TextSpeed,
     },
     SliderSpec {
-        label: "TEXTBOX OPACITY",
         kind: SettingKind::TextboxOpacity,
     },
 ];
 
 const AUDIO_SLIDERS: &[SliderSpec] = &[
     SliderSpec {
-        label: "MASTER VOLUME",
         kind: SettingKind::MasterVolume,
     },
     SliderSpec {
-        label: "VOICE VOLUME",
         kind: SettingKind::VocalVolume,
     },
     SliderSpec {
-        label: "BGM VOLUME",
         kind: SettingKind::BgmVolume,
     },
     SliderSpec {
-        label: "SOUND EFFECT VOLUME",
         kind: SettingKind::SeVolume,
     },
     SliderSpec {
-        label: "UI SOUND VOLUME",
         kind: SettingKind::UiSeVolume,
     },
 ];
@@ -416,13 +425,24 @@ pub(crate) struct SettingChoice(pub(crate) SettingAction);
 pub(crate) struct LanguageDropdownButton;
 
 #[derive(Component)]
-pub(crate) struct LanguageDropdownOption;
+pub(crate) struct LanguageDropdownOption(pub(crate) UiLocale);
 
 #[derive(Component)]
 pub(crate) struct LanguageDropdownOptions;
 
 #[derive(Component)]
 pub(crate) struct LanguageDropdownIcon;
+
+#[derive(SystemParam)]
+pub(crate) struct LanguageDropdownContext<'w, 's> {
+    menus: Query<'w, 's, (&'static mut LanguageDropdownAnimation, &'static mut Node)>,
+    icons: Query<'w, 's, &'static mut Text, With<LanguageDropdownIcon>>,
+    roots: Query<'w, 's, Entity, With<SettingsRoot>>,
+    commands: Commands<'w, 's>,
+    settings: ResMut<'w, RuntimeSettings>,
+    project_root: Res<'w, ProjectRoot>,
+    ui: ResMut<'w, SettingsUi>,
+}
 
 #[derive(Component)]
 pub(crate) struct AboutRepositoryLink;
@@ -791,22 +811,47 @@ fn spawn_options_content(
             },))
             .with_children(|body| {
                 body.spawn((Node {
-                    width: Val::Percent(18.0),
+                    width: Val::Percent(12.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(6.0),
                     ..default()
                 },))
                     .with_children(|pages| {
-                        spawn_page_button(pages, "SYSTEM", SettingsPage::System, ui, font);
-                        spawn_page_button(pages, "DISPLAY", SettingsPage::Display, ui, font);
-                        spawn_page_button(pages, "AUDIO", SettingsPage::Audio, ui, font);
-                        spawn_page_button(pages, "ABOUT", SettingsPage::About, ui, font);
+                        let locale = settings.locale;
+                        spawn_page_button(
+                            pages,
+                            tr(locale, UiText::System),
+                            SettingsPage::System,
+                            ui,
+                            font,
+                        );
+                        spawn_page_button(
+                            pages,
+                            tr(locale, UiText::Display),
+                            SettingsPage::Display,
+                            ui,
+                            font,
+                        );
+                        spawn_page_button(
+                            pages,
+                            tr(locale, UiText::Audio),
+                            SettingsPage::Audio,
+                            ui,
+                            font,
+                        );
+                        spawn_page_button(
+                            pages,
+                            tr(locale, UiText::About),
+                            SettingsPage::About,
+                            ui,
+                            font,
+                        );
                     });
                 body.spawn((Node {
                     position_type: PositionType::Relative,
                     flex_grow: 1.0,
                     height: Val::Percent(100.0),
-                    padding: UiRect::left(Val::Px(36.0)),
+                    padding: UiRect::left(Val::Px(24.0)),
                     overflow: Overflow::visible(),
                     ..default()
                 },))
@@ -1024,17 +1069,17 @@ fn spawn_settings_page(
             UiTransform::default(),
             Node {
                 position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
+                width: Val::Percent(78.0),
                 height: Val::Percent(100.0),
                 padding: UiRect::axes(Val::Px(21.0), Val::Px(9.0)),
                 grid_template_columns: RepeatedGridTrack::flex(SETTINGS_COLUMNS, 1.0),
+                column_gap: Val::Px(SETTINGS_COLUMN_GAP),
+                row_gap: Val::Px(SETTINGS_ROW_GAP),
                 align_items: AlignItems::FlexStart,
                 align_content: AlignContent::FlexStart,
-                overflow: if matches!(page, SettingsPage::System | SettingsPage::About) {
-                    Overflow::visible()
-                } else {
-                    Overflow::scroll_y()
-                },
+                // All pages use the same available width. Reserving a scroll
+                // gutter only on DISPLAY/AUDIO shifted their column tracks.
+                overflow: Overflow::visible(),
                 display: if active {
                     settings_page_display(page)
                 } else {
@@ -1049,33 +1094,56 @@ fn spawn_settings_page(
                 spawn_row(
                     content,
                     font,
-                    auto_play.label,
+                    tr(settings.locale, auto_play.kind.label()),
                     auto_play.kind,
                     auto_play.kind.ratio(settings),
                     SettingsGridCell::at(1, 1),
                 );
                 spawn_skip_row(content, settings, font, SettingsGridCell::at(2, 1));
-                spawn_language_row(content, font, icon_font, SettingsGridCell::at(3, 1));
+                spawn_language_row(
+                    content,
+                    settings,
+                    font,
+                    icon_font,
+                    SettingsGridCell::at(3, 1),
+                );
                 spawn_choice_row(
                     content,
-                    "CLEAR OR RESTORE DATA",
+                    tr(settings.locale, UiText::ClearOrRestore),
                     &[
-                        ("CLEAR SAVES", SettingAction::ClearSaves),
-                        ("RESET SETTINGS", SettingAction::ResetSettings),
-                        ("CLEAR ALL", SettingAction::ClearAll),
+                        (
+                            tr(settings.locale, UiText::ClearSaves),
+                            SettingAction::ClearSaves,
+                        ),
+                        (
+                            tr(settings.locale, UiText::ResetSettings),
+                            SettingAction::ResetSettings,
+                        ),
+                        (
+                            tr(settings.locale, UiText::ClearAll),
+                            SettingAction::ClearAll,
+                        ),
                     ],
                     usize::MAX,
+                    true,
                     font,
                     SettingsGridCell::spanning(1, 2, 2),
                 );
                 spawn_choice_row(
                     content,
-                    "IMPORT OR EXPORT SAVES AND OPTIONS",
+                    tr(settings.locale, UiText::ImportExport),
                     &[
-                        ("EXPORT", SettingAction::ExportData),
-                        ("IMPORT", SettingAction::ImportData),
+                        (
+                            tr(settings.locale, UiText::Export),
+                            SettingAction::ExportData,
+                        ),
+                        (
+                            tr(settings.locale, UiText::Import),
+                            SettingAction::ImportData,
+                        ),
                     ],
                     usize::MAX,
+                    false,
                     font,
                     SettingsGridCell::at(3, 2),
                 );
@@ -1087,7 +1155,7 @@ fn spawn_settings_page(
                 spawn_text_preview(content, settings, font, SettingsGridCell::spanning(1, 3, 3));
             }
             SettingsPage::Audio => spawn_sliders(content, AUDIO_SLIDERS, settings, font, 0),
-            SettingsPage::About => spawn_about_page(content, config, font),
+            SettingsPage::About => spawn_about_page(content, config, settings.locale, font),
         });
 }
 
@@ -1110,7 +1178,7 @@ fn spawn_sliders(
         spawn_row(
             content,
             font,
-            spec.label,
+            tr(settings.locale, spec.kind.label()),
             spec.kind,
             spec.kind.ratio(settings),
             SettingsGridCell::from_index(start_index + offset),
@@ -1121,10 +1189,11 @@ fn spawn_sliders(
 fn spawn_about_page(
     content: &mut ChildSpawnerCommands,
     config: &GameConfigResource,
+    locale: UiLocale,
     font: &Handle<Font>,
 ) {
     let project_description = if config.project.description.trim().is_empty() {
-        "No project description has been provided."
+        tr(locale, UiText::NoProjectDescription)
     } else {
         config.project.description.trim()
     };
@@ -1153,15 +1222,21 @@ fn spawn_about_page(
                 ..default()
             },))
                 .with_children(|engine| {
-                    engine.spawn(about_title("ABOUT CRABGAL", font, 48.0));
+                    engine.spawn(about_title(tr(locale, UiText::AboutCrabgal), font, 48.0));
                     engine.spawn(about_copy(
-                        "A refreshingly simple visual-novel engine.",
+                        tr(locale, UiText::EngineDescription),
                         font,
                         22.5,
                         0.58,
                     ));
-                    spawn_about_section(engine, "VERSION & SYSTEM", &runtime, font, Val::Px(42.0));
-                    spawn_repository_link(engine, font);
+                    spawn_about_section(
+                        engine,
+                        tr(locale, UiText::VersionSystem),
+                        &runtime,
+                        font,
+                        Val::Px(42.0),
+                    );
+                    spawn_repository_link(engine, locale, font);
                 });
 
             page.spawn((Node {
@@ -1171,10 +1246,16 @@ fn spawn_about_page(
                 ..default()
             },))
                 .with_children(|project| {
-                    project.spawn(about_title("CURRENT PROJECT", font, 39.0));
+                    project.spawn(about_title(tr(locale, UiText::CurrentProject), font, 39.0));
                     project.spawn(about_title(config.title.clone(), font, 31.5));
                     project.spawn(about_copy(project_description, font, 22.5, 0.62));
-                    spawn_about_section(project, "LOADER", &loader_tree, font, Val::Px(36.0));
+                    spawn_about_section(
+                        project,
+                        tr(locale, UiText::Loader),
+                        &loader_tree,
+                        font,
+                        Val::Px(36.0),
+                    );
                 });
         });
 }
@@ -1201,7 +1282,7 @@ fn format_loader_source(adapter: &str, path: &str) -> String {
     format!("[{adapter}]/{path}")
 }
 
-fn spawn_repository_link(parent: &mut ChildSpawnerCommands, font: &Handle<Font>) {
+fn spawn_repository_link(parent: &mut ChildSpawnerCommands, locale: UiLocale, font: &Handle<Font>) {
     parent
         .spawn((Node {
             width: Val::Percent(100.0),
@@ -1211,7 +1292,7 @@ fn spawn_repository_link(parent: &mut ChildSpawnerCommands, font: &Handle<Font>)
             ..default()
         },))
         .with_children(|section| {
-            section.spawn(about_title("REPOSITORY", font, 25.5));
+            section.spawn(about_title(tr(locale, UiText::Repository), font, 25.5));
             section
                 .spawn((
                     Button,
@@ -1348,12 +1429,19 @@ fn spawn_skip_row(
 ) {
     spawn_choice_row(
         content,
-        "SKIP MODE",
+        tr(settings.locale, UiText::SkipMode),
         &[
-            ("READ", SettingAction::SetSkip(false)),
-            ("ALL", SettingAction::SetSkip(true)),
+            (
+                tr(settings.locale, UiText::Read),
+                SettingAction::SetSkip(false),
+            ),
+            (
+                tr(settings.locale, UiText::All),
+                SettingAction::SetSkip(true),
+            ),
         ],
         usize::from(settings.skip_all),
+        false,
         font,
         cell,
     );
@@ -1361,6 +1449,7 @@ fn spawn_skip_row(
 
 fn spawn_language_row(
     content: &mut ChildSpawnerCommands,
+    settings: &RuntimeSettings,
     font: &Handle<Font>,
     icon_font: &Handle<Font>,
     cell: SettingsGridCell,
@@ -1381,11 +1470,16 @@ fn spawn_language_row(
             ZIndex(30),
         ))
         .with_children(|row| {
-            row.spawn(setting_text("LANGUAGE", font, 24.0, true));
+            row.spawn(setting_text(
+                tr(settings.locale, UiText::Language),
+                font,
+                SETTING_LABEL_SIZE,
+                true,
+            ));
             row.spawn((
                 Node {
                     position_type: PositionType::Relative,
-                    width: Val::Px(150.0),
+                    width: Val::Px(180.0),
                     height: Val::Px(43.5),
                     margin: UiRect::top(Val::Px(7.5)),
                     ..default()
@@ -1408,7 +1502,12 @@ fn spawn_language_row(
                     },
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                     children![
-                        setting_text("简体中文", font, 19.5, false),
+                        setting_text(
+                            settings.locale.native_name(),
+                            font,
+                            SETTING_OPTION_SIZE,
+                            false,
+                        ),
                         (
                             LanguageDropdownIcon,
                             text_weight("\u{f282}", icon_font, 18.0, 0.78, FontWeight::NORMAL,),
@@ -1444,49 +1543,75 @@ fn spawn_language_row(
                         ),
                         GlobalZIndex(181),
                     ))
-                    .with_child((
-                        Button,
-                        UiSoundStyle::Switch,
-                        LanguageDropdownOption,
-                        Node {
-                            width: Val::Percent(100.0),
-                            height: Val::Px(43.5),
-                            padding: UiRect::horizontal(Val::Px(15.0)),
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                        children![setting_text("简体中文", font, 19.5, false)],
-                    ));
+                    .with_children(|options| {
+                        for locale in UiLocale::ALL {
+                            options.spawn((
+                                Button,
+                                UiSoundStyle::Switch,
+                                LanguageDropdownOption(locale),
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    height: Val::Px(43.5),
+                                    padding: UiRect::horizontal(Val::Px(15.0)),
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                                BackgroundColor(if locale == settings.locale {
+                                    Color::srgba(1.0, 1.0, 1.0, 0.1)
+                                } else {
+                                    Color::NONE
+                                }),
+                                children![setting_text(
+                                    locale.native_name(),
+                                    font,
+                                    SETTING_OPTION_SIZE,
+                                    false,
+                                )],
+                            ));
+                        }
+                    });
             });
         });
 }
 
 pub fn handle_language_dropdown(
     toggles: Query<&Interaction, (With<LanguageDropdownButton>, Changed<Interaction>)>,
-    options: Query<&Interaction, (With<LanguageDropdownOption>, Changed<Interaction>)>,
-    mut menus: Query<(&mut LanguageDropdownAnimation, &mut Node)>,
-    mut icons: Query<&mut Text, With<LanguageDropdownIcon>>,
+    options: Query<(&Interaction, &LanguageDropdownOption), Changed<Interaction>>,
+    mut context: LanguageDropdownContext,
 ) {
     let toggle = toggles
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed);
-    let selected = options
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed);
-    if !toggle && !selected {
+    let selected = options.iter().find_map(|(interaction, option)| {
+        (*interaction == Interaction::Pressed).then_some(option.0)
+    });
+    if !toggle && selected.is_none() {
         return;
     }
-    for (mut animation, mut node) in &mut menus {
-        animation.target = if selected || animation.target > 0.5 {
+    if let Some(locale) = selected
+        && locale != context.settings.locale
+    {
+        context.settings.locale = locale;
+        if let Err(error) =
+            crate::storage::settings::persist(&context.settings, &context.project_root)
+        {
+            log::error!("failed to persist UI language: {error:#}");
+        }
+        for entity in &context.roots {
+            context.commands.entity(entity).despawn();
+        }
+        context.ui.set_changed();
+    }
+    for (mut animation, mut node) in &mut context.menus {
+        animation.target = if selected.is_some() || animation.target > 0.5 {
             0.0
         } else {
             node.display = Display::Flex;
             1.0
         };
     }
-    for mut icon in &mut icons {
-        icon.0 = if selected || icon.0 == "\u{f286}" {
+    for mut icon in &mut context.icons {
+        icon.0 = if selected.is_some() || icon.0 == "\u{f286}" {
             "\u{f282}".into()
         } else {
             "\u{f286}".into()
@@ -1511,7 +1636,7 @@ pub fn animate_language_dropdown(
         if (animation.target - animation.progress).abs() < 0.001 {
             animation.progress = animation.target;
         }
-        node.height = Val::Px(43.5 * smoothstep(animation.progress));
+        node.height = Val::Px(43.5 * UiLocale::ALL.len() as f32 * smoothstep(animation.progress));
     }
 }
 
@@ -1523,12 +1648,19 @@ fn spawn_fullscreen_row(
 ) {
     spawn_choice_row(
         content,
-        "FULLSCREEN",
+        tr(settings.locale, UiText::Fullscreen),
         &[
-            ("ON", SettingAction::SetFullscreen(true)),
-            ("OFF", SettingAction::SetFullscreen(false)),
+            (
+                tr(settings.locale, UiText::On),
+                SettingAction::SetFullscreen(true),
+            ),
+            (
+                tr(settings.locale, UiText::Off),
+                SettingAction::SetFullscreen(false),
+            ),
         ],
         if settings.fullscreen { 0 } else { 1 },
+        false,
         font,
         cell,
     );
@@ -1542,13 +1674,23 @@ fn spawn_text_size_row(
 ) {
     spawn_choice_row(
         content,
-        "TEXT SIZE",
+        tr(settings.locale, UiText::TextSize),
         &[
-            ("SMALL", SettingAction::SetTextSize(0)),
-            ("MEDIUM", SettingAction::SetTextSize(1)),
-            ("LARGE", SettingAction::SetTextSize(2)),
+            (
+                tr(settings.locale, UiText::Small),
+                SettingAction::SetTextSize(0),
+            ),
+            (
+                tr(settings.locale, UiText::Medium),
+                SettingAction::SetTextSize(1),
+            ),
+            (
+                tr(settings.locale, UiText::Large),
+                SettingAction::SetTextSize(2),
+            ),
         ],
         usize::from(settings.text_size),
+        false,
         font,
         cell,
     );
@@ -1559,6 +1701,7 @@ fn spawn_choice_row(
     label: &str,
     choices: &[(&str, SettingAction)],
     selected: usize,
+    vertical: bool,
     font: &Handle<Font>,
     cell: SettingsGridCell,
 ) {
@@ -1575,10 +1718,17 @@ fn spawn_choice_row(
             ..default()
         },))
         .with_children(|row| {
-            row.spawn(setting_text(label, font, 24.0, true));
+            row.spawn(setting_text(label, font, SETTING_LABEL_SIZE, true));
             row.spawn((Node {
                 margin: UiRect::top(Val::Px(7.5)),
-                column_gap: Val::Px(6.0),
+                flex_direction: if vertical {
+                    FlexDirection::Column
+                } else {
+                    FlexDirection::Row
+                },
+                column_gap: Val::Px(if vertical { 0.0 } else { 9.0 }),
+                row_gap: Val::Px(if vertical { 9.0 } else { 0.0 }),
+                align_items: AlignItems::FlexStart,
                 ..default()
             },))
                 .with_children(|buttons| {
@@ -1602,17 +1752,22 @@ fn spawn_text_preview(
     };
     content
         .spawn((Node {
-            width: Val::Percent(94.0),
+            width: Val::Percent(100.0),
             grid_column: cell.column(),
             grid_row: cell.row(),
             min_height: Val::Px(247.5),
-            margin: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            margin: UiRect::vertical(Val::Px(4.5)),
             padding: UiRect::all(Val::Px(4.5)),
             flex_direction: FlexDirection::Column,
             ..default()
         },))
         .with_children(|preview| {
-            preview.spawn(setting_text("TEXT PREVIEW", font, 24.0, true));
+            preview.spawn(setting_text(
+                tr(settings.locale, UiText::TextPreview),
+                font,
+                SETTING_LABEL_SIZE,
+                true,
+            ));
             preview
                 .spawn((
                     Node {
@@ -1650,15 +1805,15 @@ fn spawn_text_preview(
                         BackgroundColor(Color::srgba(0.0, 0.0, 0.02, 0.7)),
                     ))
                     .with_child(setting_text(
-                        "TEXT PREVIEW",
+                        tr(settings.locale, UiText::TextPreview),
                         font,
-                        25.5,
+                        SETTING_LABEL_SIZE,
                         true,
                     ));
                     box_.spawn((
                         SettingPreviewText,
                         setting_text(
-                            "Preview the dialogue size, speed and textbox opacity here.",
+                            tr(settings.locale, UiText::PreviewDialogue),
                             font,
                             size,
                             false,
@@ -1688,14 +1843,15 @@ fn spawn_row(
         ..default()
     },))
         .with_children(|row| {
-            row.spawn(setting_text(label, font, 24.0, true));
+            row.spawn(setting_text(label, font, SETTING_LABEL_SIZE, true));
             row.spawn((
                 Button,
                 UiSoundStyle::HoverOnly,
                 SettingSlider(kind),
                 Node {
                     position_type: PositionType::Relative,
-                    width: Val::Px(375.0),
+                    width: Val::Percent(100.0),
+                    max_width: Val::Px(375.0),
                     height: Val::Px(37.5),
                     margin: UiRect::top(Val::Px(7.5)),
                     ..default()
@@ -1783,7 +1939,7 @@ fn spawn_choice(
             },
         },
         Node {
-            min_width: Val::Px(82.5),
+            min_width: Val::Px(96.0),
             height: Val::Px(43.5),
             padding: UiRect::horizontal(Val::Px(15.0)),
             justify_content: JustifyContent::Center,
@@ -1808,7 +1964,7 @@ fn spawn_choice(
             text_weight(
                 text,
                 font,
-                19.5,
+                SETTING_OPTION_SIZE,
                 if selected {
                     OPTION_TEXT_ACTIVE
                 } else {
@@ -1905,21 +2061,21 @@ pub fn handle_setting_action(context: SettingActionContext) {
         SettingAction::SetTextSize(value) => settings.text_size = value.min(2),
         SettingAction::ClearSaves => {
             commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
-                "Clear all save slots?",
+                tr(settings.locale, UiText::ConfirmClearSaves),
                 crate::ui::dialog::DialogAction::ClearSaves,
             ));
             return;
         }
         SettingAction::ResetSettings => {
             commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
-                "Restore default settings?",
+                tr(settings.locale, UiText::ConfirmResetSettings),
                 crate::ui::dialog::DialogAction::ResetSettings,
             ));
             return;
         }
         SettingAction::ClearAll => {
             commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
-                "Clear saves and restore all settings?",
+                tr(settings.locale, UiText::ConfirmClearAll),
                 crate::ui::dialog::DialogAction::ClearAll,
             ));
             return;

@@ -14,7 +14,7 @@
 | 命令 | 结果 | 覆盖 |
 |---|---|---|
 | `cargo fmt --all -- --check` | **通过** | 全 workspace Rust 源码 |
-| `cargo test --workspace --all-targets --no-fail-fast --locked` | **通过：146 passed，0 failed** | 根包 53、core 47、loader 46；lib、bin 与全部 workspace target |
+| `cargo test --workspace --all-targets --no-fail-fast --locked` | **通过：150 passed，0 failed** | 根包 57、core 47、loader 46；lib、bin 与全部 workspace target |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | **通过** | 全 workspace、全部 target |
 | `cargo check --workspace --all-targets --no-default-features --locked` | **通过** | 精简 feature 构建 |
 | `cargo build --release --workspace` | **通过（较早一轮）** | macOS aarch64 release workspace |

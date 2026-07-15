@@ -26,30 +26,32 @@ pub fn run() {
     run_with_loader(LoaderRegistry::default());
 }
 
-pub fn run_with_loader(loader: LoaderRegistry) {
-    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let project_path = project_root_from_args(args.into_iter());
-    let (project_root, config, content) = match open_project(&project_path, &loader) {
-        Ok(project) => project,
+pub fn run_cli() -> std::process::ExitCode {
+    match try_run_with_loader(LoaderRegistry::default()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             super::logging::startup_error("failed to open project", &error);
-            return;
+            std::process::ExitCode::FAILURE
         }
-    };
-    let languages = match loader.languages(&config.adapter.script) {
-        Ok(languages) => languages,
-        Err(error) => {
-            super::logging::startup_error("failed to select script adapter", &error);
-            return;
-        }
-    };
-    let store = match loader.store(&config.adapter.store) {
-        Ok(store) => store,
-        Err(error) => {
-            super::logging::startup_error("failed to select store adapter", &error);
-            return;
-        }
-    };
+    }
+}
+
+pub fn run_with_loader(loader: LoaderRegistry) {
+    if let Err(error) = try_run_with_loader(loader) {
+        super::logging::startup_error("failed to open project", &error);
+    }
+}
+
+fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let project_path = project_root_from_args(args.into_iter());
+    let (project_root, config, content) = open_project(&project_path, &loader)?;
+    let languages = loader
+        .languages(&config.adapter.script)
+        .context("failed to select script adapter")?;
+    let store = loader
+        .store(&config.adapter.store)
+        .context("failed to select store adapter")?;
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
 
     let mut app = App::new();
@@ -88,6 +90,7 @@ pub fn run_with_loader(loader: LoaderRegistry) {
     .add_systems(PreStartup, bootstrap_project);
     super::logging::install_runtime_diagnostics(&mut app);
     app.run();
+    Ok(())
 }
 
 fn open_project(
@@ -109,11 +112,28 @@ fn open_project(
         return Ok((writable_root, config, content));
     }
 
-    let script_dir = project_path.join("scripts");
-    create_project_directories(project_path, &script_dir);
-    let config = GameConfig::load(&project_path.join("config.yaml"));
+    ensure_project_directory(project_path)?;
+    let config_path = project_path.join("config.yaml");
+    let yaml = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let config = GameConfig::from_yaml(&yaml)
+        .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(project_path, &config.adapter.asset, loader)?;
     Ok((content.root.clone(), config, content))
+}
+
+fn ensure_project_directory(project_path: &Path) -> Result<()> {
+    if !project_path.is_dir() {
+        anyhow::bail!(
+            "project directory does not exist: {}",
+            project_path.display()
+        );
+    }
+    let config_path = project_path.join("config.yaml");
+    if !config_path.is_file() {
+        anyhow::bail!("project config does not exist: {}", config_path.display());
+    }
+    Ok(())
 }
 
 fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
@@ -246,14 +266,6 @@ fn spawn_cameras(commands: &mut Commands) {
     ));
 }
 
-fn create_project_directories(project_root: &Path, script_dir: &Path) {
-    for path in [script_dir.to_path_buf(), project_root.join("assets/fonts")] {
-        if let Err(error) = std::fs::create_dir_all(&path) {
-            log::error!("failed to create {}: {error}", path.display());
-        }
-    }
-}
-
 fn ensure_playable_scene(state: &mut State) {
     if state.program.is_empty() {
         state.insert_scene(
@@ -274,4 +286,45 @@ fn ensure_playable_scene(state: &mut State) {
     }
 
     state.current_scene = crate::scene::entry_scene(state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("crabgal-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn missing_project_is_rejected_without_creating_it() {
+        let path = unique_temp_path("missing-project");
+        assert!(!path.exists());
+
+        let error = open_project(&path, &LoaderRegistry::default()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("project directory does not exist")
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn project_without_config_is_rejected_without_scaffolding() {
+        let path = unique_temp_path("missing-config");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let error = open_project(&path, &LoaderRegistry::default()).unwrap_err();
+
+        assert!(error.to_string().contains("project config does not exist"));
+        assert!(!path.join("scripts").exists());
+        assert!(!path.join("assets").exists());
+        std::fs::remove_dir(&path).unwrap();
+    }
 }

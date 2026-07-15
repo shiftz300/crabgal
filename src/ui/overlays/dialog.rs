@@ -2,11 +2,13 @@
 use crate::render::blur::DialogCamera;
 use crate::render::blur::UiBlurCamera;
 use crate::storage::save::QUICK_SAVE_SLOT;
+use crate::storage::settings::RuntimeSettings;
 use crate::ui::backlog::BacklogRoot;
 use crate::ui::control_bar::QuickSavePreview;
 use crate::ui::foundation::{UiFonts, exp_lerp};
 use crate::ui::save_load::SaveLoadRoot;
 use crate::ui::settings_panel::SettingsRoot;
+use crate::ui::support::i18n::{UiText, tr};
 use bevy::camera::{RenderTarget, visibility::RenderLayers};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -18,8 +20,6 @@ const FADE_DURATION: f32 = 0.2;
 const OVERLAY_ALPHA: f32 = 0.16;
 const PANEL_ALPHA: f32 = 0.78;
 const BUTTON_HOVER_ALPHA: f32 = 0.0625;
-const CONFIRM_LABEL: &str = "确定";
-const CANCEL_LABEL: &str = "取消";
 
 /// Which action to perform when the user confirms.
 #[derive(Clone, Copy, Debug)]
@@ -41,8 +41,6 @@ pub(crate) enum DialogAction {
 #[derive(Resource, Clone)]
 pub(crate) struct DialogRequest {
     pub title: String,
-    pub left_text: String,
-    pub right_text: String,
     pub action: DialogAction,
 }
 
@@ -50,8 +48,6 @@ impl DialogRequest {
     pub fn confirmation(title: impl Into<String>, action: DialogAction) -> Self {
         Self {
             title: title.into(),
-            left_text: CONFIRM_LABEL.into(),
-            right_text: CANCEL_LABEL.into(),
             action,
         }
     }
@@ -151,6 +147,7 @@ pub fn spawn_dialog(
     dialog_q: Query<Entity, With<DialogRoot>>,
     request: Option<Res<DialogRequest>>,
     fonts: Res<UiFonts>,
+    settings: Res<RuntimeSettings>,
     dialog_camera_q: Query<Entity, With<DialogCamera>>,
 ) {
     // Remove existing dialog when request is gone
@@ -221,9 +218,7 @@ pub fn spawn_dialog(
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
-                DialogBackground {
-                    alpha: PANEL_ALPHA,
-                },
+                DialogBackground { alpha: PANEL_ALPHA },
                 children![
                     // Title
                     dialog_text(req.title.clone(), font.clone(), 48.0, 0.9),
@@ -237,12 +232,12 @@ pub fn spawn_dialog(
                         children![
                             spawn_dialog_button(
                                 DialogButton::Confirm,
-                                req.left_text.clone(),
+                                tr(settings.locale, UiText::Confirm),
                                 font.clone(),
                             ),
                             spawn_dialog_button(
                                 DialogButton::Cancel,
-                                req.right_text.clone(),
+                                tr(settings.locale, UiText::Cancel),
                                 font,
                             ),
                         ],
@@ -277,7 +272,11 @@ pub fn sync_modal_backdrop_layer(
     }
 }
 
-fn spawn_dialog_button(action: DialogButton, text: String, font: Handle<Font>) -> impl Bundle {
+fn spawn_dialog_button(
+    action: DialogButton,
+    text: impl Into<String>,
+    font: Handle<Font>,
+) -> impl Bundle {
     (
         Button,
         action,
@@ -406,7 +405,7 @@ pub fn handle_dialog_click(
                         if let Err(error) = loaded.restore_into(&mut context.state) {
                             log::error!("quick load rejected: {error}");
                             commands.insert_resource(DialogRequest::confirmation(
-                                "存档属于不同的脚本版本",
+                                tr(context.settings.locale, UiText::ForeignSave),
                                 DialogAction::Noop,
                             ));
                         }
@@ -447,7 +446,7 @@ pub fn handle_dialog_click(
                         Err(error) => {
                             log::error!("load slot {slot} rejected: {error}");
                             commands.insert_resource(DialogRequest::confirmation(
-                                "存档属于不同的脚本版本",
+                                tr(context.settings.locale, UiText::ForeignSave),
                                 DialogAction::Noop,
                             ));
                         }

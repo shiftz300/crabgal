@@ -11,8 +11,9 @@ use bevy::ui::FocusPolicy;
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::storage::settings::RuntimeSettings;
-use crate::ui::control_bar::{BlurStrength, UiBlurSource};
-use crate::ui::foundation::{UiFonts, exp_lerp, smoothstep, text, text_weight};
+use crate::ui::control_bar::{BlurStrength, HoverAlpha, UiBlurSource};
+use crate::ui::foundation::{UiFonts, UiSoundStyle, exp_lerp, smoothstep, text, text_weight};
+use crate::ui::support::i18n::{LocalizedText, UiText};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 const CG_PER_PAGE: usize = 8;
@@ -218,7 +219,7 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
                 padding: UiRect::all(Val::Px(24.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.36)),
+            BackgroundColor(Color::NONE),
             FocusPolicy::Block,
             GlobalZIndex(172),
             UiTargetCamera(dialog_camera),
@@ -255,27 +256,12 @@ fn spawn_header(root: &mut ChildSpawnerCommands, fonts: &UiFonts) {
     root.spawn((Node {
         width: Val::Percent(100.0),
         height: Val::Percent(8.0),
-        padding: UiRect::left(Val::Px(24.0)),
+        padding: UiRect::horizontal(Val::Px(24.0)),
+        justify_content: JustifyContent::SpaceBetween,
         align_items: AlignItems::FlexStart,
         ..default()
     },))
         .with_children(|header| {
-            header
-                .spawn((
-                    Button,
-                    ExtraClose,
-                    ExtraButtonVisual::new(0.0, 0.19),
-                    Node {
-                        width: Val::Px(54.0),
-                        height: Val::Px(54.0),
-                        margin: UiRect::right(Val::Px(9.0)),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                ))
-                .with_child(text("\u{f659}", &fonts.icons, 45.0, 0.8));
             header.spawn(text_weight(
                 "EXTRA",
                 &fonts.text,
@@ -283,6 +269,30 @@ fn spawn_header(root: &mut ChildSpawnerCommands, fonts: &UiFonts) {
                 0.8,
                 bevy::text::FontWeight::BOLD,
             ));
+            header
+                .spawn((
+                    Button,
+                    UiSoundStyle::Switch,
+                    ExtraClose,
+                    HoverAlpha::default(),
+                    Node {
+                        min_width: Val::Px(112.5),
+                        height: Val::Percent(100.0),
+                        padding: UiRect::horizontal(Val::Px(21.0)),
+                        column_gap: Val::Px(7.5),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|button| {
+                    button.spawn(text("\u{f1c3}", &fonts.icons, 21.0, 0.82));
+                    button.spawn((
+                        LocalizedText(UiText::Back),
+                        text("BACK", &fonts.text, 21.0, 0.82),
+                    ));
+                });
         });
 }
 
@@ -966,7 +976,9 @@ pub(crate) fn animate(
     let mut progress = None;
     for (entity, mut motion, mut transform) in &mut roots {
         motion.current += (motion.target - motion.current) * amount;
-        if (motion.target - motion.current).abs() < 0.001 {
+        if motion.target == 0.0 && motion.current <= 0.05
+            || (motion.target - motion.current).abs() < 0.001
+        {
             motion.current = motion.target;
         }
         let eased = smoothstep(motion.current);

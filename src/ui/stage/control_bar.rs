@@ -12,9 +12,6 @@ use crate::ui::textbox::ContentRoot;
 
 const QSAVE_LABEL: &str = "Q\u{00b7}SAVE";
 const QLOAD_LABEL: &str = "Q\u{00b7}LOAD";
-const QSAVE_TITLE: &str = "快速存档";
-const QLOAD_TITLE: &str = "快速读档";
-const RETURN_TO_TITLE: &str = "返回标题画面？";
 
 #[derive(Component)]
 pub(crate) struct ControlBarTop;
@@ -324,6 +321,7 @@ pub fn handle_button_click(
     mut q: Query<(&Interaction, &ButtonAction, &mut HoverAlpha), Changed<Interaction>>,
     mut toggles: ResMut<ToggleStates>,
     mut commands: Commands,
+    settings: Res<crate::storage::settings::RuntimeSettings>,
 ) {
     for (interaction, action, mut ha) in q.iter_mut() {
         if !matches!(interaction, Interaction::Pressed) {
@@ -353,20 +351,29 @@ pub fn handle_button_click(
 
             ButtonAction::QuickSave => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    QSAVE_TITLE,
+                    crate::ui::support::i18n::tr(
+                        settings.locale,
+                        crate::ui::support::i18n::UiText::ConfirmQuickSave,
+                    ),
                     DialogAction::QuickSave,
                 ));
             }
             ButtonAction::QuickLoad => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    QLOAD_TITLE,
+                    crate::ui::support::i18n::tr(
+                        settings.locale,
+                        crate::ui::support::i18n::UiText::ConfirmQuickLoad,
+                    ),
                     DialogAction::QuickLoad,
                 ));
             }
             ButtonAction::Save | ButtonAction::Load => {}
             ButtonAction::Title => {
                 commands.insert_resource(DialogRequest::confirmation(
-                    RETURN_TO_TITLE,
+                    crate::ui::support::i18n::tr(
+                        settings.locale,
+                        crate::ui::support::i18n::UiText::ConfirmReturnTitle,
+                    ),
                     DialogAction::BackToTitle,
                 ));
             }

@@ -289,6 +289,18 @@ pub(crate) struct SaveSlotContext<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     images: ResMut<'w, Assets<Image>>,
     commands: Commands<'w, 's>,
+    settings: Res<'w, crate::storage::settings::RuntimeSettings>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct SaveDeleteContext<'w, 's> {
+    slots: Query<'w, 's, (&'static Interaction, &'static SaveLoadSlot)>,
+    ui: Res<'w, SaveLoadUi>,
+    request: Option<Res<'w, DialogRequest>>,
+    project_root: Res<'w, ProjectRoot>,
+    store: Res<'w, crate::runtime::resources::StoreCodec>,
+    commands: Commands<'w, 's>,
+    settings: Res<'w, crate::storage::settings::RuntimeSettings>,
 }
 
 pub fn toggle_save_load(
@@ -1302,11 +1314,11 @@ pub fn handle_save_load_slot(
     }
     let (title, action) = match mode {
         SaveLoadMode::Save => (
-            format!("Overwrite slot {slot:02}?"),
+            crate::ui::support::i18n::overwrite_slot(context.settings.locale, slot),
             DialogAction::SaveSlot(slot),
         ),
         SaveLoadMode::Load => (
-            format!("Load slot {slot:02}?"),
+            crate::ui::support::i18n::load_slot(context.settings.locale, slot),
             DialogAction::LoadSlot(slot),
         ),
     };
@@ -1315,32 +1327,30 @@ pub fn handle_save_load_slot(
         .insert_resource(DialogRequest::confirmation(title, action));
 }
 
-pub fn handle_save_delete(
-    mouse: Res<ButtonInput<MouseButton>>,
-    slots: Query<(&Interaction, &SaveLoadSlot)>,
-    ui: Res<SaveLoadUi>,
-    request: Option<Res<DialogRequest>>,
-    project_root: Res<ProjectRoot>,
-    store: Res<crate::runtime::resources::StoreCodec>,
-    mut commands: Commands,
-) {
-    if ui.mode.is_none() || request.is_some() || !mouse.just_pressed(MouseButton::Right) {
+pub fn handle_save_delete(mouse: Res<ButtonInput<MouseButton>>, mut context: SaveDeleteContext) {
+    if context.ui.mode.is_none()
+        || context.request.is_some()
+        || !mouse.just_pressed(MouseButton::Right)
+    {
         return;
     }
-    let Some(slot) = slots
+    let Some(slot) = context
+        .slots
         .iter()
         .find_map(|(interaction, slot)| (*interaction == Interaction::Hovered).then_some(slot.0))
     else {
         return;
     };
     if !matches!(
-        crate::storage::save::inspect_slot(store.0.as_ref(), slot, &project_root),
+        crate::storage::save::inspect_slot(context.store.0.as_ref(), slot, &context.project_root),
         crate::storage::save::SlotStatus::Ready(_)
     ) {
         return;
     }
-    commands.insert_resource(DialogRequest::confirmation(
-        format!("Delete slot {slot:02}?"),
-        DialogAction::DeleteSlot(slot),
-    ));
+    context
+        .commands
+        .insert_resource(DialogRequest::confirmation(
+            crate::ui::support::i18n::delete_slot(context.settings.locale, slot),
+            DialogAction::DeleteSlot(slot),
+        ));
 }

@@ -6,6 +6,8 @@ output="${2:-target/release-package}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$root/dev/scripts/lib/audio-features.sh"
 
+cd "$root"
+require_project_directory "$project"
 if [[ -z "${CRABGAL_HEXZ_PASSWORD:-}" ]]; then
     echo "CRABGAL_HEXZ_PASSWORD must be set" >&2
     exit 2
@@ -15,11 +17,6 @@ if ! command -v hexz >/dev/null 2>&1; then
     exit 2
 fi
 
-cd "$root"
-if [[ ! -d "$project" ]]; then
-    echo "project directory does not exist: $project" >&2
-    exit 2
-fi
 case "$output" in
     target/*) ;;
     *)

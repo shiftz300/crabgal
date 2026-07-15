@@ -142,6 +142,7 @@ fn add_stage_systems(app: &mut App) {
             )
                 .chain(),
             text_style::apply_text_shadows,
+            support::i18n::sync,
             (
                 choice::sync_choice,
                 choice::handle_choice_input

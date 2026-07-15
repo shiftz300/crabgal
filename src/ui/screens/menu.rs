@@ -8,6 +8,7 @@ use crate::ui::control_bar::{BlurStrength, ButtonAction, HoverAlpha};
 use crate::ui::foundation::{UiSoundStyle, ease_in_out_cubic, exp_lerp, smoothstep, text};
 use crate::ui::save_load::{SaveLoadContent, SaveLoadMode, SaveLoadRoot, SaveLoadUi};
 use crate::ui::settings_panel::{SettingsContent, SettingsRoot, SettingsUi};
+use crate::ui::support::i18n::{LocalizedText, UiText};
 use crate::ui::{FULLSCREEN_BLUR_STRENGTH, MENU_BACKDROP_ALPHA};
 
 /// Below this point the blur is no longer perceptible, while opaque child UI
@@ -250,25 +251,26 @@ pub(crate) fn spawn_header(
                     font,
                     icon_font,
                 );
-                right.spawn((
-                    Button,
-                    MenuBack,
-                    HoverAlpha::default(),
-                    Node {
-                        min_width: Val::Px(112.5),
-                        height: Val::Percent(100.0),
-                        padding: UiRect::horizontal(Val::Px(21.0)),
-                        column_gap: Val::Px(7.5),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                    children![
-                        text("\u{f1c3}", icon_font, 21.0, 0.82),
-                        text("BACK", font, 21.0, 0.82),
-                    ],
-                ));
+                right
+                    .spawn((
+                        Button,
+                        MenuBack,
+                        HoverAlpha::default(),
+                        Node {
+                            min_width: Val::Px(112.5),
+                            height: Val::Percent(100.0),
+                            padding: UiRect::horizontal(Val::Px(21.0)),
+                            column_gap: Val::Px(7.5),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|button| {
+                        button.spawn(text("\u{f1c3}", icon_font, 21.0, 0.82));
+                        button.spawn((LocalizedText(UiText::Back), text("BACK", font, 21.0, 0.82)));
+                    });
             });
     });
 }
@@ -283,34 +285,46 @@ fn spawn_button(
     icon_font: &Handle<Font>,
 ) {
     let alpha = if active { 0.18 } else { 0.0 };
-    parent.spawn((
-        Button,
-        UiSoundStyle::Switch,
-        action,
-        MenuTab(action),
-        HoverAlpha {
-            target: alpha,
-            current: alpha,
-            active,
-            active_alpha: 0.18,
-            hover_alpha: 0.18,
-        },
-        Node {
-            min_width: Val::Px(123.75),
-            height: Val::Percent(100.0),
-            padding: UiRect::horizontal(Val::Px(21.0)),
-            margin: UiRect::right(Val::Px(9.0)),
-            column_gap: Val::Px(7.5),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
-        children![
-            text(icon, icon_font, 21.0, 0.82),
-            text(label, font, 21.0, 0.82),
-        ],
-    ));
+    parent
+        .spawn((
+            Button,
+            UiSoundStyle::Switch,
+            action,
+            MenuTab(action),
+            HoverAlpha {
+                target: alpha,
+                current: alpha,
+                active,
+                active_alpha: 0.18,
+                hover_alpha: 0.18,
+            },
+            Node {
+                min_width: Val::Px(123.75),
+                height: Val::Percent(100.0),
+                padding: UiRect::horizontal(Val::Px(21.0)),
+                margin: UiRect::right(Val::Px(9.0)),
+                column_gap: Val::Px(7.5),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
+        ))
+        .with_children(|button| {
+            button.spawn(text(icon, icon_font, 21.0, 0.82));
+            let key = match action {
+                ButtonAction::Save => Some(UiText::Save),
+                ButtonAction::Load => Some(UiText::Load),
+                ButtonAction::System => Some(UiText::Config),
+                _ => None,
+            };
+            if let Some(key) = key {
+                button.spawn((LocalizedText(key), text(label, font, 21.0, 0.82)));
+            } else {
+                // TITLE is intentionally invariant, matching WebGAL K.
+                button.spawn(text(label, font, 21.0, 0.82));
+            }
+        });
 }
 
 pub(crate) fn sync_tabs(

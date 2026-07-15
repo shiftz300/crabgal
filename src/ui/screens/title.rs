@@ -160,6 +160,7 @@ pub struct TitleInputContext<'w, 's> {
     pending: Option<ResMut<'w, PendingTitleAction>>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     settings: ResMut<'w, crate::ui::settings_panel::SettingsUi>,
+    runtime_settings: Res<'w, crate::storage::settings::RuntimeSettings>,
     extra: ResMut<'w, crate::ui::extra::ExtraUi>,
     commands: Commands<'w, 's>,
 }
@@ -461,7 +462,10 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                     context
                         .commands
                         .insert_resource(DialogRequest::confirmation(
-                            "Save data belongs to a different script build",
+                            crate::ui::support::i18n::tr(
+                                context.runtime_settings.locale,
+                                crate::ui::support::i18n::UiText::ForeignSave,
+                            ),
                             DialogAction::Noop,
                         ));
                 }
@@ -469,7 +473,10 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                 context
                     .commands
                     .insert_resource(DialogRequest::confirmation(
-                        "No save data",
+                        crate::ui::support::i18n::tr(
+                            context.runtime_settings.locale,
+                            crate::ui::support::i18n::UiText::NoSaveData,
+                        ),
                         DialogAction::Noop,
                     ));
             }
@@ -478,7 +485,10 @@ pub fn handle_title_input(mut context: TitleInputContext) {
             context
                 .commands
                 .insert_resource(DialogRequest::confirmation(
-                    "Exit game?",
+                    crate::ui::support::i18n::tr(
+                        context.runtime_settings.locale,
+                        crate::ui::support::i18n::UiText::ConfirmExit,
+                    ),
                     DialogAction::ExitGame,
                 ));
         }

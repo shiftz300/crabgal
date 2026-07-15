@@ -14,7 +14,7 @@ use crate::scene::ScenePlugin;
 use crate::storage::StoragePlugin;
 use crate::ui::GameUiPlugin;
 
-pub use bootstrap::{run, run_with_loader};
+pub use bootstrap::{run, run_cli, run_with_loader};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) enum GameSystemSet {

@@ -1,3 +1,3 @@
-fn main() {
-    crabgal::run();
+fn main() -> std::process::ExitCode {
+    crabgal::run_cli()
 }

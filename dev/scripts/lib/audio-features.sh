@@ -3,6 +3,18 @@
 # Prints the smallest comma-separated Cargo feature set required by a project.
 # An opaque nested Hexz cannot be inspected safely here, so it deliberately
 # falls back to all codecs. CRABGAL_AUDIO_FEATURES is an explicit CI override.
+require_project_directory() {
+    local project="$1"
+    if [[ ! -d "$project" ]]; then
+        echo "project directory does not exist: $project" >&2
+        return 2
+    fi
+    if [[ ! -f "$project/config.yaml" ]]; then
+        echo "project config does not exist: $project/config.yaml" >&2
+        return 2
+    fi
+}
+
 detect_audio_features() {
     local project="$1"
     if [[ -n "${CRABGAL_AUDIO_FEATURES:-}" ]]; then
@@ -47,6 +59,7 @@ detect_audio_features() {
 build_engine_for_project() {
     local project="$1"
     shift
+    require_project_directory "$project" || return
     local features
     features="$(detect_audio_features "$project")"
     if [[ -n "$features" ]]; then

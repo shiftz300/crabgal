@@ -8,10 +8,33 @@ use serde::{Deserialize, Serialize};
 use crate::runtime::resources::{GameConfigResource, ProjectRoot};
 use crate::ui::control_bar::{SkipMode, ToggleStates};
 
-const SETTINGS_VERSION: u32 = 3;
+const SETTINGS_VERSION: u32 = 4;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiLocale {
+    #[default]
+    ZhCn,
+    ZhTw,
+    En,
+    Ja,
+}
+
+impl UiLocale {
+    pub const ALL: [Self; 4] = [Self::ZhCn, Self::ZhTw, Self::En, Self::Ja];
+
+    pub const fn native_name(self) -> &'static str {
+        match self {
+            Self::ZhCn => "简体中文",
+            Self::ZhTw => "繁體中文",
+            Self::En => "English",
+            Self::Ja => "日本語",
+        }
+    }
+}
 
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeSettings {
+    pub locale: UiLocale,
     pub master_volume: f32,
     pub vocal_volume: f32,
     pub bgm_volume: f32,
@@ -34,6 +57,7 @@ struct SettingsFile {
 impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
+            locale: UiLocale::ZhCn,
             master_volume: 1.0,
             vocal_volume: 1.0,
             bgm_volume: 1.0,
@@ -122,6 +146,7 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("crabgal-settings-{nonce}"));
         let expected = RuntimeSettings {
+            locale: UiLocale::Ja,
             master_volume: 0.4,
             vocal_volume: 0.6,
             bgm_volume: 0.7,
@@ -138,6 +163,7 @@ mod tests {
         persist(&expected, &root).unwrap();
         let actual = load(&root).unwrap();
         assert_eq!(actual.master_volume, expected.master_volume);
+        assert_eq!(actual.locale, expected.locale);
         assert_eq!(actual.vocal_volume, expected.vocal_volume);
         assert_eq!(actual.bgm_volume, expected.bgm_volume);
         assert_eq!(actual.se_volume, expected.se_volume);
