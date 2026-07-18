@@ -37,6 +37,7 @@ find "$staging/project" -type f \( -name '.DS_Store' -o -name '*.meta' \) -delet
 
 rm -rf "$output"
 mkdir -p "$output"
+cp "$root/assets/icons/crabgal-256.png" "$output/crabgal.png"
 HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" \
     hexz pack "$staging/project" "$output/game.hxz" \
     --compression zstd --encrypt --block-size 65536

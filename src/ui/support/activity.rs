@@ -3,7 +3,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::storage::settings::RuntimeSettings;
-use crate::ui::backlog::{BacklogButtonVisual, BacklogClose, BacklogRoot, BacklogUiState};
+use crate::ui::backlog::{
+    BacklogButtonVisual, BacklogClose, BacklogRoot, BacklogScrollMotion, BacklogUiState,
+};
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
 use crate::ui::dialog::{DialogButtonVisual, DialogFade};
@@ -30,6 +32,7 @@ pub(crate) struct UiAnimationActivity(pub(crate) bool);
 #[derive(SystemParam)]
 pub(crate) struct UiActivityContext<'w, 's> {
     backlog: Res<'w, BacklogUiState>,
+    backlog_scroll: Res<'w, BacklogScrollMotion>,
     save_load: Res<'w, SaveLoadUi>,
     settings_ui: Res<'w, SettingsUi>,
     runtime_settings: Res<'w, RuntimeSettings>,
@@ -143,6 +146,7 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .backlog_buttons
             .iter()
             .any(|(interaction, visual, close)| visual.is_animating(*interaction, close.is_some()))
+        || context.backlog_scroll.is_animating()
         || context.dialog_fades.iter().any(DialogFade::is_animating)
         || context
             .dialog_buttons

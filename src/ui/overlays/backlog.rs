@@ -29,6 +29,24 @@ pub(crate) struct BacklogUiState {
     pub(crate) open: bool,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct BacklogScrollMotion {
+    current: f32,
+    target: f32,
+    close_gesture: f32,
+    initialized: bool,
+}
+
+impl BacklogScrollMotion {
+    pub(crate) fn is_animating(&self) -> bool {
+        self.initialized && (self.current - self.target).abs() > 0.1
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct BacklogRoot {
     elapsed: f32,
@@ -558,13 +576,16 @@ pub fn animate_backlog_buttons(time: Res<Time>, mut buttons: BacklogButtonQuery)
 pub fn scroll_backlog(
     mut wheel: MessageReader<MouseWheel>,
     keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
     loading: Res<crate::runtime::resources::AssetLoadingGate>,
     scope: Res<UiInputScope>,
     mut ui: ResMut<BacklogUiState>,
+    mut motion: ResMut<BacklogScrollMotion>,
     mut scroll: Query<(&mut ScrollPosition, &ComputedNode), With<BacklogScroll>>,
 ) {
     if loading.blocked || !scope.allows_backlog() {
         wheel.read().for_each(drop);
+        motion.reset();
         return;
     }
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
@@ -587,8 +608,14 @@ pub fn scroll_backlog(
         delta += amount;
     }
     let Ok((mut position, computed)) = scroll.single_mut() else {
+        motion.reset();
         return;
     };
+    if !motion.initialized {
+        motion.current = position.y;
+        motion.target = position.y;
+        motion.initialized = true;
+    }
     if keys.just_pressed(KeyCode::PageUp) {
         delta += computed.size().y * 0.8;
     }
@@ -597,12 +624,24 @@ pub fn scroll_backlog(
     }
     let max =
         (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();
-    if delta < 0.0 && position.y <= f32::EPSILON {
-        // Mirrors WebGAL K: scrolling down once the newest line is reached
-        // closes the backlog and restores the textbox.
-        ui.open = false;
+    motion.target = (motion.target + delta).clamp(0.0, max);
+    if delta < 0.0 && motion.current <= 0.5 && motion.target <= f32::EPSILON {
+        // A trackpad emits many tiny inertial events. Require one deliberate
+        // gesture instead of closing the panel on the first negative pixel.
+        motion.close_gesture += -delta;
+        if motion.close_gesture >= 72.0 {
+            ui.open = false;
+            motion.reset();
+        }
     } else {
-        position.y = (position.y + delta).clamp(0.0, max);
+        if delta > 0.0 {
+            motion.close_gesture = 0.0;
+        }
+        motion.current += (motion.target - motion.current) * exp_lerp(time.delta_secs(), 24.0);
+        if (motion.current - motion.target).abs() <= 0.1 {
+            motion.current = motion.target;
+        }
+        position.y = motion.current.clamp(0.0, max);
     }
 }
 

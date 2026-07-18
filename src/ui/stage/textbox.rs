@@ -4,7 +4,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use crabgal_core::config::{GameConfig, LayoutConfig};
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -40,6 +40,13 @@ pub(crate) struct ContentRoot;
 pub(crate) struct MiniAvatarNode;
 #[derive(Component)]
 pub(crate) struct QuickPreviewLayer;
+
+type SpeakerTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Text, &'static mut TextFont),
+    (With<SpeakerText>, Without<DialogueText>),
+>;
 
 const RUBY_FONT_SCALE: f32 = 0.44;
 const RUBY_COLLISION_PADDING: f32 = 4.5;
@@ -88,11 +95,6 @@ impl InitialTextboxFade {
     }
 }
 
-type ContentRootFilter = (
-    With<ContentRoot>,
-    Without<NameBarRoot>,
-    Without<TextBoxRoot>,
-);
 type NameBarFilter = (
     With<NameBarRoot>,
     Without<TextBoxRoot>,
@@ -101,6 +103,12 @@ type NameBarFilter = (
 type TextBoxFilter = (
     With<TextBoxRoot>,
     Without<NameBarRoot>,
+    Without<ContentRoot>,
+);
+type DialogueRootFilter = (
+    With<DialogueText>,
+    Without<NameBarRoot>,
+    Without<TextBoxRoot>,
     Without<ContentRoot>,
 );
 type TextboxOverlayFilter = Or<(
@@ -125,16 +133,40 @@ pub(crate) struct TextboxUpdateResources<'w> {
 
 #[derive(Default)]
 pub(crate) struct TextboxRenderCache {
-    content_hidden: Option<bool>,
     speaker: String,
     dialogue: String,
     visible_chars: usize,
     left: Option<f32>,
     textbox_alpha: Option<f32>,
     dialogue_size: Option<f32>,
+    dialogue_style: Option<DialogueStyle>,
+    film_mode: Option<bool>,
+}
+
+/// Mirrors core textbox visibility directly into the UI tree.
+///
+/// This intentionally stays separate from rich-text/layout caching: an editor
+/// cursor changes and hot reload can show or hide the textbox without changing
+/// the current dialogue payload, and the UI must react in the same frame.
+pub fn sync_visibility(state: Res<GameState>, mut roots: Query<&mut Node, With<ContentRoot>>) {
+    let display = textbox_display(state.ended, state.textbox_hidden);
+    for mut root in &mut roots {
+        if root.display != display {
+            root.display = display;
+        }
+    }
+}
+
+const fn textbox_display(ended: bool, hidden: bool) -> Display {
+    if ended || hidden {
+        Display::None
+    } else {
+        Display::Flex
+    }
 }
 
 const MINI_AVATAR_SIZE: f32 = 210.0;
+const FILM_MODE_TEXTBOX_OFFSET: f32 = 6.4;
 const TEXTBOX_LAYOUT_RATE: f32 = 18.0;
 const TEXTBOX_LAYOUT_EPSILON: f32 = 0.01;
 
@@ -172,6 +204,14 @@ fn textbox_left(layout: &LayoutConfig, has_mini_avatar: bool) -> f32 {
         layout.textbox_dodge_left
     } else {
         layout.textbox_left
+    }
+}
+
+fn name_bar_display(speaker: &str) -> Display {
+    if speaker.trim().is_empty() {
+        Display::None
+    } else {
+        Display::Flex
     }
 }
 
@@ -237,15 +277,32 @@ pub fn update_mini_avatar(
     config: Res<GameConfigResource>,
     asset_server: Res<AssetServer>,
     mut avatars: Query<(&mut ImageNode, &mut Node), With<MiniAvatarNode>>,
-    mut previous: Local<Option<(Option<String>, f32)>>,
+    mut previous: Local<Option<(Option<String>, f32, bool)>>,
 ) {
-    if previous.as_ref().is_some_and(|(avatar, progress)| {
-        avatar == &state.mini_avatar && *progress == state.mini_avatar_progress
-    }) {
+    if previous
+        .as_ref()
+        .is_some_and(|(avatar, progress, film_mode)| {
+            avatar == &state.mini_avatar
+                && *progress == state.mini_avatar_progress
+                && *film_mode == state.film_mode
+        })
+    {
         return;
     }
-    *previous = Some((state.mini_avatar.clone(), state.mini_avatar_progress));
+    *previous = Some((
+        state.mini_avatar.clone(),
+        state.mini_avatar_progress,
+        state.film_mode,
+    ));
     for (mut image, mut node) in &mut avatars {
+        node.bottom = Val::Percent(
+            config.layout.textbox_bottom
+                + if state.film_mode {
+                    FILM_MODE_TEXTBOX_OFFSET
+                } else {
+                    0.0
+                },
+        );
         let Some(avatar) = &state.mini_avatar else {
             node.display = Display::None;
             continue;
@@ -263,10 +320,13 @@ fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
         NameBarRoot,
         Node {
             position_type: PositionType::Absolute,
+            display: Display::None,
             bottom: Val::Percent(layout.namebar_bottom),
             left: Val::Percent(layout.textbox_left),
             padding: UiRect::axes(Val::Px(24.0), Val::Px(9.0)),
             min_width: Val::Px(75.0),
+            justify_content: JustifyContent::FlexStart,
+            align_items: AlignItems::FlexStart,
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
@@ -285,6 +345,7 @@ fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             ..default()
         },
         TextColor(Color::WHITE),
+        TextLayout::justify(Justify::Left),
         HideContentText::new(1.0),
     ));
 }
@@ -625,38 +686,44 @@ pub fn update_textbox(
     mut resources: TextboxUpdateResources,
     mut cache: Local<TextboxRenderCache>,
     mut commands: Commands,
-    mut content_root: Query<&mut Node, ContentRootFilter>,
-    mut speaker_text: Query<&mut Text, (With<SpeakerText>, Without<DialogueText>)>,
-    dialogue_root: Query<Entity, With<DialogueText>>,
+    mut speaker_text: SpeakerTextQuery,
+    mut dialogue_root: Query<(Entity, &mut Node), DialogueRootFilter>,
     mut glyphs: Query<(&DialogueGlyph, &mut Visibility)>,
-    mut name_bar: Query<&mut Node, NameBarFilter>,
+    mut name_bar: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), NameBarFilter>,
     mut text_box: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), TextBoxFilter>,
 ) {
     let state = &resources.state;
     let config = &resources.config;
-    let content_hidden = state.ended || state.textbox_hidden;
-    if cache.content_hidden != Some(content_hidden)
-        && let Ok(mut root) = content_root.single_mut()
-    {
-        root.display = if content_hidden {
-            Display::None
-        } else {
-            Display::Flex
-        };
-        cache.content_hidden = Some(content_hidden);
-    }
-
-    let (speaker, markup, visible_chars) =
-        state.dialogue.as_ref().map_or(("", "", 0), |dialogue| {
-            (
-                dialogue.speaker.as_str(),
-                dialogue.markup.as_str(),
-                dialogue.visible_chars,
-            )
-        });
+    // `previous_dialogue` is the settled line retained by editor formats such
+    // as LetsGal when `keepDialogue` is enabled. It remains a visual fallback;
+    // only a live `dialogue` is interactive and advances the VM.
+    let visible_dialogue = state.dialogue.as_ref().or(state.previous_dialogue.as_ref());
+    let (speaker, markup, visible_chars) = visible_dialogue.map_or(("", "", 0), |dialogue| {
+        (
+            dialogue.speaker.as_str(),
+            dialogue.markup.as_str(),
+            if state.dialogue.is_some() {
+                dialogue.visible_chars
+            } else {
+                dialogue.text.chars().count()
+            },
+        )
+    });
 
     let layout = &config.layout;
-    let target_left = textbox_left(layout, state.mini_avatar.is_some());
+    let centered = state.dialogue_style.is_centered();
+    let style_changed = cache.dialogue_style.as_ref() != Some(&state.dialogue_style);
+    let film_mode_changed = cache.film_mode != Some(state.film_mode);
+    let film_offset = if state.film_mode {
+        FILM_MODE_TEXTBOX_OFFSET
+    } else {
+        0.0
+    };
+    let target_left = if centered {
+        0.0
+    } else {
+        textbox_left(layout, state.mini_avatar.is_some())
+    };
     let left = resources
         .layout_motion
         .advance(target_left, resources.time.delta_secs());
@@ -665,26 +732,46 @@ pub fn update_textbox(
     let dialogue_changed = cache.dialogue != markup;
     let visibility_changed = cache.visible_chars != visible_chars;
     let layout_changed = cache.left != Some(left);
-    if layout_changed || speaker_changed {
-        for mut node in &mut name_bar {
-            if layout_changed {
-                node.left = Val::Percent(left);
-                node.width = Val::Auto;
+    if layout_changed || speaker_changed || style_changed || film_mode_changed {
+        for (mut node, mut background, mut hidden) in &mut name_bar {
+            node.display = name_bar_display(speaker);
+            if film_mode_changed {
+                node.bottom = Val::Percent(layout.namebar_bottom + film_offset);
             }
-            if speaker_changed {
-                node.display = if speaker.is_empty() {
-                    Display::None
+            if layout_changed || style_changed {
+                node.left = Val::Percent(left);
+                node.width = if centered {
+                    Val::Percent(100.0)
                 } else {
-                    Display::Flex
+                    Val::Auto
                 };
+                node.justify_content = if centered {
+                    JustifyContent::Center
+                } else {
+                    JustifyContent::FlexStart
+                };
+                let namebar_alpha = if centered { 0.0 } else { 0.7 };
+                hidden.base_alpha = namebar_alpha;
+                background.0 = Color::srgba(
+                    0.0,
+                    0.0,
+                    0.0,
+                    namebar_alpha * resources.auto_hide.hide_alpha * resources.overlay.alpha,
+                );
             }
         }
     }
-    let textbox_alpha =
-        (config.styles.textbox_alpha * (resources.settings.textbox_opacity / 0.75)).clamp(0.0, 1.0);
+    let textbox_alpha = if centered {
+        0.0
+    } else {
+        (config.styles.textbox_alpha * (resources.settings.textbox_opacity / 0.75)).clamp(0.0, 1.0)
+    };
     let alpha_changed = cache.textbox_alpha != Some(textbox_alpha);
-    if layout_changed || alpha_changed {
+    if layout_changed || alpha_changed || film_mode_changed {
         for (mut node, mut background, mut hidden) in &mut text_box {
+            if film_mode_changed {
+                node.bottom = Val::Percent(layout.textbox_bottom + film_offset);
+            }
             if layout_changed {
                 node.left = Val::Percent(left);
                 node.width = Val::Percent(width);
@@ -697,19 +784,35 @@ pub fn update_textbox(
             }
         }
     }
-    if speaker_changed && let Ok(mut text) = speaker_text.single_mut() {
+    if (speaker_changed || style_changed)
+        && let Ok((mut text, mut font)) = speaker_text.single_mut()
+    {
         text.0.clear();
         text.0.push_str(speaker);
+        font.font_size =
+            FontSize::Px(config.fonts.speaker_size * if centered { 26.0 / 34.0 } else { 1.0 });
     }
     let scale = match resources.settings.text_size {
         0 => 0.86,
         2 => 1.16,
         _ => 1.0,
     };
-    let dialogue_size = config.fonts.dialogue_size * scale;
+    let style_scale = match state.dialogue_style {
+        DialogueStyle::CinematicCentered => 34.0 / 30.0,
+        DialogueStyle::Literary | DialogueStyle::Sharp => 28.0 / 30.0,
+        _ => 1.0,
+    };
+    let dialogue_size = config.fonts.dialogue_size * scale * style_scale;
     let dialogue_size_changed = cache.dialogue_size != Some(dialogue_size);
+    if style_changed && let Ok((_, mut node)) = dialogue_root.single_mut() {
+        node.justify_content = if centered {
+            JustifyContent::Center
+        } else {
+            JustifyContent::FlexStart
+        };
+    }
     if (dialogue_changed || dialogue_size_changed)
-        && let Ok(root) = dialogue_root.single()
+        && let Ok((root, _)) = dialogue_root.single_mut()
     {
         commands.entity(root).despawn_related::<Children>();
         spawn_rich_dialogue(
@@ -741,23 +844,29 @@ pub fn update_textbox(
     cache.left = Some(left);
     cache.textbox_alpha = Some(textbox_alpha);
     cache.dialogue_size = Some(dialogue_size);
+    cache.dialogue_style = Some(state.dialogue_style.clone());
+    cache.film_mode = Some(state.film_mode);
 }
 
 #[derive(Clone)]
 struct RichStyle {
     color: Color,
+    background: Option<Color>,
     scale: f32,
     weight: FontWeight,
     font_style: FontStyle,
+    strike: bool,
 }
 
 impl Default for RichStyle {
     fn default() -> Self {
         Self {
             color: Color::WHITE,
+            background: None,
             scale: 1.0,
             weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
+            strike: false,
         }
     }
 }
@@ -836,30 +945,43 @@ fn spawn_plain_cluster(
     font: &Handle<Font>,
 ) {
     let alpha = style.color.alpha();
+    let background = style.background;
+    let strike = style.strike;
     content
         .spawn((
             DialogueGlyph { reveal_at },
             Node {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexEnd,
+                padding: if background.is_some() {
+                    UiRect::horizontal(Val::Px(3.0))
+                } else {
+                    UiRect::ZERO
+                },
                 ..default()
             },
+            BackgroundColor(background.unwrap_or(Color::NONE)),
             glyph_visibility(reveal_at, visible_chars),
         ))
-        .with_child((
-            DialogueBaseGlyph,
-            Text::new(value.to_string()),
-            TextFont {
-                font: font.clone().into(),
-                font_size: FontSize::Px(font_size * style.scale),
-                weight: style.weight,
-                style: style.font_style,
-                ..default()
-            },
-            TextColor(style.color),
-            TextLayout::no_wrap(),
-            HideContentText::new(alpha),
-        ));
+        .with_children(|cluster| {
+            cluster.spawn((
+                DialogueBaseGlyph,
+                Text::new(value.to_string()),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: FontSize::Px(font_size * style.scale),
+                    weight: style.weight,
+                    style: style.font_style,
+                    ..default()
+                },
+                TextColor(style.color),
+                TextLayout::no_wrap(),
+                HideContentText::new(alpha),
+            ));
+            if strike {
+                spawn_strike(cluster, style.color);
+            }
+        });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -874,6 +996,8 @@ fn spawn_ruby_cluster(
     font: &Handle<Font>,
 ) {
     let alpha = style.color.alpha();
+    let background = style.background;
+    let strike = style.strike;
     let cluster_width = ruby_cluster_width(&base, &ruby, font_size, style.scale);
     content
         .spawn((
@@ -884,8 +1008,14 @@ fn spawn_ruby_cluster(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::FlexEnd,
+                padding: if background.is_some() {
+                    UiRect::horizontal(Val::Px(3.0))
+                } else {
+                    UiRect::ZERO
+                },
                 ..default()
             },
+            BackgroundColor(background.unwrap_or(Color::NONE)),
             glyph_visibility(reveal_at, visible_chars),
         ))
         .with_children(|cluster| {
@@ -925,7 +1055,25 @@ fn spawn_ruby_cluster(
                 TextLayout::no_wrap(),
                 HideContentText::new(alpha),
             ));
+            if strike {
+                spawn_strike(cluster, style.color);
+            }
         });
+}
+
+fn spawn_strike(cluster: &mut ChildSpawnerCommands, color: Color) {
+    cluster.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::ZERO,
+            right: Val::ZERO,
+            bottom: Val::Percent(43.0),
+            height: Val::Px(1.5),
+            ..default()
+        },
+        BackgroundColor(color),
+        HideContentBg::new(color.alpha()),
+    ));
 }
 
 fn ruby_cluster_width(base: &str, ruby: &str, font_size: f32, base_scale: f32) -> f32 {
@@ -1004,16 +1152,21 @@ fn parse_rich_markup(source: &str) -> Vec<RichRun> {
         let argument = chars[label_end + 2..argument_end]
             .iter()
             .collect::<String>();
+        let explicit_ruby = rich_attribute(&argument, "ruby");
         let styled = argument.contains('=')
-            || matches!(argument.as_str(), "bold" | "italic" | "bold,italic");
+            || matches!(
+                argument.as_str(),
+                "bold" | "italic" | "bold,italic" | "strike"
+            );
+        let style = if styled {
+            parse_rich_style(&argument)
+        } else {
+            RichStyle::default()
+        };
         runs.push(RichRun {
             base,
-            ruby: (!styled && !argument.is_empty()).then_some(argument.clone()),
-            style: if styled {
-                parse_rich_style(&argument)
-            } else {
-                RichStyle::default()
-            },
+            ruby: explicit_ruby.or_else(|| (!styled && !argument.is_empty()).then_some(argument)),
+            style,
         });
         cursor = argument_end + 1;
     }
@@ -1043,6 +1196,9 @@ fn parse_rich_style(source: &str) -> RichStyle {
                     style.color = color;
                 }
             }
+            "background" | "bg" => {
+                style.background = parse_hex_color(value.trim());
+            }
             "size" | "fontSize" => {
                 let value = value.trim().trim_end_matches("px");
                 if let Ok(value) = value.parse::<f32>() {
@@ -1052,6 +1208,7 @@ fn parse_rich_style(source: &str) -> RichStyle {
             }
             "weight" if value.eq_ignore_ascii_case("bold") => style.weight = FontWeight::BOLD,
             "bold" => style.weight = FontWeight::BOLD,
+            "strike" | "del" => style.strike = true,
             "italic" | "style"
                 if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("italic") =>
             {
@@ -1066,6 +1223,13 @@ fn parse_rich_style(source: &str) -> RichStyle {
         }
     }
     style
+}
+
+fn rich_attribute(source: &str, target: &str) -> Option<String> {
+    source.split([',', ';']).find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key.trim() == target).then(|| value.trim().to_owned())
+    })
 }
 
 fn parse_hex_color(value: &str) -> Option<Color> {
@@ -1108,7 +1272,10 @@ pub fn animate_initial_fade(
     mut fade: ResMut<InitialTextboxFade>,
 ) {
     if fade.phase == InitialTextboxFadePhase::Waiting {
-        if state.ended || state.textbox_hidden || state.dialogue.is_none() {
+        if state.ended
+            || state.textbox_hidden
+            || (state.dialogue.is_none() && state.previous_dialogue.is_none())
+        {
             return;
         }
         fade.phase = InitialTextboxFadePhase::Fading;
@@ -1172,6 +1339,20 @@ pub fn apply_hide_toggle(
 #[cfg(test)]
 mod rich_text_tests {
     use super::*;
+
+    #[test]
+    fn textbox_visibility_tracks_core_state_without_dialogue_changes() {
+        assert_eq!(textbox_display(false, false), Display::Flex);
+        assert_eq!(textbox_display(false, true), Display::None);
+        assert_eq!(textbox_display(true, false), Display::None);
+    }
+
+    #[test]
+    fn name_bar_requires_an_explicit_non_whitespace_speaker() {
+        assert_eq!(name_bar_display(""), Display::None);
+        assert_eq!(name_bar_display("   \t"), Display::None);
+        assert_eq!(name_bar_display("小夜"), Display::Flex);
+    }
 
     #[test]
     fn narration_without_mini_avatar_uses_the_full_width_origin() {

@@ -17,15 +17,32 @@ pub struct ScriptWatcher {
 
 impl ScriptWatcher {
     pub fn start(project: &ContentProject) -> Result<Self> {
-        Self::start_with_languages(
-            &project.watched_script_roots(),
-            ScriptLanguageRegistry::default(),
-        )
+        Self::start_for_project(project, ScriptLanguageRegistry::default())
+    }
+
+    pub fn start_for_project(
+        project: &ContentProject,
+        languages: ScriptLanguageRegistry,
+    ) -> Result<Self> {
+        if let Some(loader) = project.scene_loader() {
+            let loader = loader.clone();
+            return Self::start_filtered(&loader.watch_roots(&project.root), move |path| {
+                loader.accepts_change(path)
+            });
+        }
+        Self::start_with_languages(&project.watched_script_roots(), languages)
     }
 
     pub fn start_with_languages(
         script_dirs: &[PathBuf],
         languages: ScriptLanguageRegistry,
+    ) -> Result<Self> {
+        Self::start_filtered(script_dirs, move |path| languages.supports(path))
+    }
+
+    fn start_filtered(
+        roots: &[PathBuf],
+        accepts: impl Fn(&std::path::Path) -> bool + Send + Sync + 'static,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
@@ -44,13 +61,13 @@ impl ScriptWatcher {
             }
 
             for path in event.paths {
-                if languages.supports(&path) {
+                if accepts(&path) {
                     let _ = sender.send(path);
                 }
             }
         })?;
-        for script_dir in script_dirs.iter().filter(|path| path.is_dir()) {
-            watcher.watch(script_dir, RecursiveMode::Recursive)?;
+        for root in roots.iter().filter(|path| path.is_dir()) {
+            watcher.watch(root, RecursiveMode::Recursive)?;
         }
 
         Ok(Self {

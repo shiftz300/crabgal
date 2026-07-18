@@ -8,7 +8,7 @@
 - **部分支持**：已有可用链路，但参数、默认值、资源类型、阻塞/继续、呈现行为或验证证据至少有一项不完整。
 - **不支持**：没有等价 Action/runtime；loader 明确给出 warning 并跳过，不能降级成 `say`。
 
-矩阵状态统计：**已实现 5 / 部分支持 22 / 不支持 4 / 合计 31**。
+矩阵状态统计：**已实现 5 / 部分支持 23 / 不支持 3 / 合计 31**。
 
 证据缩写：
 
@@ -26,7 +26,7 @@
 | 2 | `changeBg` | 入场/替换/退场；transform、enter/exit、分段时长、ease、CG 自动收录 | P+C+R+T+M：图片/none、若干 transition、基础 transform/filter、阻塞与材质转场可用 | **部分支持** | 默认 1500 ms 淡入淡出、`enterDuration/exitDuration`、完整 14 easing、完整 filter、`unlockname/series` 未等价；当前无参数时是 Instant |
 | 3 | `changeFigure` | 图片/Live2D/Spine；位置/id/zIndex/blend；入退场；完整 transform；嘴型/眨眼差分 | P+C+R+T+M：静态图片、空内容/`none`/`-clear`/`-none` 退场、left/center/right、自定义 id、zIndex、`blendMode`（兼容旧 `blend`）、基础 transform 和若干转场可用 | **部分支持** | 无 Live2D/Spine/GIF、嘴型/眨眼、motion/expression；默认时长、完整 easing/filter 仍不等价；left+right 优先级不同 |
 | 4 | `bgm` | 播放/切换/停止/同文件调参；volume、enter；`unlockname/series` | P+C+R+T+M：循环播放、空路径/`none` 停止、音量钳制、淡入/淡出和分总线已接通 | **部分支持** | 同路径调参会通过 revision 重新同步而非保证无缝；未处理 `unlockname/series`；缺少 GUI 音频人工记录 |
-| 5 | `playVideo` | 全屏视频、临时静音 BGM/voice、完成后继续、`skipOff` | P+T：保留字被识别并产生明确 unsupported warning | **不支持** | 无视频 Action、解码/纹理、音频 ducking、阻塞或跳过交互 |
+| 5 | `playVideo` | 全屏视频、临时静音 BGM/voice、完成后继续、`skipOff` | P+C+R+T：typed VideoSpec/State、按时钟有界流式解码、动态 GPU 纹理、音频 ducking、阻塞与双击跳过已接通 | **部分支持** | FFmpeg 后端为按项目启用的桌面 feature；尚缺 macOS/Windows/Linux 分发打包和跨平台音画/读档人工验收 |
 | 6 | `pixiPerform` | 播放 `cherryBlossoms/rain/snow/heavySnow`，可叠加不同特效 | P+C+R+T+M：映射为固定容量、原生 Bevy 粒子，支持按名称选择若干视觉风格 | **部分支持** | 状态只能保存一个效果，不能叠加；`cherryBlossoms` 与 `heavySnow` 不完全等价；不是 WebGAL Pixi 生命周期 |
 | 7 | `pixiInit` | 初始化/清空全部舞台特效 | P+C+R+T+M：清空当前原生粒子层 | **部分支持** | 清空链路存在，但依赖尚未等价的单效果 `pixiPerform` 模型，且没有视觉 golden |
 | 8 | `intro` | 多行全屏文字；字号/前景/背景色/背景图；五种动画；delay/hold/userForward | P+C+R+T+M：多页文字、黑底白字淡入、自动翻页与 hold 基础状态可用 | **部分支持** | 不支持颜色、字号、背景图、动画选择、`delayTime`、`userForward`；上游文档与源码默认字体色还存在漂移 |
@@ -64,7 +64,7 @@
 - 官方 `changeFigure -blendMode=` 优先，兼容旧项目的 `-blend=`。
 - 官方 `setTransform -ease=` 优先，兼容旧项目的 `-easing=`。
 - scene key 保留嵌套相对路径；脚本目录递归加载，同 stem 的不同目录不会碰撞。
-- `playVideo/showVars/applyStyle/callSteam` 产生带 source span 的 warning，不会误降级为普通对话；其他未知行保持 WebGAL 的“尝试作为 say”策略。
+- `showVars/applyStyle/callSteam` 产生带 source span 的 warning，不会误降级为普通对话；`playVideo` 产生 typed Action 并扫描视频资源；其他未知行保持 WebGAL 的“尝试作为 say”策略。
 
 对应新增/更新自动测试：
 
@@ -76,6 +76,7 @@
 - `json_transform_patch_preserves_every_absent_field`
 - `set_transform_distinguishes_default_and_explicit_zero_duration`
 - `reports_reserved_unsupported_commands_without_dialogue_fallback`
+- `video_is_typed_blocking_and_resource_tracked`
 - `parses_scene_control_commands`
 - `recursively_loads_and_executes_nested_scene_paths`
 - `same_stem_in_different_directories_has_distinct_scene_names`
@@ -88,7 +89,7 @@
 | `-when` | 条件为真才执行 | 有统一条件包装；Choice parser 能正确跨过嵌套数组索引/括号/引号，但表达式仍是安全 Rust 子集，不是 JavaScript 全集 |
 | `-continue` | 当前演出结束后自动执行下一句 | 参数可被 parser 吃掉而不污染正文，但 core 没有等价的“展示完成后自动继续”状态 |
 | 重复参数 | 上游 parser 采用首次命中的参数 | crabgal `HashMap` 当前以后出现的值覆盖先出现的值 |
-| 未知命令 | 尝试作为对话 | 保留该策略，但四个明确不支持的官方保留字会先被拦截并告警 |
+| 未知命令 | 尝试作为对话 | 保留该策略，但三个明确不支持的官方保留字会先被拦截并告警 |
 
 ## 官方文档与 4.6.2 源码漂移
 

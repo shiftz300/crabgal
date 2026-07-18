@@ -10,8 +10,9 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, TransformPatch, Transition,
-    VisualFilter,
+    AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing,
+    PortraitStyle, Position, PostProcessPatch, SpriteLayout, SpriteTransform, TransformPatch,
+    Transition, VideoSpec, VisualFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +36,14 @@ impl Default for SayOptions {
     }
 }
 
+/// One absolute-target segment in an adapter-authored sprite timeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransformKeyframe {
+    pub transform: TransformPatch,
+    pub duration: f32,
+    pub easing: Easing,
+}
+
 /// A single script action — the entire script language compiles to this.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Action {
@@ -54,6 +63,8 @@ pub enum Action {
         id: String,
         image: String,
         position: Position,
+        #[serde(default)]
+        layout: SpriteLayout,
         transition: Transition,
         transform: SpriteTransform,
         z_index: i32,
@@ -64,7 +75,6 @@ pub enum Action {
         id: String,
         transition: Transition,
     },
-
     // ── Dialogue ──
     /// Display dialogue text (triggers click-to-continue).
     Say {
@@ -170,9 +180,15 @@ pub enum Action {
     FilmMode {
         enabled: bool,
     },
-    /// Start or clear the lightweight Bevy effects layer.
-    Particle {
-        effect: Option<String>,
+    /// Create or replace a named particle emitter.
+    ShowParticles {
+        id: String,
+        effect: crate::types::ParticleEffect,
+    },
+    /// Fade and remove one emitter, or all emitters when `id` is absent.
+    HideParticles {
+        id: Option<String>,
+        duration: f32,
     },
 
     // ── Text and interaction ──
@@ -191,6 +207,131 @@ pub enum Action {
         file: String,
         name: String,
     },
+
+    /// Fade a solid full-screen curtain without coupling core to a UI backend.
+    /// New variants stay at the tail so existing serialized action tags and
+    /// program fingerprints remain stable.
+    Curtain {
+        visible: bool,
+        color: [f32; 4],
+        duration: f32,
+    },
+    /// Timed overlay text authored by an editor adapter.
+    FloatingText {
+        text: String,
+        position: [f32; 2],
+        font_size: f32,
+        color: [f32; 4],
+        fade_in: f32,
+        hold: f32,
+        fade_out: f32,
+        blocking: bool,
+    },
+    ConfigurePortraits {
+        enabled: bool,
+        character_ids: Vec<String>,
+        speaking: PortraitStyle,
+        others: PortraitStyle,
+        narration: PortraitStyle,
+        duration: f32,
+        easing: Easing,
+    },
+    FocusPortrait {
+        speaker_id: Option<String>,
+    },
+    /// Select an adapter-authored dialogue presentation without coupling core
+    /// to a concrete UI toolkit.
+    SetDialogueStyle {
+        style: DialogueStyle,
+    },
+    /// Timeline animation used by structured editor adapters.
+    AnimateKeyframes {
+        target: String,
+        frames: Vec<TransformKeyframe>,
+        repeat: u32,
+        blocking: bool,
+    },
+    /// Hide every sprite whose stable id starts with `prefix`.
+    /// Structured adapters use this to replace composed scene layers without
+    /// expanding one source command into dozens of cleanup actions. Keep new
+    /// variants appended so existing action fingerprints remain stable.
+    HideSprites {
+        prefix: String,
+        transition: Transition,
+    },
+    /// Enable or disable the engine's native autoplay state.
+    SetAutoplay {
+        enabled: bool,
+    },
+    /// Open or close one engine-owned system surface.
+    SetSystemUi {
+        slot: SystemUiSlot,
+        visible: bool,
+    },
+    PlayVideo {
+        video: VideoSpec,
+    },
+    StopVideo {
+        id: Option<String>,
+        fade_out: f32,
+    },
+    SetPostProcess {
+        targets: CameraTargets,
+        effect: PostProcessPatch,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
+    /// Bind a render object to the adapter-neutral camera depth model.
+    SetCameraBinding {
+        target: String,
+        bound: bool,
+        distance: f32,
+    },
+    /// Move the logical VN camera without baking camera motion into objects.
+    SetCameraTransform {
+        targets: CameraTargets,
+        transform: TransformPatch,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
+    ShakeCamera {
+        targets: CameraTargets,
+        shake: CameraShakeSpec,
+        blocking: bool,
+    },
+    /// Opaque call into a third-party extension plugin.
+    ///
+    /// Built-in adapter semantics must never use this escape hatch: they need
+    /// a typed action and a native runtime consumer so the engine remains a
+    /// strict superset of every built-in adapter's emitted IR.
+    HostCommand {
+        namespace: String,
+        command: String,
+        payload: String,
+    },
+    /// Play or stop a standalone voice clip outside a dialogue action.
+    Vocal {
+        file: Option<String>,
+        volume: f32,
+    },
+    /// Rich input request emitted by structured editor adapters.
+    RequestInput {
+        spec: crate::types::UserInputSpec,
+    },
+}
+
+/// Fixed system surfaces owned by the engine shell, never by a script adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SystemUiSlot {
+    Title,
+    Save,
+    Load,
+    Settings,
+    History,
+    Gallery,
+    Input,
 }
 
 /// A single choice in a menu.

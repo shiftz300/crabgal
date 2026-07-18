@@ -1,38 +1,189 @@
+use std::collections::HashSet;
 use std::io::{Error, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::mpsc;
 use std::task::{Context, Poll};
+use std::thread;
+use std::time::Duration;
 
 use bevy::asset::io::file::FileAssetReader;
 use bevy::asset::io::{
-    AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, PathStream, Reader,
-    ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader, StackFuture,
+    AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, AssetSourceEvent,
+    AssetWatcher, PathStream, Reader, ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader,
+    StackFuture,
 };
-use crabgal_loader::{ContentBackend, ContentMount, HexzArchive, HexzCursor, HexzFile};
+use crabgal_loader::{ContentFile, ContentMount};
 use futures_lite::io::{AsyncRead, AsyncSeek};
+use notify::{EventKind, RecursiveMode, Watcher};
+
+const ASSET_WATCH_QUIET_PERIOD: Duration = Duration::from_millis(50);
 
 /// Creates Bevy's default source as a deterministic read-only overlay. Sources
 /// are configured from low to high priority; the final source wins. Filesystem
-/// mounts stay zero-copy and Hexz mounts remain encrypted on disk.
+/// mounts stay zero-copy and packaged mounts remain unopened until read.
 pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
-    AssetSourceBuilder::new(move || Box::new(OverlayAssetReader::new(mounts.clone())))
+    let watched_mounts = mounts.clone();
+    AssetSourceBuilder::new(move || Box::new(OverlayAssetReader::new(mounts.clone()))).with_watcher(
+        move |sender| {
+            let roots = watched_mounts
+                .iter()
+                .filter_map(ContentMount::filesystem_root)
+                .collect::<Vec<_>>();
+            if roots.is_empty() {
+                return None;
+            }
+            let (event_sender, event_receiver) = mpsc::channel::<PathBuf>();
+            let watcher =
+                notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                    let event = match result {
+                        Ok(event) => event,
+                        Err(error) => {
+                            log::warn!("asset watcher error: {error}");
+                            return;
+                        }
+                    };
+                    if !matches!(
+                        event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    ) {
+                        return;
+                    }
+                    for path in event.paths {
+                        let _ = event_sender.send(path);
+                    }
+                });
+            let mut watcher = match watcher {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    log::warn!("asset hot reload disabled: {error}");
+                    return None;
+                }
+            };
+            for root in roots {
+                if let Err(error) = watcher.watch(&root, RecursiveMode::Recursive) {
+                    log::warn!("failed to watch asset root {}: {error}", root.display());
+                    return None;
+                }
+            }
+            let worker_roots = watched_mounts
+                .iter()
+                .filter_map(ContentMount::filesystem_root)
+                .collect::<Vec<_>>();
+            let worker = thread::Builder::new()
+                .name("crabgal-asset-watch".into())
+                .spawn(move || {
+                    let mut pending = HashSet::new();
+                    let flush = |pending: &mut HashSet<PathBuf>| {
+                        for path in pending.drain() {
+                            let Some((logical, is_meta)) = logical_asset_path(&path, &worker_roots)
+                            else {
+                                continue;
+                            };
+                            let exists = worker_roots
+                                .iter()
+                                .any(|root| watched_path(root, &logical, is_meta).is_file());
+                            let event = match (is_meta, exists) {
+                                (true, true) => AssetSourceEvent::ModifiedMeta(logical),
+                                (true, false) => AssetSourceEvent::RemovedMeta(logical),
+                                // Modified also retries a previously failed handle and
+                                // reveals a lower-priority fallback after removal.
+                                (false, true) => AssetSourceEvent::ModifiedAsset(logical),
+                                (false, false) => AssetSourceEvent::RemovedAsset(logical),
+                            };
+                            let _ = sender.try_send(event);
+                        }
+                    };
+                    loop {
+                        match event_receiver.recv_timeout(ASSET_WATCH_QUIET_PERIOD) {
+                            Ok(path) => {
+                                pending.insert(path);
+                                continue;
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut pending),
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                flush(&mut pending);
+                                break;
+                            }
+                        }
+                    }
+                });
+            let worker = match worker {
+                Ok(worker) => worker,
+                Err(error) => {
+                    log::warn!("asset hot reload worker failed: {error}");
+                    return None;
+                }
+            };
+            Some(Box::new(OverlayAssetWatcher {
+                watcher: Some(watcher),
+                worker: Some(worker),
+            }))
+        },
+    )
+}
+
+struct OverlayAssetWatcher {
+    watcher: Option<notify::RecommendedWatcher>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl AssetWatcher for OverlayAssetWatcher {}
+
+impl Drop for OverlayAssetWatcher {
+    fn drop(&mut self) {
+        drop(self.watcher.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn logical_asset_path(path: &Path, roots: &[PathBuf]) -> Option<(PathBuf, bool)> {
+    let root = roots
+        .iter()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count())?;
+    let relative = path.strip_prefix(root).ok()?;
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    let is_meta = relative
+        .extension()
+        .is_some_and(|extension| extension == "meta");
+    Some((
+        if is_meta {
+            relative.with_extension("")
+        } else {
+            relative.to_owned()
+        },
+        is_meta,
+    ))
+}
+
+fn watched_path(root: &Path, logical: &Path, is_meta: bool) -> PathBuf {
+    let mut path = root.join(logical);
+    if is_meta {
+        let extension = path.extension().map_or_else(
+            || "meta".into(),
+            |value| format!("{}.meta", value.to_string_lossy()),
+        );
+        path.set_extension(extension);
+    }
+    path
 }
 
 enum MountedReader {
     FileSystem(FileAssetReader),
-    Hexz(HexzAssetReader),
+    Content(ContentAssetReader),
 }
 
 impl MountedReader {
     fn new(mount: ContentMount) -> Self {
-        match mount.backend() {
-            ContentBackend::FileSystem(_) => Self::FileSystem(FileAssetReader::new(
-                mount.filesystem_root().expect("filesystem mount root"),
-            )),
-            ContentBackend::Hexz(archive) => Self::Hexz(HexzAssetReader::new(
-                archive.clone(),
-                mount.prefix().to_owned(),
-            )),
+        if let Some(root) = mount.filesystem_root() {
+            Self::FileSystem(FileAssetReader::new(root))
+        } else {
+            Self::Content(ContentAssetReader::new(mount))
         }
     }
 
@@ -42,7 +193,7 @@ impl MountedReader {
                 .read(path)
                 .await
                 .map(|reader| Box::new(reader) as Box<dyn Reader>),
-            Self::Hexz(reader) => reader
+            Self::Content(reader) => reader
                 .read(path)
                 .await
                 .map(|reader| Box::new(reader) as Box<dyn Reader>),
@@ -58,7 +209,7 @@ impl MountedReader {
                 .read_meta(path)
                 .await
                 .map(|reader| Box::new(reader) as Box<dyn Reader>),
-            Self::Hexz(reader) => reader
+            Self::Content(reader) => reader
                 .read_meta(path)
                 .await
                 .map(|reader| Box::new(reader) as Box<dyn Reader>),
@@ -68,14 +219,14 @@ impl MountedReader {
     async fn read_directory(&self, path: &Path) -> Result<Box<PathStream>, AssetReaderError> {
         match self {
             Self::FileSystem(reader) => reader.read_directory(path).await,
-            Self::Hexz(reader) => reader.read_directory(path).await,
+            Self::Content(reader) => reader.read_directory(path).await,
         }
     }
 
     async fn is_directory(&self, path: &Path) -> Result<bool, AssetReaderError> {
         match self {
             Self::FileSystem(reader) => reader.is_directory(path).await,
-            Self::Hexz(reader) => reader.is_directory(path).await,
+            Self::Content(reader) => reader.is_directory(path).await,
         }
     }
 }
@@ -145,72 +296,58 @@ impl AssetReader for OverlayAssetReader {
     }
 }
 
-struct HexzAssetReader {
-    archive: HexzArchive,
-    prefix: PathBuf,
+struct ContentAssetReader {
+    mount: ContentMount,
 }
 
-impl HexzAssetReader {
-    fn new(archive: HexzArchive, prefix: PathBuf) -> Self {
-        Self { archive, prefix }
-    }
-
-    fn resolve(&self, path: &Path) -> PathBuf {
-        self.prefix.join(path)
+impl ContentAssetReader {
+    fn new(mount: ContentMount) -> Self {
+        Self { mount }
     }
 }
 
-impl AssetReader for HexzAssetReader {
+impl AssetReader for ContentAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        let resolved = self.resolve(path);
-        if !self.archive.contains_file(&resolved) {
+        if !self.mount.contains_file(path) {
             return Err(AssetReaderError::NotFound(path.to_owned()));
         }
-        self.archive
-            .open_file(&resolved)
-            .map(HexzStreamReader::new)
+        self.mount
+            .open_file(path)
+            .map(ContentStreamReader::new)
             .map_err(asset_io_error)
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        Err::<HexzStreamReader, _>(AssetReaderError::NotFound(path.to_owned()))
+        Err::<ContentStreamReader, _>(AssetReaderError::NotFound(path.to_owned()))
     }
 
     async fn read_directory<'a>(
         &'a self,
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
-        let resolved = self.resolve(path);
-        if !self.archive.is_directory(&resolved) {
+        if !self.mount.is_directory(path) {
             return Err(AssetReaderError::NotFound(path.to_owned()));
         }
-        let prefix = self.prefix.clone();
-        let entries = self
-            .archive
-            .read_directory(&resolved)
-            .into_iter()
-            .filter_map(move |entry| entry.strip_prefix(&prefix).ok().map(Path::to_owned));
+        let entries = self.mount.read_directory(path).map_err(asset_io_error)?;
         Ok(Box::new(futures_lite::stream::iter(entries)))
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
-        Ok(self.archive.is_directory(&self.resolve(path)))
+        Ok(self.mount.is_directory(path))
     }
 }
 
-struct HexzStreamReader {
-    cursor: HexzCursor,
+struct ContentStreamReader {
+    cursor: ContentFile,
 }
 
-impl HexzStreamReader {
-    fn new(file: HexzFile) -> Self {
-        Self {
-            cursor: file.cursor(),
-        }
+impl ContentStreamReader {
+    fn new(cursor: ContentFile) -> Self {
+        Self { cursor }
     }
 }
 
-impl AsyncRead for HexzStreamReader {
+impl AsyncRead for ContentStreamReader {
     fn poll_read(
         mut self: Pin<&mut Self>,
         _context: &mut Context<'_>,
@@ -220,7 +357,7 @@ impl AsyncRead for HexzStreamReader {
     }
 }
 
-impl AsyncSeek for HexzStreamReader {
+impl AsyncSeek for ContentStreamReader {
     fn poll_seek(
         mut self: Pin<&mut Self>,
         _context: &mut Context<'_>,
@@ -230,7 +367,7 @@ impl AsyncSeek for HexzStreamReader {
     }
 }
 
-impl Reader for HexzStreamReader {
+impl Reader for ContentStreamReader {
     fn read_to_end<'a>(
         &'a mut self,
         buffer: &'a mut Vec<u8>,
@@ -270,8 +407,12 @@ mod tests {
         fs::write(base.join("shared.txt"), "base").unwrap();
         fs::write(patch.join("shared.txt"), "patch").unwrap();
         let overlay = OverlayAssetReader::new(vec![
-            ContentMount::new(ContentBackend::FileSystem(base), "").unwrap(),
-            ContentMount::new(ContentBackend::FileSystem(patch), "").unwrap(),
+            crabgal_loader::SourceMount::assets("test", "base", base)
+                .asset
+                .unwrap(),
+            crabgal_loader::SourceMount::assets("test", "patch", patch)
+                .asset
+                .unwrap(),
         ]);
 
         let bytes = block_on(async {
@@ -282,5 +423,28 @@ mod tests {
         });
         assert_eq!(bytes, b"patch");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn watcher_maps_nested_assets_and_metadata_to_logical_paths() {
+        let root = PathBuf::from("project").join("assets");
+        assert_eq!(
+            logical_asset_path(
+                &root.join("background/sea.png"),
+                std::slice::from_ref(&root)
+            ),
+            Some((PathBuf::from("background/sea.png"), false))
+        );
+        assert_eq!(
+            logical_asset_path(
+                &root.join("background/sea.png.meta"),
+                std::slice::from_ref(&root),
+            ),
+            Some((PathBuf::from("background/sea.png"), true))
+        );
+        assert_eq!(
+            watched_path(&root, Path::new("background/sea.png"), true),
+            root.join("background/sea.png.meta")
+        );
     }
 }

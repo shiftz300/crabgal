@@ -37,6 +37,7 @@ pub struct LocalAssetManifest(pub HashMap<String, LocalSceneAssets>);
 pub struct LocalSceneAssets {
     pub resources: Vec<ResourceRef>,
     pub sub_scenes: Vec<SceneRef>,
+    pub action_spans: Vec<crabgal_loader::SourceSpan>,
 }
 
 #[derive(Resource, Default)]

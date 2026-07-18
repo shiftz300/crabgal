@@ -12,8 +12,8 @@ use crate::action::Action;
 use crate::action::ChoiceTarget;
 use crate::expression::{evaluate, interpolate};
 use crate::state::{
-    BgTransition, Dialogue, IntroState, MenuChoice, MenuState, PresetAnimation, SceneFrame, Sprite,
-    State, TransformAnimation, TransitionRule,
+    BgTransition, Dialogue, IntroState, KeyframeAnimation, MenuChoice, MenuState, PresetAnimation,
+    SceneFrame, Sprite, State, TransformAnimation, TransitionRule,
 };
 use crate::types::{Anchor, Transition};
 
@@ -39,6 +39,20 @@ const MAX_FORWARD_ACTIONS: usize = 1024;
 /// Execute actions from the current cursor position until we hit
 /// an interactive point (Say or Menu) or end of scene.
 pub fn step(state: &mut State) -> StepResult {
+    step_inner(state, None)
+}
+
+/// Execute like [`step`], but never cross the requested cursor in one scene.
+/// Editor adapters use this to reconstruct a deterministic preview state.
+pub fn step_until_cursor(
+    state: &mut State,
+    target_scene: &str,
+    target_cursor: usize,
+) -> StepResult {
+    step_inner(state, Some((target_scene, target_cursor)))
+}
+
+fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
     }
@@ -54,6 +68,11 @@ pub fn step(state: &mut State) -> StepResult {
     let program = Arc::clone(&state.program);
 
     for _ in 0..MAX_FORWARD_ACTIONS {
+        if stop
+            .is_some_and(|(scene, cursor)| state.current_scene == scene && state.cursor >= cursor)
+        {
+            return StepResult::EndOfScene;
+        }
         let Some(action) = program
             .scene(&state.current_scene)
             .and_then(|scene| scene.get(state.cursor))
@@ -95,6 +114,7 @@ pub fn step(state: &mut State) -> StepResult {
                 let image = interpolate(image, &state.vars, &state.global_vars);
                 debug!("ShowBg: {} ({:?})", image, transition);
                 let from = state.bg.take();
+                state.bg_camera_distance = None;
                 state.bg_transform = transform;
                 state.bg_transform_animation = None;
                 let rule_animation = state.transition_rules.get("bg-main").and_then(|rule| {
@@ -153,6 +173,9 @@ pub fn step(state: &mut State) -> StepResult {
                     continue;
                 }
                 let from = state.bg.take();
+                if transition == Transition::Instant {
+                    state.bg_camera_distance = None;
+                }
                 state.bg_transition = match (from, transition) {
                     (Some(from), transition) if transition != Transition::Instant => {
                         Some(BgTransition {
@@ -184,6 +207,7 @@ pub fn step(state: &mut State) -> StepResult {
                     started = true;
                     let target = target.apply_to(state.bg_transform);
                     if duration > 0.0 {
+                        state.bg_keyframe_animation = None;
                         state.bg_transform_animation = Some(TransformAnimation {
                             from: state.bg_transform,
                             to: target,
@@ -195,11 +219,33 @@ pub fn step(state: &mut State) -> StepResult {
                     } else {
                         state.bg_transform = target;
                         state.bg_transform_animation = None;
+                        state.bg_keyframe_animation = None;
+                    }
+                } else if is_character_group_target(&id) {
+                    for sprite in state.sprites.values_mut() {
+                        started = true;
+                        let target = target.apply_to(sprite.transform);
+                        if duration > 0.0 {
+                            sprite.keyframe_animation = None;
+                            sprite.transform_animation = Some(TransformAnimation {
+                                from: sprite.transform,
+                                to: target,
+                                elapsed: 0.0,
+                                duration,
+                                easing,
+                                blocking: !next,
+                            });
+                        } else {
+                            sprite.transform = target;
+                            sprite.transform_animation = None;
+                            sprite.keyframe_animation = None;
+                        }
                     }
                 } else if let Some(sprite) = state.sprites.get_mut(&id) {
                     started = true;
                     let target = target.apply_to(sprite.transform);
                     if duration > 0.0 {
+                        sprite.keyframe_animation = None;
                         sprite.transform_animation = Some(TransformAnimation {
                             from: sprite.transform,
                             to: target,
@@ -211,6 +257,7 @@ pub fn step(state: &mut State) -> StepResult {
                     } else {
                         sprite.transform = target;
                         sprite.transform_animation = None;
+                        sprite.keyframe_animation = None;
                     }
                 }
                 if started && !next && duration > 0.0 {
@@ -221,6 +268,7 @@ pub fn step(state: &mut State) -> StepResult {
                 id,
                 image,
                 position,
+                layout,
                 transition,
                 transform,
                 z_index,
@@ -263,6 +311,7 @@ pub fn step(state: &mut State) -> StepResult {
                     Sprite {
                         image,
                         position,
+                        layout: *layout,
                         transition_progress,
                         transition,
                         entering: true,
@@ -270,10 +319,13 @@ pub fn step(state: &mut State) -> StepResult {
                         transition_blocking: !next,
                         transform: initial_transform,
                         transform_animation: None,
+                        keyframe_animation: None,
                         filter: Default::default(),
+                        films: Default::default(),
                         animation: rule_animation,
                         z_index,
                         blend,
+                        camera_distance: None,
                     },
                 );
                 if rule_blocks || (!next && transition != Transition::Instant) {
@@ -325,6 +377,34 @@ pub fn step(state: &mut State) -> StepResult {
                     }
                 }
             }
+            Action::HideSprites { prefix, transition } => {
+                let transition = *transition;
+                let prefix = interpolate(prefix, &state.vars, &state.global_vars);
+                debug!("HideSprites: {prefix}*");
+                if transition == Transition::Instant {
+                    state.sprites.retain(|id, _| !id.starts_with(&prefix));
+                } else {
+                    let mut matched = false;
+                    for (id, sprite) in &mut state.sprites {
+                        if !id.starts_with(&prefix) {
+                            continue;
+                        }
+                        matched = true;
+                        sprite.animation = None;
+                        sprite.transition = transition;
+                        sprite.entering = false;
+                        sprite.transition_blocking = !next;
+                        sprite.transition_offset_x = match transition {
+                            Transition::SlideFromLeft(_) => -400.0,
+                            Transition::SlideFromRight(_) => 400.0,
+                            _ => 0.0,
+                        };
+                    }
+                    if matched && !next {
+                        return StepResult::AwaitPresentation;
+                    }
+                }
+            }
             Action::Say {
                 speaker,
                 text,
@@ -335,10 +415,10 @@ pub fn step(state: &mut State) -> StepResult {
                     state.textbox_auto_hidden = false;
                 }
                 let mut speaker = resolve_speaker(speaker, state);
-                let mut markup = interpolate(text, &state.vars, &state.global_vars)
+                let source = interpolate(text, &state.vars, &state.global_vars)
                     .replace("<br/>", "\n")
                     .replace("<br>", "\n");
-                let mut text = compile_rich_text(&markup);
+                let (mut text, mut markup, mut pauses) = compile_rich_text(&source);
                 if options.inherit_speaker
                     && let Some(previous) =
                         state.dialogue.as_ref().or(state.previous_dialogue.as_ref())
@@ -349,8 +429,18 @@ pub fn step(state: &mut State) -> StepResult {
                     && let Some(previous) =
                         state.dialogue.as_ref().or(state.previous_dialogue.as_ref())
                 {
+                    let pause_offset = previous.text.chars().count();
                     text = previous.text.clone() + &text;
                     markup = previous.markup.clone() + &markup;
+                    pauses = previous
+                        .pauses
+                        .iter()
+                        .copied()
+                        .chain(pauses.into_iter().map(|mut pause| {
+                            pause.at += pause_offset;
+                            pause
+                        }))
+                        .collect();
                     if speaker.is_empty() {
                         speaker.clone_from(&previous.speaker);
                     }
@@ -361,6 +451,7 @@ pub fn step(state: &mut State) -> StepResult {
                     text,
                     markup,
                     visible_chars: 0,
+                    pauses,
                     vocal: options
                         .vocal
                         .as_deref()
@@ -474,6 +565,14 @@ pub fn step(state: &mut State) -> StepResult {
                     (None, None) => state.effect_queue.push(crate::state::EffectEvent::Stop),
                 }
             }
+            Action::Vocal { file, volume } => {
+                state.vocal_event = Some(crate::state::VocalCue {
+                    file: file
+                        .as_deref()
+                        .map(|file| interpolate(file, &state.vars, &state.global_vars)),
+                    volume: volume.clamp(0.0, 1.0),
+                });
+            }
             Action::Set {
                 name,
                 expression,
@@ -509,6 +608,34 @@ pub fn step(state: &mut State) -> StepResult {
             } => {
                 let duration = *duration;
                 let target = interpolate(target, &state.vars, &state.global_vars);
+                if matches!(
+                    preset,
+                    crate::types::AnimationPreset::OldFilm
+                        | crate::types::AnimationPreset::DotFilm
+                        | crate::types::AnimationPreset::ReflectionFilm
+                        | crate::types::AnimationPreset::GlitchFilm
+                        | crate::types::AnimationPreset::RgbFilm
+                        | crate::types::AnimationPreset::GodrayFilm
+                        | crate::types::AnimationPreset::RemoveFilm
+                ) {
+                    let mut applied = false;
+                    if is_background_target(&target) {
+                        applied = state.bg_films.apply(preset);
+                        state.bg_animation = None;
+                    } else if is_character_group_target(&target) {
+                        for sprite in state.sprites.values_mut() {
+                            applied |= sprite.films.apply(preset);
+                            sprite.animation = None;
+                        }
+                    } else if let Some(sprite) = state.sprites.get_mut(&target) {
+                        applied = sprite.films.apply(preset);
+                        sprite.animation = None;
+                    }
+                    if !applied {
+                        log::warn!("film animation target does not exist: {target}");
+                    }
+                    continue;
+                }
                 let animation = |base| PresetAnimation {
                     preset: preset.clone(),
                     base,
@@ -524,6 +651,14 @@ pub fn step(state: &mut State) -> StepResult {
                     state.bg_transform =
                         preset_initial_transform(animation.base, &animation.preset);
                     state.bg_animation = Some(animation);
+                } else if is_character_group_target(&target) {
+                    for sprite in state.sprites.values_mut() {
+                        started = true;
+                        let animation = animation(sprite.transform);
+                        sprite.transform =
+                            preset_initial_transform(animation.base, &animation.preset);
+                        sprite.animation = Some(animation);
+                    }
                 } else if let Some(sprite) = state.sprites.get_mut(&target) {
                     started = true;
                     let animation = animation(sprite.transform);
@@ -556,6 +691,10 @@ pub fn step(state: &mut State) -> StepResult {
                 let target = interpolate(target, &state.vars, &state.global_vars);
                 if is_background_target(&target) {
                     state.bg_filter = *filter;
+                } else if is_character_group_target(&target) {
+                    for sprite in state.sprites.values_mut() {
+                        sprite.filter = *filter;
+                    }
                 } else if let Some(sprite) = state.sprites.get_mut(&target) {
                     sprite.filter = *filter;
                 } else {
@@ -587,10 +726,191 @@ pub fn step(state: &mut State) -> StepResult {
                 }
             }
             Action::FilmMode { enabled } => state.film_mode = *enabled,
-            Action::Particle { effect } => {
-                state.particle_effect = effect
+            Action::Curtain {
+                visible,
+                color,
+                duration,
+            } => {
+                let target = if *visible { 1.0 } else { 0.0 };
+                state.curtain.color = *color;
+                state.curtain.from = state.curtain.current;
+                state.curtain.target = target;
+                state.curtain.elapsed = 0.0;
+                state.curtain.duration = duration.max(0.0);
+                state.curtain.blocking = !next && *duration > 0.0;
+                if *duration <= f32::EPSILON {
+                    state.curtain.current = target;
+                } else if !next {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::FloatingText {
+                text,
+                position,
+                font_size,
+                color,
+                fade_in,
+                hold,
+                fade_out,
+                blocking,
+            } => {
+                let state_blocking = *blocking && !next;
+                state.floating_text = Some(crate::state::FloatingTextState {
+                    text: interpolate(text, &state.vars, &state.global_vars),
+                    position: *position,
+                    font_size: *font_size,
+                    color: *color,
+                    fade_in: fade_in.max(0.0),
+                    hold: hold.max(0.0),
+                    fade_out: fade_out.max(0.0),
+                    elapsed: 0.0,
+                    blocking: state_blocking,
+                });
+                if state_blocking {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ConfigurePortraits {
+                enabled,
+                character_ids,
+                speaking,
+                others,
+                narration,
+                duration,
+                easing,
+            } => {
+                state.portrait_rule = Some(crate::state::PortraitRuleState {
+                    enabled: *enabled,
+                    character_ids: character_ids.iter().cloned().collect(),
+                    speaking: *speaking,
+                    others: *others,
+                    narration: *narration,
+                    duration: duration.max(0.0),
+                    easing: *easing,
+                });
+            }
+            Action::FocusPortrait { speaker_id } => {
+                let Some(rule) = state.portrait_rule.clone().filter(|rule| rule.enabled) else {
+                    continue;
+                };
+                let speaker_id = speaker_id
                     .as_deref()
-                    .map(|effect| interpolate(effect, &state.vars, &state.global_vars));
+                    .map(|id| interpolate(id, &state.vars, &state.global_vars));
+                for (id, sprite) in &mut state.sprites {
+                    if !rule.character_ids.contains(id) {
+                        continue;
+                    }
+                    let style = match speaker_id.as_deref() {
+                        None => rule.narration,
+                        Some(speaker) if speaker == id => rule.speaking,
+                        Some(_) => rule.others,
+                    };
+                    sprite.filter = crate::VisualFilter {
+                        blur: style.blur,
+                        brightness: style.brightness,
+                        contrast: style.contrast,
+                        saturation: style.saturation,
+                    };
+                    let mut target = sprite.transform;
+                    target.scale_x = style.scale;
+                    target.scale_y = style.scale;
+                    target.alpha = style.alpha;
+                    if rule.duration > f32::EPSILON {
+                        sprite.transform_animation = Some(TransformAnimation {
+                            from: sprite.transform,
+                            to: target,
+                            elapsed: 0.0,
+                            duration: rule.duration,
+                            easing: rule.easing,
+                            blocking: false,
+                        });
+                    } else {
+                        sprite.transform = target;
+                        sprite.transform_animation = None;
+                    }
+                }
+            }
+            Action::SetDialogueStyle { style } => {
+                state.dialogue_style.clone_from(style);
+            }
+            Action::AnimateKeyframes {
+                target,
+                frames,
+                repeat,
+                blocking,
+            } => {
+                let target = interpolate(target, &state.vars, &state.global_vars);
+                let state_blocking = *blocking && !next;
+                let build = |initial| {
+                    let mut from = initial;
+                    let frames = frames
+                        .iter()
+                        .map(|frame| {
+                            let to = frame.transform.apply_to(from);
+                            let animation = TransformAnimation {
+                                from,
+                                to,
+                                elapsed: 0.0,
+                                duration: frame.duration.max(0.0),
+                                easing: frame.easing,
+                                blocking: false,
+                            };
+                            from = to;
+                            animation
+                        })
+                        .collect();
+                    KeyframeAnimation {
+                        initial,
+                        frames,
+                        index: 0,
+                        repeat_remaining: *repeat,
+                        blocking: state_blocking,
+                    }
+                };
+                let mut started = false;
+                if is_background_target(&target) {
+                    state.bg_transform_animation = None;
+                    state.bg_keyframe_animation = Some(build(state.bg_transform));
+                    started = true;
+                } else if let Some(sprite) = state.sprites.get_mut(&target) {
+                    sprite.transform_animation = None;
+                    sprite.keyframe_animation = Some(build(sprite.transform));
+                    started = true;
+                }
+                if started && state_blocking && !frames.is_empty() {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ShowParticles { id, effect } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let mut effect = effect.clone();
+                effect.preset = interpolate(&effect.preset, &state.vars, &state.global_vars);
+                effect.texture = effect
+                    .texture
+                    .as_deref()
+                    .map(|texture| interpolate(texture, &state.vars, &state.global_vars));
+                state
+                    .particle_effects
+                    .insert(id, crate::state::ActiveParticleEffect::new(effect));
+            }
+            Action::HideParticles { id, duration } => {
+                let duration = duration.max(0.0);
+                let selected = id
+                    .as_deref()
+                    .map(|id| interpolate(id, &state.vars, &state.global_vars));
+                if duration <= f32::EPSILON {
+                    if let Some(id) = selected {
+                        state.particle_effects.remove(&id);
+                    } else {
+                        state.particle_effects.clear();
+                    }
+                } else {
+                    for (id, effect) in &mut state.particle_effects {
+                        if selected.as_ref().is_none_or(|selected| selected == id) {
+                            effect.begin_fade_out(duration);
+                        }
+                    }
+                }
             }
             Action::SetTextbox { visible, auto } => {
                 state.textbox_hidden = !*visible;
@@ -606,6 +926,19 @@ pub fn step(state: &mut State) -> StepResult {
                     title: interpolate(title, &state.vars, &state.global_vars),
                     button: interpolate(button, &state.vars, &state.global_vars),
                     value: String::new(),
+                    value_type: crate::types::InputValueType::String,
+                    description: String::new(),
+                    placeholder: String::new(),
+                    required_text: "请填写后再继续".into(),
+                    required: true,
+                    min_length: 0,
+                    max_length: 64,
+                    min_value: None,
+                    max_value: None,
+                    step: 1.0,
+                    true_text: "是".into(),
+                    false_text: "否".into(),
+                    error: String::new(),
                 });
                 return StepResult::AwaitInput;
             }
@@ -622,6 +955,199 @@ pub fn step(state: &mut State) -> StepResult {
                     }
                 }
             }
+            Action::SetAutoplay { enabled } => state
+                .shell_events
+                .push(crate::state::ShellEvent::SetAutoplay(*enabled)),
+            Action::SetSystemUi { slot, visible } => {
+                state
+                    .shell_events
+                    .push(crate::state::ShellEvent::SetSystemUi {
+                        slot: *slot,
+                        visible: *visible,
+                    });
+            }
+            Action::PlayVideo { video } => {
+                let mut video = video.clone();
+                video.id = interpolate(&video.id, &state.vars, &state.global_vars);
+                video.file = interpolate(&video.file, &state.vars, &state.global_vars);
+                // `-next` makes this playback genuinely non-blocking for its
+                // complete lifetime. Keeping the authored blocking flag in
+                // state would make a later `wait` stall behind the video and
+                // prevent the following StopVideo action from ever running.
+                if next {
+                    video.wait_for_finished = false;
+                }
+                let blocking = video.wait_for_finished && !video.looped;
+                state.video_revision_counter = state.video_revision_counter.wrapping_add(1);
+                state.videos.insert(
+                    video.id.clone(),
+                    crate::state::VideoState {
+                        opacity: video.alpha.clamp(0.0, 1.0),
+                        spec: video,
+                        revision: state.video_revision_counter,
+                        elapsed: 0.0,
+                        stopping: false,
+                        fade_out: 0.0,
+                    },
+                );
+                if blocking {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::StopVideo { id, fade_out } => {
+                let id = id
+                    .as_ref()
+                    .map(|id| interpolate(id, &state.vars, &state.global_vars));
+                if *fade_out <= f32::EPSILON {
+                    state
+                        .videos
+                        .retain(|video_id, _| id.as_ref().is_some_and(|id| id != video_id));
+                } else {
+                    for (video_id, video) in &mut state.videos {
+                        if id.as_ref().is_none_or(|id| id == video_id) {
+                            video.stopping = true;
+                            video.fade_out = fade_out.max(0.0);
+                        }
+                    }
+                }
+            }
+            Action::SetPostProcess {
+                targets,
+                effect,
+                duration,
+                easing,
+                blocking,
+            } => {
+                state.camera_effect_targets = *targets;
+                let blocking = *blocking && !next;
+                let target_effect = effect.apply_to(state.camera_effect.clone());
+                if *duration <= f32::EPSILON {
+                    state.camera_effect = target_effect;
+                    state.camera_effect_animation = None;
+                } else {
+                    state.camera_effect_animation = Some(crate::state::PostProcessAnimation {
+                        from: state.camera_effect.clone(),
+                        to: target_effect,
+                        elapsed: 0.0,
+                        duration: *duration,
+                        easing: *easing,
+                        blocking,
+                    });
+                }
+                if blocking && *duration > f32::EPSILON {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::SetCameraBinding {
+                target,
+                bound,
+                distance,
+            } => {
+                let target = interpolate(target, &state.vars, &state.global_vars);
+                let distance = distance.max(f32::EPSILON);
+                if is_background_target(&target) {
+                    state.bg_camera_distance = bound.then_some(distance);
+                } else if is_character_group_target(&target) {
+                    for (id, sprite) in &mut state.sprites {
+                        if !id.starts_with("scene-layer:") {
+                            sprite.camera_distance = bound.then_some(distance);
+                        }
+                    }
+                } else if let Some(sprite) = state.sprites.get_mut(&target) {
+                    sprite.camera_distance = bound.then_some(distance);
+                }
+            }
+            Action::SetCameraTransform {
+                targets,
+                transform,
+                duration,
+                easing,
+                blocking,
+            } => {
+                state.camera_targets = *targets;
+                let target = transform.apply_to(state.camera_transform);
+                let blocking = *blocking && !next;
+                if *duration <= f32::EPSILON {
+                    state.camera_transform = target;
+                    state.camera_transform_animation = None;
+                } else {
+                    state.camera_transform_animation = Some(crate::state::TransformAnimation {
+                        from: state.camera_transform,
+                        to: target,
+                        elapsed: 0.0,
+                        duration: *duration,
+                        easing: *easing,
+                        blocking,
+                    });
+                }
+                if blocking && *duration > f32::EPSILON {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ShakeCamera {
+                targets,
+                shake,
+                blocking,
+            } => {
+                state.camera_targets = *targets;
+                let blocking = *blocking && !next;
+                if shake.amplitude > f32::EPSILON
+                    && shake.frequency > f32::EPSILON
+                    && shake.duration > f32::EPSILON
+                {
+                    state.camera_shake = Some(crate::state::CameraShakeState {
+                        spec: *shake,
+                        elapsed: 0.0,
+                        offset_x: 0.0,
+                        offset_y: 0.0,
+                        blocking,
+                    });
+                    if blocking {
+                        return StepResult::AwaitPresentation;
+                    }
+                } else {
+                    state.camera_shake = None;
+                }
+            }
+            Action::HostCommand {
+                namespace,
+                command,
+                payload,
+            } => state.host_commands.push(crate::state::HostCommandEvent {
+                namespace: namespace.clone(),
+                command: command.clone(),
+                payload: interpolate(payload, &state.vars, &state.global_vars),
+            }),
+            Action::RequestInput { spec } => {
+                state.user_input = Some(crate::state::UserInputState {
+                    variable: interpolate(&spec.variable, &state.vars, &state.global_vars),
+                    title: interpolate(&spec.title, &state.vars, &state.global_vars),
+                    button: interpolate(&spec.confirm_text, &state.vars, &state.global_vars),
+                    value: if spec.value_type == crate::types::InputValueType::Bool {
+                        "false".into()
+                    } else {
+                        String::new()
+                    },
+                    value_type: spec.value_type,
+                    description: interpolate(&spec.description, &state.vars, &state.global_vars),
+                    placeholder: interpolate(&spec.placeholder, &state.vars, &state.global_vars),
+                    required_text: interpolate(
+                        &spec.required_text,
+                        &state.vars,
+                        &state.global_vars,
+                    ),
+                    required: spec.required,
+                    min_length: spec.min_length,
+                    max_length: spec.max_length,
+                    min_value: spec.min_value,
+                    max_value: spec.max_value,
+                    step: spec.step.max(f64::EPSILON),
+                    true_text: interpolate(&spec.true_text, &state.vars, &state.global_vars),
+                    false_text: interpolate(&spec.false_text, &state.vars, &state.global_vars),
+                    error: String::new(),
+                });
+                return StepResult::AwaitInput;
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
@@ -634,6 +1160,10 @@ fn is_background_target(target: &str) -> bool {
     matches!(target, "bg-main" | "background")
 }
 
+fn is_character_group_target(target: &str) -> bool {
+    matches!(target, "characters" | "character-group")
+}
+
 fn preset_initial_transform(
     base: crate::types::SpriteTransform,
     preset: &crate::types::AnimationPreset,
@@ -643,15 +1173,18 @@ fn preset_initial_transform(
     match preset {
         AnimationPreset::Enter => initial.alpha = 0.0,
         AnimationPreset::EnterFromBottom => {
-            initial.offset_y += 180.0;
+            initial.offset_y += 220.0;
+            initial.blur += 5.0;
             initial.alpha = 0.0;
         }
         AnimationPreset::EnterFromLeft => {
-            initial.offset_x -= 220.0;
+            initial.offset_x -= 280.0;
+            initial.blur += 5.0;
             initial.alpha = 0.0;
         }
         AnimationPreset::EnterFromRight => {
-            initial.offset_x += 220.0;
+            initial.offset_x += 280.0;
+            initial.blur += 5.0;
             initial.alpha = 0.0;
         }
         _ => {}
@@ -705,6 +1238,8 @@ pub fn advance(state: &mut State) {
 }
 
 pub fn end_game(state: &mut State) {
+    state.shell_events.clear();
+    state.host_commands.clear();
     state.scene_stack.clear();
     state.dialogue = None;
     state.previous_dialogue = None;
@@ -712,7 +1247,19 @@ pub fn end_game(state: &mut State) {
     state.bg = None;
     state.bg_transition = None;
     state.bg_animation = None;
+    state.bg_keyframe_animation = None;
     state.bg_filter = Default::default();
+    state.bg_films = Default::default();
+    state.bg_camera_distance = None;
+    state.camera_effect = Default::default();
+    state.camera_transform = Default::default();
+    state.camera_targets = crate::types::CameraTargets::NONE;
+    state.camera_transform_animation = None;
+    state.camera_shake = None;
+    state.camera_effect_targets = crate::types::CameraTargets::NONE;
+    state.camera_effect_animation = None;
+    state.videos.clear();
+    state.video_revision_counter = 0;
     state.sprites.clear();
     state.mini_avatar = None;
     state.textbox_hidden = false;
@@ -722,25 +1269,71 @@ pub fn end_game(state: &mut State) {
     state.wait_blocking = false;
     state.intro = None;
     state.film_mode = false;
-    state.particle_effect = None;
+    state.curtain = Default::default();
+    state.floating_text = None;
+    state.portrait_rule = None;
+    state.dialogue_style = Default::default();
+    state.particle_effects.clear();
     state.transition_rules.clear();
     state.bgm.file = None;
     state.bgm.fade_seconds = 0.0;
     state.bgm.revision = state.bgm.revision.wrapping_add(1);
     state.looping_effects.clear();
     state.effect_queue.clear();
+    state.vocal_event = Some(crate::state::VocalCue {
+        file: None,
+        volume: 0.0,
+    });
     state.vars.clear();
     state.cursor = state.program.scene_len(&state.current_scene).unwrap_or(0);
     state.ended = true;
 }
 
 pub fn submit_user_input(state: &mut State) -> bool {
-    let Some(input) = state.user_input.take() else {
+    let Some(input) = state.user_input.as_mut() else {
         return false;
     };
-    state
-        .vars
-        .insert(input.variable, crate::Value::Str(input.value));
+    let trimmed = input.value.trim();
+    input.error.clear();
+    if input.required && trimmed.is_empty() {
+        input.error.clone_from(&input.required_text);
+        return false;
+    }
+    let value = match input.value_type {
+        crate::types::InputValueType::String => {
+            let length = input.value.chars().count();
+            if length < input.min_length {
+                input.error = format!("至少输入 {} 个字符", input.min_length);
+                return false;
+            }
+            if input.max_length > 0 && length > input.max_length {
+                input.error = format!("最多输入 {} 个字符", input.max_length);
+                return false;
+            }
+            crate::Value::Str(input.value.clone())
+        }
+        crate::types::InputValueType::Number => {
+            let Ok(number) = trimmed.parse::<f64>() else {
+                input.error = "请输入有效数字".into();
+                return false;
+            };
+            if input.min_value.is_some_and(|minimum| number < minimum)
+                || input.max_value.is_some_and(|maximum| number > maximum)
+            {
+                input.error = "数值超出允许范围".into();
+                return false;
+            }
+            if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+                crate::Value::Int(number as i64)
+            } else {
+                crate::Value::Float(number)
+            }
+        }
+        crate::types::InputValueType::Bool => crate::Value::Bool(trimmed == "true"),
+    };
+    let variable = input.variable.clone();
+    state.user_input = None;
+    state.vars.insert(variable, value);
     true
 }
 
@@ -809,24 +1402,38 @@ fn resolve_speaker(source: &str, state: &State) -> String {
         .map_or(speaker, crate::Value::display)
 }
 
-fn compile_rich_text(source: &str) -> String {
+fn compile_rich_text(source: &str) -> (String, String, Vec<crate::state::DialoguePause>) {
     let chars = source.chars().collect::<Vec<_>>();
-    let mut output = String::new();
+    let mut text = String::new();
+    let mut markup = String::new();
+    let mut pauses = Vec::new();
     let mut cursor = 0;
     while cursor < chars.len() {
         if chars[cursor] != '[' {
-            output.push(chars[cursor]);
+            text.push(chars[cursor]);
+            markup.push(chars[cursor]);
             cursor += 1;
             continue;
         }
         let Some(label_end) = chars[cursor + 1..].iter().position(|value| *value == ']') else {
-            output.push(chars[cursor]);
+            text.push(chars[cursor]);
+            markup.push(chars[cursor]);
             cursor += 1;
             continue;
         };
         let label_end = cursor + 1 + label_end;
+        let label = chars[cursor + 1..label_end].iter().collect::<String>();
+        if let Some(duration) = parse_inline_wait(&label) {
+            pauses.push(crate::state::DialoguePause {
+                at: text.chars().count(),
+                duration,
+            });
+            cursor = label_end + 1;
+            continue;
+        }
         if chars.get(label_end + 1) != Some(&'(') {
-            output.push(chars[cursor]);
+            text.push(chars[cursor]);
+            markup.push(chars[cursor]);
             cursor += 1;
             continue;
         }
@@ -834,16 +1441,31 @@ fn compile_rich_text(source: &str) -> String {
             .iter()
             .position(|value| *value == ')')
         else {
-            output.push(chars[cursor]);
+            text.push(chars[cursor]);
+            markup.push(chars[cursor]);
             cursor += 1;
             continue;
         };
         let argument_end = label_end + 2 + argument_end;
-        let label = chars[cursor + 1..label_end].iter().collect::<String>();
-        output.push_str(&label);
+        text.push_str(&label);
+        markup.extend(chars[cursor..=argument_end].iter());
         cursor = argument_end + 1;
     }
-    output
+    (text, markup, pauses)
+}
+
+fn parse_inline_wait(label: &str) -> Option<Option<f32>> {
+    let label = label.trim();
+    if label.eq_ignore_ascii_case("wait") {
+        return Some(None);
+    }
+    let milliseconds = label
+        .strip_prefix("wait=")
+        .or_else(|| label.strip_prefix("wait time=\""))?
+        .trim_end_matches('"')
+        .parse::<f32>()
+        .ok()?;
+    Some(Some(milliseconds.max(0.0) / 1000.0))
 }
 
 /// Compatibility no-op. Labels are indexed once when `Program` is built.
@@ -852,9 +1474,30 @@ pub fn index_labels(_state: &mut State) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Value;
     use crate::action::{Choice, SayOptions};
     use crate::types::{BlendMode, Easing, Position, SpriteTransform, TransformPatch};
+    use crate::{Value, VisualFilter};
+
+    #[test]
+    fn inline_wait_is_removed_from_text_and_retained_as_timing() {
+        let (text, markup, pauses) = compile_rich_text("[前](color=#fff)[wait=1000]後[wait]");
+
+        assert_eq!(text, "前後");
+        assert_eq!(markup, "[前](color=#fff)後");
+        assert_eq!(
+            pauses,
+            [
+                crate::state::DialoguePause {
+                    at: 1,
+                    duration: Some(1.0),
+                },
+                crate::state::DialoguePause {
+                    at: 2,
+                    duration: None,
+                },
+            ]
+        );
+    }
 
     fn state_with(actions: Vec<Action>) -> State {
         let mut state = State::new();
@@ -984,6 +1627,7 @@ mod tests {
                 id: "hero".into(),
                 image: "hero.webp".into(),
                 position: Position::center(0.0),
+                layout: crate::SpriteLayout::Natural,
                 transition: Transition::Instant,
                 transform: SpriteTransform::default(),
                 z_index: 0,
@@ -1018,6 +1662,7 @@ mod tests {
                 id: "hero".into(),
                 image: "hero.webp".into(),
                 position: Position::center(0.0),
+                layout: crate::SpriteLayout::Natural,
                 transition: Transition::Instant,
                 transform: base,
                 z_index: 0,
@@ -1045,6 +1690,162 @@ mod tests {
         );
         assert_eq!(animation.duration, 0.5);
         assert_eq!(animation.easing, Easing::EaseOut);
+    }
+
+    #[test]
+    fn character_group_targets_apply_camera_state_to_visible_portraits() {
+        let mut patch = TransformPatch::default();
+        patch.set_offset_x(80.0);
+        patch.set_scale_x(1.1);
+        patch.set_scale_y(1.1);
+        let filter = VisualFilter {
+            blur: 4.0,
+            ..VisualFilter::default()
+        };
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "hero.webp".into(),
+                position: Position::center(0.0),
+                layout: crate::SpriteLayout::Natural,
+                transition: Transition::Instant,
+                transform: SpriteTransform::default(),
+                z_index: 0,
+                blend: BlendMode::Alpha,
+            },
+            Action::SetTransform {
+                id: "characters".into(),
+                transform: patch,
+                duration: 0.0,
+                easing: Easing::Linear,
+            },
+            Action::SetFilter {
+                target: "characters".into(),
+                filter,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(state.sprites["hero"].transform.offset_x, 80.0);
+        assert_eq!(state.sprites["hero"].transform.scale_x, 1.1);
+        assert_eq!(state.sprites["hero"].filter, filter);
+    }
+
+    #[test]
+    fn typed_camera_state_preserves_binding_distance_and_blocking_animation() {
+        let mut patch = TransformPatch::default();
+        patch.set_offset_x(120.0);
+        patch.set_scale_x(1.25);
+        patch.set_scale_y(1.25);
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "hero.webp".into(),
+                position: Position::center(0.0),
+                layout: crate::SpriteLayout::Natural,
+                transition: Transition::Instant,
+                transform: SpriteTransform::default(),
+                z_index: 0,
+                blend: BlendMode::Alpha,
+            },
+            Action::SetCameraBinding {
+                target: "hero".into(),
+                bound: true,
+                distance: 0.8,
+            },
+            Action::SetCameraTransform {
+                targets: crate::CameraTargets::CHARACTERS,
+                transform: patch,
+                duration: 0.4,
+                easing: Easing::EaseInOut,
+                blocking: true,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.sprites["hero"].camera_distance, Some(0.8));
+        assert_eq!(state.camera_targets, crate::CameraTargets::CHARACTERS);
+        let animation = state.camera_transform_animation.as_ref().unwrap();
+        assert_eq!(animation.to.offset_x, 120.0);
+        assert_eq!(animation.to.scale_x, 1.25);
+        assert!(animation.blocking);
+    }
+
+    #[test]
+    fn typed_video_blocks_without_losing_playback_options() {
+        let spec = crate::VideoSpec {
+            id: "opening".into(),
+            file: "opening.mp4".into(),
+            looped: false,
+            muted: false,
+            alpha: 0.75,
+            skippable: false,
+            wait_for_finished: true,
+            mode: crate::VideoMode::Fullscreen,
+        };
+        let mut state = state_with(vec![Action::PlayVideo {
+            video: spec.clone(),
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.videos["opening"].spec, spec);
+        assert_eq!(state.videos["opening"].opacity, 0.75);
+        assert!(state.presentation_blocked());
+    }
+
+    #[test]
+    fn next_video_stays_non_blocking_until_an_explicit_stop() {
+        let spec = crate::VideoSpec {
+            id: "preview".into(),
+            file: "preview.mp4".into(),
+            looped: false,
+            muted: false,
+            alpha: 1.0,
+            skippable: true,
+            wait_for_finished: true,
+            mode: crate::VideoMode::Fullscreen,
+        };
+        let mut state = state_with(vec![Action::Flow {
+            action: Box::new(Action::PlayVideo { video: spec }),
+            when: None,
+            next: true,
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.videos["preview"].spec.wait_for_finished);
+        assert!(!state.presentation_blocked());
+    }
+
+    #[test]
+    fn timed_stop_executes_while_a_next_video_is_still_playing() {
+        let spec = crate::VideoSpec {
+            id: "preview".into(),
+            file: "preview.mp4".into(),
+            looped: false,
+            muted: false,
+            alpha: 1.0,
+            skippable: true,
+            wait_for_finished: true,
+            mode: crate::VideoMode::Fullscreen,
+        };
+        let mut state = state_with(vec![
+            Action::Flow {
+                action: Box::new(Action::PlayVideo { video: spec }),
+                when: None,
+                next: true,
+            },
+            Action::Wait { seconds: 1.1 },
+            Action::StopVideo {
+                id: Some("preview".into()),
+                fade_out: 0.0,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.videos.contains_key("preview"));
+        state.wait_remaining = 0.0;
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.videos.contains_key("preview"));
     }
 
     #[test]
@@ -1327,6 +2128,10 @@ mod tests {
                 volume: 0.8,
                 id: None,
             },
+            Action::Vocal {
+                file: Some("line.ogg".into()),
+                volume: 0.6,
+            },
         ]);
 
         assert_eq!(step(&mut state), StepResult::EndOfScene);
@@ -1338,6 +2143,13 @@ mod tests {
             &state.effect_queue[0],
             crate::state::EffectEvent::Play(cue) if cue.file == "click.wav"
         ));
+        assert_eq!(
+            state.vocal_event,
+            Some(crate::state::VocalCue {
+                file: Some("line.ogg".into()),
+                volume: 0.6,
+            })
+        );
     }
 
     #[test]
@@ -1354,6 +2166,7 @@ mod tests {
                 id: "hero".into(),
                 image: "hero.webp".into(),
                 position: Position::center(0.0),
+                layout: crate::SpriteLayout::Natural,
                 transition: Transition::Instant,
                 transform: Default::default(),
                 z_index: 0,
@@ -1369,8 +2182,9 @@ mod tests {
                 filter,
             },
             Action::FilmMode { enabled: true },
-            Action::Particle {
-                effect: Some("rain".into()),
+            Action::ShowParticles {
+                id: "weather".into(),
+                effect: crate::ParticleEffect::preset("rain"),
             },
             Action::Wait { seconds: 0.5 },
         ]);
@@ -1381,8 +2195,71 @@ mod tests {
         assert_eq!(step(&mut state), StepResult::AwaitPresentation);
         assert_eq!(state.sprites["hero"].filter, filter);
         assert!(state.film_mode);
-        assert_eq!(state.particle_effect.as_deref(), Some("rain"));
+        assert_eq!(state.particle_effects["weather"].effect.preset, "rain");
         assert_eq!(state.wait_remaining, 0.5);
+    }
+
+    #[test]
+    fn sprite_group_exit_only_targets_the_requested_namespace() {
+        let show = |id: &str| Action::ShowSprite {
+            id: id.into(),
+            image: format!("{id}.png"),
+            position: Position::center(0.0),
+            layout: crate::SpriteLayout::Natural,
+            transition: Transition::Instant,
+            transform: Default::default(),
+            z_index: 0,
+            blend: crate::BlendMode::Alpha,
+        };
+        let mut state = state_with(vec![
+            show("scene-layer:clouds"),
+            show("scene-layer:trees"),
+            show("hero"),
+            Action::Flow {
+                action: Box::new(Action::HideSprites {
+                    prefix: "scene-layer:".into(),
+                    transition: Transition::Crossfade(0.4),
+                }),
+                when: None,
+                next: true,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.sprites["scene-layer:clouds"].entering);
+        assert!(!state.sprites["scene-layer:trees"].entering);
+        assert!(state.sprites["hero"].entering);
+    }
+
+    #[test]
+    fn named_particle_emitters_can_fade_independently() {
+        let mut state = state_with(vec![
+            Action::ShowParticles {
+                id: "snow".into(),
+                effect: crate::ParticleEffect {
+                    texture: Some("particles/snow.png".into()),
+                    preset: "MODERATE_SNOW".into(),
+                    count: 80,
+                    wind: None,
+                    gravity: None,
+                    fade_in: 0.25,
+                },
+            },
+            Action::ShowParticles {
+                id: "leaves".into(),
+                effect: crate::ParticleEffect::preset("FALLEN_LEAVES"),
+            },
+            Action::HideParticles {
+                id: Some("snow".into()),
+                duration: 0.4,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(state.particle_effects.len(), 2);
+        assert!(state.particle_effects["snow"].fading_out);
+        assert!(!state.particle_effects["leaves"].fading_out);
+        assert_eq!(state.particle_effects["snow"].fade_out, 0.4);
     }
 
     #[test]
@@ -1448,5 +2325,67 @@ mod tests {
         state.user_input.as_mut().unwrap().value = "小夜".into();
         assert!(submit_user_input(&mut state));
         assert_eq!(state.vars["name"], crate::Value::Str("小夜".into()));
+    }
+
+    #[test]
+    fn typed_editor_input_validates_before_storing_a_native_value() {
+        let mut state = state_with(vec![Action::RequestInput {
+            spec: crate::UserInputSpec {
+                variable: "age".into(),
+                value_type: crate::InputValueType::Number,
+                title: "Age".into(),
+                required_text: "required".into(),
+                min_value: Some(12.0),
+                max_value: Some(18.0),
+                ..Default::default()
+            },
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitInput);
+        state.user_input.as_mut().unwrap().value = "9".into();
+        assert!(!submit_user_input(&mut state));
+        assert!(state.user_input.as_ref().unwrap().error.contains("范围"));
+
+        state.user_input.as_mut().unwrap().value = "16".into();
+        assert!(submit_user_input(&mut state));
+        assert_eq!(state.vars["age"], crate::Value::Int(16));
+    }
+
+    #[test]
+    fn editor_step_limit_stops_before_the_next_source_block() {
+        let mut state = state_with(vec![
+            Action::Set {
+                name: "first".into(),
+                expression: "1".into(),
+                global: false,
+            },
+            Action::Set {
+                name: "second".into(),
+                expression: "2".into(),
+                global: false,
+            },
+        ]);
+
+        assert_eq!(
+            step_until_cursor(&mut state, "main", 1),
+            StepResult::EndOfScene
+        );
+        assert_eq!(state.cursor, 1);
+        assert!(state.vars.contains_key("first"));
+        assert!(!state.vars.contains_key("second"));
+    }
+
+    #[test]
+    fn curtain_action_blocks_until_the_host_finishes_the_fade() {
+        let mut state = state_with(vec![Action::Curtain {
+            visible: true,
+            color: [0.1, 0.2, 0.3, 1.0],
+            duration: 0.4,
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.curtain.blocking);
+        assert_eq!(state.curtain.target, 1.0);
+        assert_eq!(state.curtain.color, [0.1, 0.2, 0.3, 1.0]);
     }
 }

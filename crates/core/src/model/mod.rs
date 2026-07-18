@@ -4,9 +4,10 @@ pub mod action;
 pub mod state;
 pub mod types;
 
-pub use action::{Action, ChoiceTarget, Program, SayOptions};
+pub use action::{Action, ChoiceTarget, Program, SayOptions, SystemUiSlot, TransformKeyframe};
 pub use state::{
-    BgmState, EffectCue, EffectEvent, EffectState, MenuChoice, MenuState, RestoreError, SceneFrame,
-    State,
+    ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,
+    EffectState, HostCommandEvent, MenuChoice, MenuState, PostProcessAnimation, RestoreError,
+    SceneFrame, ShellEvent, State, VideoState, VocalCue,
 };
 pub use types::*;

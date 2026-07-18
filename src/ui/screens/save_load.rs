@@ -239,16 +239,33 @@ type SettingsProxyVisibilityQuery<'w, 's> = Query<
         With<crate::ui::settings_panel::SettingsBlurProxy>,
         Without<crate::ui::settings_panel::SettingsRoot>,
         Without<SaveLoadRoot>,
+        Without<SaveLoadBlurProxy>,
+    ),
+>;
+type SaveLoadRootVisibilityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Visibility),
+    (With<SaveLoadRoot>, Without<SaveLoadBlurProxy>),
+>;
+type SaveLoadProxyVisibilityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Visibility),
+    (
+        With<SaveLoadBlurProxy>,
+        Without<SaveLoadRoot>,
+        Without<crate::ui::settings_panel::SettingsRoot>,
     ),
 >;
 
 #[derive(SystemParam)]
 pub(crate) struct SaveLoadSyncContext<'w, 's> {
     commands: Commands<'w, 's>,
-    roots: Query<'w, 's, (Entity, &'static mut Visibility), With<SaveLoadRoot>>,
+    roots: SaveLoadRootVisibilityQuery<'w, 's>,
     grids: Query<'w, 's, (Entity, &'static mut SaveLoadSlotGrid)>,
     grid_viewports: Query<'w, 's, Entity, With<SaveLoadGridViewport>>,
-    proxies: Query<'w, 's, Entity, With<SaveLoadBlurProxy>>,
+    proxies: SaveLoadProxyVisibilityQuery<'w, 's>,
     camera: Query<'w, 's, Entity, With<DialogCamera>>,
     blur_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
@@ -407,7 +424,10 @@ pub fn sync_save_load(
                 fade.target = 0.0;
             }
         }
-        for entity in &context.proxies {
+        for (entity, mut visibility) in &mut context.proxies {
+            if settings.open {
+                *visibility = Visibility::Inherited;
+            }
             if let Ok(mut fade) = context.fades.get_mut(entity) {
                 fade.target = f32::from(settings.open);
             }
@@ -422,7 +442,8 @@ pub fn sync_save_load(
             }
             fade.target = 1.0;
         }
-        for proxy in &context.proxies {
+        for (proxy, mut proxy_visibility) in &mut context.proxies {
+            *proxy_visibility = Visibility::Inherited;
             if let Ok(mut fade) = context.fades.get_mut(proxy) {
                 fade.target = 1.0;
             }
@@ -506,7 +527,8 @@ pub fn sync_save_load(
                 crate::ui::settings_panel::spawn_menu_watermark(proxy, mode.watermark(), &font);
             });
     } else {
-        for entity in &context.proxies {
+        for (entity, mut visibility) in &mut context.proxies {
+            *visibility = Visibility::Inherited;
             if let Ok(mut fade) = context.fades.get_mut(entity) {
                 fade.target = 1.0;
             }
@@ -1353,4 +1375,24 @@ pub fn handle_save_delete(mouse: Res<ButtonInput<MouseButton>>, mut context: Sav
             crate::ui::support::i18n::delete_slot(context.settings.locale, slot),
             DialogAction::DeleteSlot(slot),
         ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visibility_query_contract(
+        _roots: SaveLoadRootVisibilityQuery,
+        _proxies: SaveLoadProxyVisibilityQuery,
+        _settings_roots: SettingsRootVisibilityQuery,
+        _settings_proxies: SettingsProxyVisibilityQuery,
+    ) {
+    }
+
+    #[test]
+    fn menu_visibility_queries_are_disjoint() {
+        let mut app = App::new();
+        app.add_systems(Update, visibility_query_contract);
+        app.update();
+    }
 }

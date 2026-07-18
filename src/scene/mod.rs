@@ -4,6 +4,7 @@ pub mod background;
 pub(crate) mod effects;
 pub(crate) mod images;
 pub mod sprites;
+pub(crate) mod video;
 
 use bevy::prelude::*;
 
@@ -14,6 +15,7 @@ pub(crate) struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(effects::StageEffectsPlugin)
+            .add_plugins(video::VideoPlugin)
             .insert_resource(audio::VocalPlayback::default())
             .init_resource::<audio::BgmPlayback>()
             .init_resource::<audio::EffectPlayback>()

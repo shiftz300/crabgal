@@ -69,7 +69,8 @@ pub fn sync_bgm(
     mut players: Query<(Entity, &mut BgmPlayer)>,
     mut commands: Commands,
 ) {
-    if context.playback.applied.as_ref() == Some(&context.state.bgm) {
+    if context.playback.applied.as_ref() == Some(&context.state.bgm) && !context.config.is_changed()
+    {
         return;
     }
     context.playback.applied = Some(context.state.bgm.clone());
@@ -130,13 +131,17 @@ pub fn sync_bgm(
 pub fn animate_bgm(
     time: Res<Time>,
     settings: Res<RuntimeSettings>,
+    state: Res<GameState>,
     mut players: Query<(Entity, &mut BgmPlayer, Option<&mut AudioSink>)>,
     mut activity: ResMut<AudioAnimationActivity>,
     mut commands: Commands,
 ) {
     let mut animating = false;
     for (entity, mut player, sink) in &mut players {
-        if player.direction == FadeDirection::Settled && !settings.is_changed() {
+        if player.direction == FadeDirection::Settled
+            && !settings.is_changed()
+            && !state.is_changed()
+        {
             continue;
         }
         if player.direction != FadeDirection::Settled {
@@ -154,7 +159,11 @@ pub fn animate_bgm(
         };
         if let Some(mut sink) = sink {
             sink.set_volume(Volume::Linear(
-                player.base_volume * settings.master_volume * settings.bgm_volume * player.envelope,
+                player.base_volume
+                    * settings.master_volume
+                    * settings.bgm_volume
+                    * player.envelope
+                    * if state.videos.is_empty() { 1.0 } else { 0.0 },
             ));
         }
         if progress >= 1.0 {
@@ -182,7 +191,8 @@ pub fn sync_effects(
     mut commands: Commands,
 ) {
     let has_event = !state.effect_queue.is_empty();
-    let loops_changed = playback.loops != state.looping_effects;
+    let config_changed = config.is_changed();
+    let loops_changed = config_changed || playback.loops != state.looping_effects;
     let needs_title_cleanup = state.ended && (has_event || loops_changed || !players.is_empty());
     if !has_event && !loops_changed && !needs_title_cleanup {
         return;
@@ -220,15 +230,17 @@ pub fn sync_effects(
     }
     for (entity, player) in &players {
         let Some(id) = &player.id else { continue };
-        if state.looping_effects.get(id).is_none_or(|effect| {
-            effect.file != playback.loops.get(id).map_or("", |old| old.file.as_str())
-                || (effect.volume - player.base_volume).abs() > f32::EPSILON
-        }) {
+        if config_changed
+            || state.looping_effects.get(id).is_none_or(|effect| {
+                effect.file != playback.loops.get(id).map_or("", |old| old.file.as_str())
+                    || (effect.volume - player.base_volume).abs() > f32::EPSILON
+            })
+        {
             commands.entity(entity).despawn();
         }
     }
     for (id, effect) in &state.looping_effects {
-        if playback.loops.get(id) == Some(effect) {
+        if !config_changed && playback.loops.get(id) == Some(effect) {
             continue;
         }
         spawn_effect(
@@ -289,16 +301,17 @@ pub fn apply_bus_volumes(
     mut vocals: Query<&mut AudioSink, (With<VocalPlayer>, Without<BgmPlayer>)>,
     mut effects: EffectSinkQuery,
 ) {
-    if !settings.is_changed() {
+    if !settings.is_changed() && !state.is_changed() {
         return;
     }
     let line_volume = state
         .dialogue
         .as_ref()
         .map_or(1.0, |dialogue| dialogue.volume);
+    let video_duck = if state.videos.is_empty() { 1.0 } else { 0.0 };
     for mut sink in &mut vocals {
         sink.set_volume(Volume::Linear(
-            line_volume * settings.master_volume * settings.vocal_volume,
+            line_volume * settings.master_volume * settings.vocal_volume * video_duck,
         ));
     }
     for (player, mut sink) in &mut effects {
@@ -309,7 +322,7 @@ pub fn apply_bus_volumes(
 }
 
 pub fn sync_vocal(
-    state: Res<GameState>,
+    mut state: ResMut<GameState>,
     config: Res<GameConfigResource>,
     settings: Res<RuntimeSettings>,
     asset_server: Res<AssetServer>,
@@ -323,7 +336,24 @@ pub fn sync_vocal(
             .as_ref()
             .map(|vocal| (state.current_scene.clone(), state.cursor, vocal.clone()))
     });
-    if playback.key == key {
+    if let Some(cue) = state.vocal_event.take() {
+        playback.key.clone_from(&key);
+        for entity in &players {
+            commands.entity(entity).despawn();
+        }
+        if let Some(file) = cue.file {
+            spawn_vocal(
+                &mut commands,
+                &asset_server,
+                &config,
+                &settings,
+                cue.volume,
+                &file,
+            );
+        }
+        return;
+    }
+    if playback.key == key && !config.is_changed() {
         return;
     }
     playback.key.clone_from(&key);

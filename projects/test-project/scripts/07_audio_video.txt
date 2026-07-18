@@ -1,0 +1,28 @@
+; BGM, voice, one-shot and looped effects, streaming video, active stop and skipOff.
+
+bgm:calibration_bgm.opus -volume=32 -enter=450
+绫:07-01 WebGAL K 原 BGM《葉ノ舞》淡入并循环；BGM 滑动条应立即响应。
+绫:07-02 这句使用 WebGAL 原语音；重播按钮与 Backlog 语音按钮都应从头播放。 -calibration_voice.opus -volume=50
+
+playEffect:calibration_effect.opus -volume=38
+绫:07-03 WebGAL K 原点击音完整播放一次，不进入循环状态。
+playEffect:calibration_effect.opus -volume=18 -id=calibration-loop
+绫:07-04 原点击音按 id 进入循环；SFX 滑动条应实时控制它。
+playEffect:none -id=calibration-loop
+绫:07-05 带 id 的循环音效已经停止。
+
+绫:07-06 视频一：第一次单击后右上角才出现闪动小圆环，再次快速单击跳过；不操作则完整播放。
+playVideo:calibration_pan.mp4
+绫:07-07 视频二：非阻塞启动，约 1.1 秒后主动 StopVideo。
+playVideo:calibration_pan.mp4 -next
+wait:1100
+playVideo:none
+绫:07-08 视频三：skipOff，双击不能跳过，也不出现可跳过圆环，必须等待播放结束。
+playVideo:calibration_pan.mp4 -skipOff
+
+stopBgm -enter=350
+绫:07-09 stopBgm 使 BGM 平滑淡出。
+bgm:calibration_bgm.opus -volume=14 -enter=250
+wait:450
+bgm:none -enter=350
+绫:07-10 bgm:none 使用同一停止状态，音频总线验收结束。

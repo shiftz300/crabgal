@@ -19,7 +19,7 @@
 | `cargo check --workspace --all-targets --no-default-features --locked` | **通过** | 精简 feature 构建 |
 | `cargo build --release --workspace` | **通过（较早一轮）** | macOS aarch64 release workspace |
 
-全量测试重点覆盖：Program fingerprint 与存档恢复门控、v5 codec 与损坏检测、profile/read/gallery 分离、CLEAR ALL 生命周期、递归 loader、稀疏 TransformPatch、Choice 条件、标题输入边沿、Opus 解码/seek、16:9 视口、blur 区域、Textbox 布局，以及 Dialog 输入光标和 UI 输入 scope。
+全量测试重点覆盖：Program fingerprint 与存档恢复门控、v7 codec 与损坏检测、profile/read/gallery 分离、CLEAR ALL 生命周期、递归 loader、稀疏 TransformPatch、Choice 条件、标题输入边沿、Opus 解码/seek、16:9 视口、blur 区域、Textbox 布局，以及 Dialog 输入光标和 UI 输入 scope。
 
 ## GUI 与视觉边界
 

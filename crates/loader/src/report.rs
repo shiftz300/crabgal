@@ -1,3 +1,4 @@
+use crabgal_core::config::GameConfig;
 use crabgal_core::{Action, ChoiceTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,8 @@ pub enum ResourceKind {
     Voice,
     Bgm,
     Effect,
+    Particle,
+    Video,
     MiniAvatar,
 }
 
@@ -35,6 +38,22 @@ pub struct ResourceRef {
     pub kind: ResourceKind,
     pub action_index: usize,
     pub span: SourceSpan,
+}
+
+impl ResourceRef {
+    /// Resolves an adapter-neutral resource reference through the active
+    /// project's aliases and conventional fallback directories.
+    pub fn resolved_path(&self, config: &GameConfig) -> String {
+        match self.kind {
+            ResourceKind::Background => config.bg_path(&self.path),
+            ResourceKind::Figure | ResourceKind::MiniAvatar => config.figure_path(&self.path),
+            ResourceKind::Voice => config.voice_path(&self.path),
+            ResourceKind::Bgm => config.bgm_path(&self.path),
+            ResourceKind::Effect => config.effect_path(&self.path),
+            ResourceKind::Particle => self.path.clone(),
+            ResourceKind::Video => config.video_path(&self.path),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +109,15 @@ fn collect_references(
         Action::Effect {
             file: Some(file), ..
         } => resource(file, ResourceKind::Effect),
+        Action::Vocal {
+            file: Some(file), ..
+        } => resource(file, ResourceKind::Voice),
+        Action::ShowParticles { effect, .. } => {
+            if let Some(texture) = &effect.texture {
+                resource(texture, ResourceKind::Particle);
+            }
+        }
+        Action::PlayVideo { video } => resource(&video.file, ResourceKind::Video),
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
         Action::Unlock { kind, file, .. } => resource(
             file,

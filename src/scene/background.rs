@@ -5,9 +5,12 @@ use crabgal_core::SpriteTransform;
 use crabgal_core::dissolve;
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
+use crate::runtime::platform::DesignViewport;
+use crate::runtime::resources::GameConfigResource;
 use crate::runtime::resources::GameState;
-use crate::runtime::viewport::DesignViewport;
-use crate::scene::effects::material::{StageMaterial, StageQuad, animation_uniform};
+use crate::scene::effects::material::{
+    StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BackgroundLayer {
@@ -28,7 +31,14 @@ pub(crate) struct BackgroundRenderCache {
     transition: Option<crabgal_core::state::BgTransition>,
     transform: SpriteTransform,
     filter: crabgal_core::VisualFilter,
+    films: crabgal_core::FilmEffects,
     animation: Option<crabgal_core::state::PresetAnimation>,
+    camera_distance: Option<f32>,
+    camera_transform: SpriteTransform,
+    camera_targets: crabgal_core::CameraTargets,
+    camera_shake: Option<crabgal_core::state::CameraShakeState>,
+    camera_effect: crabgal_core::PostProcessEffect,
+    camera_effect_targets: crabgal_core::CameraTargets,
 }
 
 impl BackgroundRenderCache {
@@ -38,7 +48,14 @@ impl BackgroundRenderCache {
             && self.transition == state.bg_transition
             && self.transform == state.bg_transform
             && self.filter == state.bg_filter
+            && self.films == state.bg_films
             && self.animation == state.bg_animation
+            && self.camera_distance == state.bg_camera_distance
+            && self.camera_transform == state.camera_transform
+            && self.camera_targets == state.camera_targets
+            && self.camera_shake == state.camera_shake
+            && self.camera_effect == state.camera_effect
+            && self.camera_effect_targets == state.camera_effect_targets
     }
 
     fn capture(&mut self, state: &GameState) {
@@ -47,7 +64,14 @@ impl BackgroundRenderCache {
         self.transition.clone_from(&state.bg_transition);
         self.transform = state.bg_transform;
         self.filter = state.bg_filter;
+        self.films = state.bg_films;
         self.animation.clone_from(&state.bg_animation);
+        self.camera_distance = state.bg_camera_distance;
+        self.camera_transform = state.camera_transform;
+        self.camera_targets = state.camera_targets;
+        self.camera_shake.clone_from(&state.camera_shake);
+        self.camera_effect.clone_from(&state.camera_effect);
+        self.camera_effect_targets = state.camera_effect_targets;
     }
 }
 
@@ -75,6 +99,7 @@ type BackgroundQuery<'w, 's> = Query<
 #[derive(SystemParam)]
 pub(crate) struct BackgroundSyncContext<'w, 's> {
     state: Res<'w, GameState>,
+    config: Res<'w, GameConfigResource>,
     asset_server: Res<'w, AssetServer>,
     commands: Commands<'w, 's>,
     backgrounds: BackgroundQuery<'w, 's>,
@@ -88,6 +113,7 @@ pub(crate) struct BackgroundSyncContext<'w, 's> {
 pub fn sync_bg(context: BackgroundSyncContext) {
     let BackgroundSyncContext {
         state,
+        config,
         asset_server,
         mut commands,
         mut backgrounds,
@@ -99,7 +125,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
     let Ok(window) = windows.single() else {
         return;
     };
-    if cache.matches(&state) && !window.is_changed() {
+    if cache.matches(&state) && !config.is_changed() && !window.is_changed() {
         return;
     }
     cache.capture(&state);
@@ -119,7 +145,14 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             BackgroundLayer::Current => current_exists = true,
         }
         node.image = background.image.to_owned();
-        let image = asset_server.load(format!("background/{}", background.image));
+        let image = asset_server.load(config.bg_path(background.image));
+        let post = effective_post_process(
+            &state.camera_effect,
+            state.camera_effect_targets,
+            "scene",
+            state.bg_camera_distance,
+        );
+        let lut = active_lut_preset(&post).map(|preset| asset_server.load(config.lut_path(preset)));
         apply_background_entity(
             &mut commands,
             entity,
@@ -131,6 +164,9 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             background,
             viewport,
             state.bg_filter,
+            camera_transform(&state),
+            post,
+            lut,
             existing_sprite,
             true,
         );
@@ -145,7 +181,14 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             continue;
         }
         let mut transform = Transform::default();
-        let image = asset_server.load(format!("background/{}", background.image));
+        let image = asset_server.load(config.bg_path(background.image));
+        let post = effective_post_process(
+            &state.camera_effect,
+            state.camera_effect_targets,
+            "scene",
+            state.bg_camera_distance,
+        );
+        let lut = active_lut_preset(&post).map(|preset| asset_server.load(config.lut_path(preset)));
         let entity = commands
             .spawn((
                 Name::new(format!("background::{:?}", background.layer)),
@@ -168,14 +211,32 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             &background,
             viewport,
             state.bg_filter,
+            camera_transform(&state),
+            post,
+            lut,
             None,
             false,
         );
     }
 }
 
+fn camera_transform(state: &GameState) -> Option<(SpriteTransform, f32)> {
+    let targeted = state.camera_targets.scene();
+    state
+        .bg_camera_distance
+        .filter(|_| targeted)
+        .map(|distance| {
+            let mut camera = state.camera_transform;
+            if let Some(shake) = &state.camera_shake {
+                camera.offset_x += shake.offset_x;
+                camera.offset_y += shake.offset_y;
+            }
+            (camera, distance.max(f32::EPSILON))
+        })
+}
+
 fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
-    let animation = animation_uniform(state.bg_animation.as_ref());
+    let animation = animation_uniform(state.bg_films, state.bg_animation.as_ref());
     if let Some(transition) = &state.bg_transition {
         let mut backgrounds = Vec::with_capacity(2);
         if let Some(previous) = &transition.from {
@@ -189,17 +250,29 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
             });
         }
         if !transition.to.is_empty() {
+            let mut transform = state.bg_transform;
+            let slide_remaining = 1.0 - dissolve::smooth_fade(transition.progress);
+            match transition.kind {
+                crabgal_core::Transition::SlideFromLeft(_) => {
+                    transform.offset_x -= DESIGN_WIDTH * slide_remaining;
+                }
+                crabgal_core::Transition::SlideFromRight(_) => {
+                    transform.offset_x += DESIGN_WIDTH * slide_remaining;
+                }
+                _ => {}
+            }
             backgrounds.push(DesiredBackground {
                 layer: BackgroundLayer::Current,
                 image: &transition.to,
                 alpha: match transition.kind {
-                    crabgal_core::Transition::Wipe(_) | crabgal_core::Transition::Dissolve(_) => {
-                        1.0
-                    }
+                    crabgal_core::Transition::Wipe(_)
+                    | crabgal_core::Transition::Dissolve(_)
+                    | crabgal_core::Transition::SlideFromLeft(_)
+                    | crabgal_core::Transition::SlideFromRight(_) => 1.0,
                     _ => dissolve::smooth_fade(transition.progress),
                 },
                 z: 0.0,
-                transform: state.bg_transform,
+                transform,
                 transition: match transition.kind {
                     crabgal_core::Transition::Wipe(_) => {
                         Vec4::new(1.0, transition.progress, animation.z, animation.w)
@@ -242,10 +315,19 @@ fn apply_background_entity(
     background: &DesiredBackground<'_>,
     viewport: DesignViewport,
     mut filter: crabgal_core::VisualFilter,
+    camera: Option<(SpriteTransform, f32)>,
+    post: crabgal_core::PostProcessEffect,
+    lut: Option<Handle<Image>>,
     existing_sprite: Option<Mut<'_, Sprite>>,
     existing_entity: bool,
 ) {
-    let effect = background.transform;
+    let mut effect = background.transform;
+    if let Some((camera, distance)) = camera {
+        effect.offset_x -= camera.offset_x / distance;
+        effect.offset_y += camera.offset_y / distance;
+        effect.scale_x *= camera.scale_x;
+        effect.scale_y *= camera.scale_y;
+    }
     filter.blur += effect.blur;
     let size = Vec2::new(
         DESIGN_WIDTH * effect.scale_x,
@@ -256,7 +338,11 @@ fn apply_background_entity(
         + Vec2::new(effect.offset_x, effect.offset_y) * viewport.scale)
         .extend(background.z);
     transform.rotation = Quat::from_rotation_z(effect.rotation);
-    if !filter.is_identity() || background.transition.x > 0.0 || background.transition.z > 0.0 {
+    if !filter.is_identity()
+        || !post.is_identity()
+        || background.transition.x > 0.0
+        || background.transition.z > 0.0
+    {
         transform.scale = size.extend(1.0);
         let material = StageMaterial::new(
             image,
@@ -264,6 +350,8 @@ fn apply_background_entity(
             filter,
             crabgal_core::BlendMode::Alpha,
             background.transition,
+            &post,
+            lut,
         );
         let material_handle = if let Some(existing) = existing_material {
             if let Some(mut current) = materials.get_mut(&existing.0) {
@@ -318,6 +406,7 @@ mod tests {
             text: "hello".into(),
             markup: "hello".into(),
             visible_chars: 1,
+            pauses: Vec::new(),
             vocal: None,
             volume: 1.0,
             auto_advance: false,

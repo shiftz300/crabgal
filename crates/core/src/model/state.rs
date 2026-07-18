@@ -8,9 +8,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::action::{ChoiceTarget, Program};
+use crate::action::{ChoiceTarget, Program, SystemUiSlot};
 use crate::types::{
-    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, Transition, Value, VisualFilter,
+    AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing, FilmEffects,
+    InputValueType, ParticleEffect, PortraitStyle, Position, PostProcessEffect, SpriteLayout,
+    SpriteTransform, Transition, Value, VideoSpec, VisualFilter,
 };
 
 /// The complete game state at any point in time.
@@ -22,6 +24,11 @@ pub struct State {
     pub program: Arc<Program>,
     /// Stable identity of the compiled program this state was created against.
     pub program_fingerprint: u64,
+    /// Typed, transient commands consumed by the engine-owned UI shell.
+    #[serde(skip, default)]
+    pub shell_events: Vec<ShellEvent>,
+    #[serde(skip, default)]
+    pub host_commands: Vec<HostCommandEvent>,
     /// Current scene being executed.
     pub current_scene: String,
     /// Index into the current scene's action list.
@@ -38,8 +45,32 @@ pub struct State {
     pub bg_transition: Option<BgTransition>,
     pub bg_transform: SpriteTransform,
     pub bg_transform_animation: Option<TransformAnimation>,
+    #[serde(skip, default)]
+    pub bg_keyframe_animation: Option<KeyframeAnimation>,
     pub bg_filter: VisualFilter,
+    #[serde(default)]
+    pub bg_films: FilmEffects,
     pub bg_animation: Option<PresetAnimation>,
+    #[serde(default)]
+    pub bg_camera_distance: Option<f32>,
+    #[serde(default)]
+    pub camera_effect: PostProcessEffect,
+    #[serde(default)]
+    pub camera_transform: SpriteTransform,
+    #[serde(default)]
+    pub camera_targets: CameraTargets,
+    #[serde(skip, default)]
+    pub camera_transform_animation: Option<TransformAnimation>,
+    #[serde(skip, default)]
+    pub camera_shake: Option<CameraShakeState>,
+    #[serde(default)]
+    pub camera_effect_targets: CameraTargets,
+    #[serde(skip, default)]
+    pub camera_effect_animation: Option<PostProcessAnimation>,
+    #[serde(skip, default)]
+    pub videos: HashMap<String, VideoState>,
+    #[serde(skip, default)]
+    pub video_revision_counter: u64,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
     /// Current dialogue text (if any).
@@ -59,7 +90,18 @@ pub struct State {
     pub wait_blocking: bool,
     pub intro: Option<IntroState>,
     pub film_mode: bool,
-    pub particle_effect: Option<String>,
+    #[serde(skip, default)]
+    pub curtain: CurtainState,
+    #[serde(skip, default)]
+    pub floating_text: Option<FloatingTextState>,
+    #[serde(skip, default)]
+    pub portrait_rule: Option<PortraitRuleState>,
+    /// Active dialogue presentation. It is editor/runtime presentation state,
+    /// so legacy save payloads remain stable; direct preview reconstructs it by
+    /// replaying source actions up to the selected block.
+    #[serde(skip, default)]
+    pub dialogue_style: DialogueStyle,
+    pub particle_effects: HashMap<String, ActiveParticleEffect>,
     pub transition_rules: HashMap<String, TransitionRule>,
 
     // ── Audio state ──
@@ -69,6 +111,9 @@ pub struct State {
     /// One-shot effects emitted since the presentation layer last synchronized.
     #[serde(skip)]
     pub effect_queue: Vec<EffectEvent>,
+    /// Standalone voice command waiting for the audio backend.
+    #[serde(skip, default)]
+    pub vocal_event: Option<VocalCue>,
 
     // ── Choice state ──
     /// Active choice menu (if any).
@@ -94,6 +139,38 @@ pub struct State {
     pub unlocked_cg: HashMap<String, String>,
     #[serde(skip, default)]
     pub unlocked_bgm: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellEvent {
+    SetAutoplay(bool),
+    SetSystemUi { slot: SystemUiSlot, visible: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCommandEvent {
+    pub namespace: String,
+    pub command: String,
+    pub payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoState {
+    pub spec: VideoSpec,
+    pub revision: u64,
+    pub elapsed: f32,
+    pub opacity: f32,
+    pub stopping: bool,
+    pub fade_out: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraShakeState {
+    pub spec: CameraShakeSpec,
+    pub elapsed: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blocking: bool,
 }
 
 pub const DEFAULT_BACKLOG_CAPACITY: usize = 200;
@@ -135,6 +212,12 @@ pub enum EffectEvent {
     Stop,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VocalCue {
+    pub file: Option<String>,
+    pub volume: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DialogueKey {
     pub scene: String,
@@ -159,13 +242,25 @@ pub struct RollbackSnapshot {
     pub bg: Option<String>,
     pub bg_transform: SpriteTransform,
     pub bg_filter: VisualFilter,
+    #[serde(default)]
+    pub bg_films: FilmEffects,
+    #[serde(default)]
+    pub bg_camera_distance: Option<f32>,
+    #[serde(default)]
+    pub camera_effect: PostProcessEffect,
+    #[serde(default)]
+    pub camera_transform: SpriteTransform,
+    #[serde(default)]
+    pub camera_targets: CameraTargets,
+    #[serde(default)]
+    pub camera_effect_targets: CameraTargets,
     pub sprites: HashMap<String, Sprite>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
     pub film_mode: bool,
-    pub particle_effect: Option<String>,
+    pub particle_effects: HashMap<String, ActiveParticleEffect>,
     pub transition_rules: HashMap<String, TransitionRule>,
     pub bgm: BgmState,
     pub looping_effects: HashMap<String, EffectState>,
@@ -218,6 +313,9 @@ pub struct Sprite {
     pub image: String,
     /// Design-space position.
     pub position: Position,
+    /// Figure baseline or editor-authored scene-canvas layout.
+    #[serde(default)]
+    pub layout: SpriteLayout,
     /// Current animation progress (0.0 → 1.0).
     pub transition_progress: f32,
     /// Active enter/exit transition.
@@ -233,10 +331,17 @@ pub struct Sprite {
     #[serde(default)]
     pub transform: SpriteTransform,
     pub transform_animation: Option<TransformAnimation>,
+    #[serde(skip, default)]
+    pub keyframe_animation: Option<KeyframeAnimation>,
     pub filter: VisualFilter,
+    #[serde(default)]
+    pub films: FilmEffects,
     pub animation: Option<PresetAnimation>,
     pub z_index: i32,
     pub blend: BlendMode,
+    /// Camera-space distance when this sprite participates in camera moves.
+    #[serde(default)]
+    pub camera_distance: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -265,18 +370,181 @@ pub struct IntroState {
     pub blocking: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurtainState {
+    pub color: [f32; 4],
+    pub current: f32,
+    pub from: f32,
+    pub target: f32,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub blocking: bool,
+}
+
+impl Default for CurtainState {
+    fn default() -> Self {
+        Self {
+            color: [0.0, 0.0, 0.0, 1.0],
+            current: 0.0,
+            from: 0.0,
+            target: 0.0,
+            elapsed: 0.0,
+            duration: 0.0,
+            blocking: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloatingTextState {
+    pub text: String,
+    pub position: [f32; 2],
+    pub font_size: f32,
+    pub color: [f32; 4],
+    pub fade_in: f32,
+    pub hold: f32,
+    pub fade_out: f32,
+    pub elapsed: f32,
+    pub blocking: bool,
+}
+
+impl FloatingTextState {
+    pub fn duration(&self) -> f32 {
+        self.fade_in + self.hold + self.fade_out
+    }
+
+    pub fn alpha(&self) -> f32 {
+        if self.elapsed < self.fade_in && self.fade_in > f32::EPSILON {
+            return (self.elapsed / self.fade_in).clamp(0.0, 1.0);
+        }
+        let fade_out_start = self.fade_in + self.hold;
+        if self.elapsed > fade_out_start && self.fade_out > f32::EPSILON {
+            return (1.0 - (self.elapsed - fade_out_start) / self.fade_out).clamp(0.0, 1.0);
+        }
+        1.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortraitRuleState {
+    pub enabled: bool,
+    pub character_ids: HashSet<String>,
+    pub speaking: PortraitStyle,
+    pub others: PortraitStyle,
+    pub narration: PortraitStyle,
+    pub duration: f32,
+    pub easing: Easing,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserInputState {
     pub variable: String,
     pub title: String,
     pub button: String,
     pub value: String,
+    #[serde(default)]
+    pub value_type: InputValueType,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub required_text: String,
+    #[serde(default = "default_input_required")]
+    pub required: bool,
+    #[serde(default)]
+    pub min_length: usize,
+    #[serde(default)]
+    pub max_length: usize,
+    #[serde(default)]
+    pub min_value: Option<f64>,
+    #[serde(default)]
+    pub max_value: Option<f64>,
+    #[serde(default = "default_input_step")]
+    pub step: f64,
+    #[serde(default)]
+    pub true_text: String,
+    #[serde(default)]
+    pub false_text: String,
+    #[serde(skip, default)]
+    pub error: String,
+}
+
+const fn default_input_required() -> bool {
+    true
+}
+
+const fn default_input_step() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveParticleEffect {
+    pub effect: ParticleEffect,
+    pub elapsed: f32,
+    pub fading_out: bool,
+    pub fade_out: f32,
+}
+
+impl ActiveParticleEffect {
+    pub fn new(effect: ParticleEffect) -> Self {
+        Self {
+            effect,
+            elapsed: 0.0,
+            fading_out: false,
+            fade_out: 0.0,
+        }
+    }
+
+    pub fn opacity(&self) -> f32 {
+        if self.fading_out {
+            if self.fade_out <= f32::EPSILON {
+                return 0.0;
+            }
+            return (1.0 - self.elapsed / self.fade_out).clamp(0.0, 1.0);
+        }
+        if self.effect.fade_in <= f32::EPSILON {
+            1.0
+        } else {
+            (self.elapsed / self.effect.fade_in).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn begin_fade_out(&mut self, duration: f32) {
+        self.elapsed = 0.0;
+        self.fading_out = true;
+        self.fade_out = duration.max(0.0);
+    }
+
+    pub fn finished(&self) -> bool {
+        self.fading_out && self.elapsed >= self.fade_out
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TransformAnimation {
     pub from: SpriteTransform,
     pub to: SpriteTransform,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub easing: Easing,
+    pub blocking: bool,
+}
+
+/// Runtime timeline assembled from adapter-neutral keyframe patches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeAnimation {
+    pub initial: SpriteTransform,
+    pub frames: Vec<TransformAnimation>,
+    pub index: usize,
+    pub repeat_remaining: u32,
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostProcessAnimation {
+    pub from: PostProcessEffect,
+    pub to: PostProcessEffect,
     pub elapsed: f32,
     pub duration: f32,
     pub easing: Easing,
@@ -308,9 +576,20 @@ pub struct Dialogue {
     pub markup: String,
     /// Number of visible characters (typewriter effect).
     pub visible_chars: usize,
+    /// Zero-width pauses embedded in the authored dialogue markup.
+    #[serde(default)]
+    pub pauses: Vec<DialoguePause>,
     pub vocal: Option<String>,
     pub volume: f32,
     pub auto_advance: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DialoguePause {
+    /// Number of visible characters before this pause becomes active.
+    pub at: usize,
+    /// Timed pause in seconds; `None` waits for player input.
+    pub duration: Option<f32>,
 }
 
 impl State {
@@ -402,13 +681,19 @@ impl State {
                 bg: self.bg.clone(),
                 bg_transform: self.bg_transform,
                 bg_filter: self.bg_filter,
+                bg_films: self.bg_films,
+                bg_camera_distance: self.bg_camera_distance,
+                camera_effect: self.camera_effect.clone(),
+                camera_transform: self.camera_transform,
+                camera_targets: self.camera_targets,
+                camera_effect_targets: self.camera_effect_targets,
                 sprites: self.sprites.clone(),
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
                 textbox_hidden: self.textbox_hidden,
                 textbox_auto_hidden: self.textbox_auto_hidden,
                 film_mode: self.film_mode,
-                particle_effect: self.particle_effect.clone(),
+                particle_effects: self.particle_effects.clone(),
                 transition_rules: self.transition_rules.clone(),
                 bgm: self.bgm.clone(),
                 looping_effects: self.looping_effects.clone(),
@@ -454,7 +739,18 @@ impl State {
         self.bg_transition = None;
         self.bg_transform = snapshot.bg_transform;
         self.bg_filter = snapshot.bg_filter;
+        self.bg_films = snapshot.bg_films;
+        self.bg_camera_distance = snapshot.bg_camera_distance;
+        self.camera_effect = snapshot.camera_effect;
+        self.camera_transform = snapshot.camera_transform;
+        self.camera_targets = snapshot.camera_targets;
+        self.camera_transform_animation = None;
+        self.camera_shake = None;
+        self.camera_effect_targets = snapshot.camera_effect_targets;
+        self.camera_effect_animation = None;
+        self.videos.clear();
         self.bg_transform_animation = None;
+        self.bg_keyframe_animation = None;
         self.bg_animation = None;
         self.sprites = snapshot.sprites;
         self.dialogue = Some(snapshot.dialogue);
@@ -474,7 +770,7 @@ impl State {
         self.wait_blocking = false;
         self.intro = None;
         self.film_mode = snapshot.film_mode;
-        self.particle_effect = snapshot.particle_effect;
+        self.particle_effects = snapshot.particle_effects;
         self.transition_rules = snapshot.transition_rules;
         self.ended = false;
         self.backlog.truncate(index + 1);
@@ -484,6 +780,27 @@ impl State {
     pub fn presentation_blocked(&self) -> bool {
         (self.wait_blocking && self.wait_remaining > 0.0)
             || self.intro.as_ref().is_some_and(|intro| intro.blocking)
+            || self.curtain.blocking
+            || self
+                .floating_text
+                .as_ref()
+                .is_some_and(|text| text.blocking)
+            || self
+                .videos
+                .values()
+                .any(|video| video.spec.wait_for_finished && !video.spec.looped && !video.stopping)
+            || self
+                .camera_effect_animation
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
+            || self
+                .camera_transform_animation
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
+            || self
+                .camera_shake
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
             || self
                 .bg_animation
                 .as_ref()
@@ -502,11 +819,19 @@ impl State {
                 .bg_transform_animation
                 .as_ref()
                 .is_some_and(|animation| animation.blocking)
+            || self
+                .bg_keyframe_animation
+                .as_ref()
+                .is_some_and(|animation| animation.blocking)
             || self.sprites.values().any(|sprite| {
                 sprite
                     .transform_animation
                     .as_ref()
                     .is_some_and(|animation| animation.blocking)
+                    || sprite
+                        .keyframe_animation
+                        .as_ref()
+                        .is_some_and(|animation| animation.blocking)
                     || (sprite.transition_blocking
                         && ((sprite.entering && sprite.transition_progress < 1.0)
                             || (!sprite.entering && sprite.transition_progress > 0.0)))
@@ -559,6 +884,7 @@ mod tests {
             text: text.into(),
             markup: text.into(),
             visible_chars: 0,
+            pauses: Vec::new(),
             vocal: None,
             volume: 1.0,
             auto_advance: false,

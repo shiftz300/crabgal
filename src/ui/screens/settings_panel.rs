@@ -8,7 +8,7 @@ use bevy::ui::FocusPolicy;
 use bevy::window::{MonitorSelection, WindowMode};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::resources::{GameConfigResource, ProjectRoot};
+use crate::runtime::resources::{ContentProjectResource, GameConfigResource, ProjectRoot};
 use crate::storage::settings::{RuntimeSettings, UiLocale};
 use crate::ui::control_bar::{BlurStrength, ButtonAction, SkipMode, ToggleStates, UiBlurSource};
 use crate::ui::foundation::{
@@ -33,6 +33,12 @@ const SETTINGS_COLUMN_GAP: f32 = 30.0;
 const SETTINGS_ROW_GAP: f32 = 24.0;
 const SETTING_LABEL_SIZE: f32 = 30.0;
 const SETTING_OPTION_SIZE: f32 = 24.0;
+
+#[derive(Clone, Copy)]
+struct SettingsProjectContext<'a> {
+    config: &'a GameConfigResource,
+    content: &'a ContentProjectResource,
+}
 
 #[derive(Clone, Copy)]
 struct SettingsGridCell {
@@ -547,6 +553,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
     blur_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
     config: Res<'w, GameConfigResource>,
+    content: Res<'w, ContentProjectResource>,
     fades: Query<'w, 's, &'static mut MenuFade>,
     watermarks: Query<'w, 's, (&'static mut SettingsWatermark, &'static mut Text)>,
     save_roots:
@@ -755,7 +762,15 @@ pub fn sync_settings(
         ))
         .with_children(|root| {
             spawn_header(root, MenuHeaderActive::Config, &font, &icon_font);
-            spawn_options_content(root, &ui, &settings, &context.config, &font, &icon_font);
+            spawn_options_content(
+                root,
+                &ui,
+                &settings,
+                &context.config,
+                &context.content,
+                &font,
+                &icon_font,
+            );
         });
 }
 
@@ -786,6 +801,7 @@ fn spawn_options_content(
     ui: &SettingsUi,
     settings: &RuntimeSettings,
     config: &GameConfigResource,
+    project: &ContentProjectResource,
     font: &Handle<Font>,
     icon_font: &Handle<Font>,
 ) {
@@ -863,7 +879,16 @@ fn spawn_options_content(
                             SettingsPage::About,
                         ] {
                             spawn_settings_page(
-                                content, page, ui, settings, config, font, icon_font,
+                                content,
+                                page,
+                                ui,
+                                settings,
+                                SettingsProjectContext {
+                                    config,
+                                    content: project,
+                                },
+                                font,
+                                icon_font,
                             );
                         }
                     });
@@ -1058,7 +1083,7 @@ fn spawn_settings_page(
     page: SettingsPage,
     ui: &SettingsUi,
     settings: &RuntimeSettings,
-    config: &GameConfigResource,
+    project: SettingsProjectContext<'_>,
     font: &Handle<Font>,
     icon_font: &Handle<Font>,
 ) {
@@ -1155,7 +1180,7 @@ fn spawn_settings_page(
                 spawn_text_preview(content, settings, font, SettingsGridCell::spanning(1, 3, 3));
             }
             SettingsPage::Audio => spawn_sliders(content, AUDIO_SLIDERS, settings, font, 0),
-            SettingsPage::About => spawn_about_page(content, config, settings.locale, font),
+            SettingsPage::About => spawn_about_page(content, project, settings.locale, font),
         });
 }
 
@@ -1188,16 +1213,17 @@ fn spawn_sliders(
 
 fn spawn_about_page(
     content: &mut ChildSpawnerCommands,
-    config: &GameConfigResource,
+    project: SettingsProjectContext<'_>,
     locale: UiLocale,
     font: &Handle<Font>,
 ) {
+    let config = project.config;
     let project_description = if config.project.description.trim().is_empty() {
         tr(locale, UiText::NoProjectDescription)
     } else {
         config.project.description.trim()
     };
-    let loader_tree = loader_tree(config);
+    let loader_tree = loader_tree(project);
     let runtime = format!(
         "crabgal {}  ·  {} / {}",
         env!("CARGO_PKG_VERSION"),
@@ -1260,7 +1286,8 @@ fn spawn_about_page(
         });
 }
 
-fn loader_tree(config: &GameConfigResource) -> String {
+fn loader_tree(project: SettingsProjectContext<'_>) -> String {
+    let config = project.config;
     let mut lines = vec!["ASSET".to_owned()];
     for source in &config.adapter.asset {
         lines.push(format!(
@@ -1268,7 +1295,11 @@ fn loader_tree(config: &GameConfigResource) -> String {
             format_loader_source(&source.format, &source.path)
         ));
     }
-    lines.push(format!("SCRIPT\n  [{}]", config.adapter.script));
+    let script = project
+        .content
+        .project_adapter()
+        .unwrap_or(config.adapter.script.as_str());
+    lines.push(format!("SCRIPT\n  [{script}]"));
     lines.push(format!("STORE\n  [{}]", config.adapter.store));
     lines.join("\n")
 }

@@ -1,4 +1,0 @@
-; Called scene: natural EOF must return to the action after the choice.
-changeFigure:thinking.webp -right -id=guest -fade -duration=350
-访客:这是 callScene 子场景；下一句结束后会回到主场景。
-changeFigure:none -right -id=guest -fade -duration=350

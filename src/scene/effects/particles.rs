@@ -1,143 +1,616 @@
+use std::collections::{HashMap, HashSet};
+
+use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::system::SystemParam;
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::sprite_render::AlphaMode2d;
+use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH, ParticleEffect};
 
+use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::GameState;
-use crate::runtime::viewport::DesignViewport;
 
-const PARTICLE_COUNT: usize = 72;
+const MAX_PARTICLE_COUNT: usize = 256;
+const FALLBACK_TEXTURE_SIZE: u32 = 32;
+
+#[derive(SystemParam)]
+pub(crate) struct ParticleAssets<'w> {
+    images: ResMut<'w, Assets<Image>>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<ColorMaterial>>,
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct ParticleRuntime {
-    effect: Option<String>,
+    effects: HashMap<String, ParticleEffect>,
+    native_textures: HashMap<ParticleKind, Handle<Image>>,
 }
 
-#[derive(Component)]
-pub(crate) struct StageParticle {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ParticleKind {
+    Snow,
+    Rain,
+    Firefly,
+    Leaf,
+    Ambient,
+}
+
+struct Particle {
     position: Vec2,
     velocity: Vec2,
     size: Vec2,
     drift: f32,
+    phase: f32,
+    angular_velocity: f32,
+    rotation: f32,
+    base_alpha: f32,
+    depth: f32,
+    cycle: u32,
+}
+
+/// One ECS/render entity per emitter. Individual particles are packed into a
+/// single dynamic mesh instead of paying transform, sprite extraction and
+/// batching costs for every flake or rain streak.
+#[derive(Component)]
+pub(crate) struct ParticleBatch {
+    effect_id: String,
+    kind: ParticleKind,
+    particles: Vec<Particle>,
+    acceleration: Vec2,
+    drag: f32,
+    color: Color,
+    mesh: Handle<Mesh>,
+    material: Handle<ColorMaterial>,
 }
 
 pub(crate) fn sync(
     state: Res<GameState>,
     mut runtime: ResMut<ParticleRuntime>,
-    particles: Query<Entity, With<StageParticle>>,
+    batches: Query<(Entity, &ParticleBatch)>,
+    asset_server: Res<AssetServer>,
+    mut assets: ParticleAssets,
     mut commands: Commands,
 ) {
-    if runtime.effect == state.particle_effect {
+    let desired = state
+        .particle_effects
+        .iter()
+        .map(|(id, active)| (id.clone(), active.effect.clone()))
+        .collect::<HashMap<_, _>>();
+    if runtime.effects == desired {
         return;
     }
-    for entity in &particles {
-        commands.entity(entity).despawn();
+
+    let changed = runtime
+        .effects
+        .keys()
+        .chain(desired.keys())
+        .filter(|id| runtime.effects.get(*id) != desired.get(*id))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut stale_meshes = Vec::new();
+    let mut stale_materials = Vec::new();
+    for (entity, batch) in &batches {
+        if changed.contains(&batch.effect_id) {
+            stale_meshes.push(batch.mesh.id());
+            stale_materials.push(batch.material.id());
+            commands.entity(entity).despawn();
+        }
     }
-    runtime.effect.clone_from(&state.particle_effect);
-    let Some(effect) = runtime.effect.as_deref() else {
-        return;
-    };
-    let style = ParticleStyle::from_name(effect);
-    for index in 0..PARTICLE_COUNT {
-        let x = hash(index as u32 * 3 + 1) * DESIGN_WIDTH;
-        let y = hash(index as u32 * 3 + 2) * DESIGN_HEIGHT;
-        let speed = style.speed * (0.72 + hash(index as u32 * 3 + 3) * 0.56);
-        let size = style.size * (0.65 + hash(index as u32 + 91) * 0.7);
+    for mesh in stale_meshes {
+        assets.meshes.remove(mesh);
+    }
+    for material in stale_materials {
+        assets.materials.remove(material);
+    }
+
+    for id in &changed {
+        let Some(effect) = desired.get(id) else {
+            continue;
+        };
+        let style = ParticleStyle::from_effect(effect);
+        let texture = if let Some(path) = effect.texture.as_ref().filter(|path| !path.is_empty()) {
+            asset_server.load::<Image>(path.clone())
+        } else if let Some(texture) = runtime.native_textures.get(&style.kind) {
+            texture.clone()
+        } else {
+            let texture = assets.images.add(native_particle_texture(style.kind));
+            runtime.native_textures.insert(style.kind, texture.clone());
+            texture
+        };
+        let count = if effect.count == 0 {
+            style.count
+        } else {
+            usize::from(effect.count)
+        }
+        .clamp(1, MAX_PARTICLE_COUNT);
+
+        let particles = (0..count)
+            .map(|index| {
+                let depth = random(index, 1).mul_add(0.7, 0.3);
+                let scale = (0.64 + random(index, 2) * 0.72) * (0.55 + depth * 0.7);
+                let size = style.size * scale;
+                let speed = style.speed * (0.72 + random(index, 3) * 0.56);
+                let horizontal = if style.kind == ParticleKind::Rain {
+                    effect.wind.unwrap_or(style.wind) * (speed / style.speed)
+                } else {
+                    effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * style.spread
+                };
+                let position = Vec2::new(
+                    random(index, 5) * (DESIGN_WIDTH + 240.0) - 120.0,
+                    random(index, 6) * (DESIGN_HEIGHT + 160.0) - 40.0,
+                );
+                let base_alpha = style.alpha * (0.72 + random(index, 7) * 0.28) * depth.sqrt();
+                let rotation = if style.kind == ParticleKind::Rain {
+                    style.rotation
+                } else {
+                    style.rotation + random(index, 8) * std::f32::consts::TAU
+                };
+                Particle {
+                    position,
+                    velocity: Vec2::new(horizontal, -speed),
+                    size: Vec2::new(size * style.aspect, size),
+                    drift: style.drift * (0.55 + random(index, 9) * 0.9),
+                    phase: random(index, 10) * std::f32::consts::TAU,
+                    angular_velocity: style.angular_velocity
+                        * (0.55 + random(index, 11) * 0.9)
+                        * if random(index, 12) > 0.5 { 1.0 } else { -1.0 },
+                    rotation,
+                    base_alpha,
+                    depth,
+                    cycle: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mesh = assets.meshes.add(particle_mesh(count));
+        let material = assets.materials.add(ColorMaterial {
+            color: Color::WHITE,
+            alpha_mode: AlphaMode2d::Blend,
+            texture: Some(texture),
+            ..default()
+        });
         commands.spawn((
-            Name::new(format!("particle::{effect}::{index}")),
-            StageParticle {
-                position: Vec2::new(x, y),
-                velocity: Vec2::new(style.wind, -speed),
-                size: Vec2::new(size * style.aspect, size),
-                drift: hash(index as u32 + 181) * std::f32::consts::TAU,
+            Name::new(format!("particle-batch::{id}")),
+            ParticleBatch {
+                effect_id: id.clone(),
+                kind: style.kind,
+                particles,
+                acceleration: Vec2::new(
+                    style.acceleration_x,
+                    -effect.gravity.unwrap_or(style.acceleration_y),
+                ),
+                drag: style.drag,
+                color: style.color,
+                mesh: mesh.clone(),
+                material: material.clone(),
             },
-            Sprite::from_color(style.color, Vec2::ONE),
+            Mesh2d(mesh),
+            MeshMaterial2d(material),
             Transform::from_xyz(0.0, 0.0, 0.8),
             RenderLayers::layer(0),
         ));
     }
+    runtime.effects = desired;
 }
 
 pub(crate) fn animate(
     time: Res<Time>,
+    state: Res<GameState>,
     windows: Query<&Window>,
-    mut particles: Query<(&mut StageParticle, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut batches: Query<(&mut ParticleBatch, &mut Transform)>,
 ) {
-    if particles.is_empty() {
+    if batches.is_empty() {
         return;
     }
     let Ok(window) = windows.single() else {
         return;
     };
     let viewport = DesignViewport::from_window(window);
-    let delta = time.delta_secs();
+    let delta = time.delta_secs().max(0.0);
     let elapsed = time.elapsed_secs();
-    for (mut particle, mut transform) in &mut particles {
-        let velocity = particle.velocity;
-        particle.position += velocity * delta;
-        particle.position.x += (elapsed * 1.7 + particle.drift).sin() * 18.0 * delta;
-        if particle.position.y < -40.0 {
-            particle.position.y = DESIGN_HEIGHT + 30.0;
+    for (mut batch, mut transform) in &mut batches {
+        let Some(effect) = state.particle_effects.get(&batch.effect_id) else {
+            continue;
+        };
+        let kind = batch.kind;
+        let acceleration = batch.acceleration;
+        let drag_factor = (-batch.drag * delta).exp();
+        let opacity = effect.opacity();
+        let linear = batch.color.to_linear().to_f32_array();
+        let mesh_handle = batch.mesh.clone();
+        let Some(mut mesh) = meshes.get_mut(&mesh_handle) else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+        else {
+            continue;
+        };
+        for (index, particle) in batch.particles.iter_mut().enumerate() {
+            particle.velocity += acceleration * delta;
+            particle.velocity *= drag_factor;
+            particle.position += particle.velocity * delta;
+            particle.rotation += particle.angular_velocity * delta;
+
+            let margin = particle.size.max_element().max(24.0) * 2.0;
+            if particle.position.y < -margin {
+                particle.cycle = particle.cycle.wrapping_add(1);
+                particle.position.y = DESIGN_HEIGHT + margin;
+                particle.position.x = respawn_x(particle);
+            }
+            if particle.position.x < -margin {
+                particle.position.x = DESIGN_WIDTH + margin;
+            } else if particle.position.x > DESIGN_WIDTH + margin {
+                particle.position.x = -margin;
+            }
+
+            let motion = match kind {
+                ParticleKind::Snow | ParticleKind::Leaf => Vec2::new(
+                    (elapsed * 1.15 + particle.phase).sin() * particle.drift,
+                    0.0,
+                ),
+                ParticleKind::Firefly => Vec2::new(
+                    (elapsed * 0.83 + particle.phase).sin() * particle.drift,
+                    (elapsed * 1.07 + particle.phase * 0.7).cos() * particle.drift * 0.45,
+                ),
+                ParticleKind::Rain | ParticleKind::Ambient => Vec2::ZERO,
+            };
+            write_particle_quad(
+                positions,
+                index,
+                particle.position + motion,
+                particle.size,
+                particle.rotation,
+                particle.depth,
+            );
         }
-        if particle.position.x < -40.0 {
-            particle.position.x = DESIGN_WIDTH + 30.0;
-        } else if particle.position.x > DESIGN_WIDTH + 30.0 {
-            particle.position.x = -40.0;
+        let Some(VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
+        else {
+            continue;
+        };
+        for (index, particle) in batch.particles.iter().enumerate() {
+            let pulse = if kind == ParticleKind::Firefly {
+                0.7 + 0.3 * (elapsed * 2.1 + particle.phase).sin().abs()
+            } else {
+                1.0
+            };
+            let alpha = (particle.base_alpha * opacity * pulse).clamp(0.0, 1.0);
+            colors[index * 4..index * 4 + 4].fill([linear[0], linear[1], linear[2], alpha]);
         }
-        transform.translation = viewport.world_from_design(particle.position).extend(0.8);
-        transform.scale = (particle.size * viewport.scale).extend(1.0);
-        transform.rotation = Quat::from_rotation_z(particle.drift + elapsed * 0.15);
+        transform.translation = viewport.content_center().extend(0.8);
+        transform.scale = Vec3::splat(viewport.scale);
     }
 }
 
+fn particle_mesh(count: usize) -> Mesh {
+    let mut uvs = Vec::with_capacity(count * 4);
+    let mut indices = Vec::with_capacity(count * 6);
+    for index in 0..count {
+        uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+        let base = (index * 4) as u32;
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0; 3]; count * 4]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0, 1.0, 1.0, 0.0]; count * 4]);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+fn write_particle_quad(
+    positions: &mut [[f32; 3]],
+    particle_index: usize,
+    center: Vec2,
+    size: Vec2,
+    rotation: f32,
+    depth: f32,
+) {
+    let center = center - Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * 0.5;
+    let half = size * 0.5;
+    let (sin, cos) = rotation.sin_cos();
+    for (corner_index, corner) in [
+        Vec2::new(-half.x, -half.y),
+        Vec2::new(half.x, -half.y),
+        Vec2::new(half.x, half.y),
+        Vec2::new(-half.x, half.y),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rotated = Vec2::new(
+            corner.x * cos - corner.y * sin,
+            corner.x * sin + corner.y * cos,
+        );
+        let point = center + rotated;
+        positions[particle_index * 4 + corner_index] = [point.x, point.y, depth * 0.001];
+    }
+}
+
+#[derive(Clone, Copy)]
 struct ParticleStyle {
+    kind: ParticleKind,
     color: Color,
+    count: usize,
     speed: f32,
     wind: f32,
+    spread: f32,
+    acceleration_x: f32,
+    acceleration_y: f32,
+    drag: f32,
     size: f32,
     aspect: f32,
+    alpha: f32,
+    drift: f32,
+    rotation: f32,
+    angular_velocity: f32,
 }
 
 impl ParticleStyle {
-    fn from_name(name: &str) -> Self {
-        let name = name.to_ascii_lowercase();
-        if name.contains("snow") {
-            Self {
-                color: Color::srgba(1.0, 1.0, 1.0, 0.78),
-                speed: 90.0,
-                wind: 18.0,
-                size: 10.0,
-                aspect: 1.0,
+    fn from_effect(effect: &ParticleEffect) -> Self {
+        match effect.preset.to_ascii_uppercase().as_str() {
+            "LIGHT_SNOW" => Self::snow(64, 58.0, 11.0),
+            "MODERATE_SNOW" => Self::snow(120, 86.0, 12.0),
+            "HEAVY_SNOW" => Self::snow(192, 125.0, 13.0),
+            "LIGHT_RAIN" => Self::rain(56, 660.0),
+            "MODERATE_RAIN" => Self::rain(112, 820.0),
+            "HEAVY_RAIN" => Self::rain(192, 980.0),
+            "FIREFLY" => Self::firefly(),
+            "FALLEN_LEAVES" => Self::leaves(),
+            name if name.contains("SNOW") => Self::snow(96, 82.0, 12.0),
+            name if name.contains("RAIN") => Self::rain(96, 760.0),
+            name if name.contains("FIREFLY") || name.contains("LIGHT") => Self::firefly(),
+            name if name.contains("LEAF") || name.contains("SAKURA") || name.contains("PETAL") => {
+                Self::leaves()
             }
-        } else if name.contains("sakura") || name.contains("petal") {
-            Self {
-                color: Color::srgba(1.0, 0.68, 0.78, 0.82),
-                speed: 125.0,
-                wind: 42.0,
-                size: 13.0,
-                aspect: 1.7,
-            }
-        } else if name.contains("dust") || name.contains("light") {
-            Self {
-                color: Color::srgba(1.0, 0.88, 0.54, 0.55),
-                speed: 36.0,
-                wind: -8.0,
-                size: 7.0,
-                aspect: 1.0,
-            }
-        } else {
-            Self {
-                color: Color::srgba(0.72, 0.86, 1.0, 0.62),
-                speed: 720.0,
-                wind: -80.0,
-                size: 18.0,
-                aspect: 0.12,
-            }
+            _ => Self::ambient(),
         }
     }
+
+    fn snow(count: usize, speed: f32, size: f32) -> Self {
+        Self {
+            kind: ParticleKind::Snow,
+            color: Color::WHITE,
+            count,
+            speed,
+            wind: 12.0,
+            spread: 26.0,
+            acceleration_x: 0.0,
+            acceleration_y: 8.0,
+            drag: 0.035,
+            size,
+            aspect: 1.0,
+            alpha: 0.82,
+            drift: 22.0,
+            rotation: 0.0,
+            angular_velocity: 0.45,
+        }
+    }
+
+    fn rain(count: usize, speed: f32) -> Self {
+        Self {
+            kind: ParticleKind::Rain,
+            color: Color::srgba(0.72, 0.84, 0.96, 1.0),
+            count,
+            speed,
+            wind: -105.0,
+            spread: 36.0,
+            acceleration_x: 0.0,
+            acceleration_y: 0.0,
+            drag: 0.01,
+            size: 64.0,
+            aspect: 0.14,
+            alpha: 0.72,
+            drift: 0.0,
+            rotation: -0.14,
+            angular_velocity: 0.0,
+        }
+    }
+
+    fn firefly() -> Self {
+        Self {
+            kind: ParticleKind::Firefly,
+            color: Color::srgba(1.0, 0.86, 0.38, 1.0),
+            count: 46,
+            speed: -7.0,
+            wind: 2.0,
+            spread: 8.0,
+            acceleration_x: 0.0,
+            acceleration_y: 0.0,
+            drag: 0.22,
+            size: 20.0,
+            aspect: 1.0,
+            alpha: 0.72,
+            drift: 30.0,
+            rotation: 0.0,
+            angular_velocity: 0.0,
+        }
+    }
+
+    fn leaves() -> Self {
+        Self {
+            kind: ParticleKind::Leaf,
+            color: Color::srgba(0.78, 0.48, 0.16, 1.0),
+            count: 30,
+            speed: 46.0,
+            wind: -18.0,
+            spread: 18.0,
+            acceleration_x: -1.0,
+            acceleration_y: 5.0,
+            drag: 0.08,
+            size: 34.0,
+            aspect: 0.58,
+            alpha: 0.88,
+            drift: 20.0,
+            rotation: 0.0,
+            angular_velocity: 0.54,
+        }
+    }
+
+    fn ambient() -> Self {
+        Self {
+            kind: ParticleKind::Ambient,
+            color: Color::srgba(0.78, 0.88, 1.0, 1.0),
+            count: 56,
+            speed: 62.0,
+            wind: 0.0,
+            spread: 18.0,
+            acceleration_x: 0.0,
+            acceleration_y: 4.0,
+            drag: 0.08,
+            size: 9.0,
+            aspect: 1.0,
+            alpha: 0.55,
+            drift: 0.0,
+            rotation: 0.0,
+            angular_velocity: 0.0,
+        }
+    }
+}
+
+fn soft_particle_texture() -> Image {
+    let center = (FALLBACK_TEXTURE_SIZE as f32 - 1.0) * 0.5;
+    let mut rgba = Vec::with_capacity((FALLBACK_TEXTURE_SIZE * FALLBACK_TEXTURE_SIZE * 4) as usize);
+    for y in 0..FALLBACK_TEXTURE_SIZE {
+        for x in 0..FALLBACK_TEXTURE_SIZE {
+            let distance = Vec2::new(x as f32 - center, y as f32 - center).length() / center;
+            let alpha = (1.0 - distance).clamp(0.0, 1.0);
+            let alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+            rgba.extend_from_slice(&[255, 255, 255, (alpha * 255.0).round() as u8]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: FALLBACK_TEXTURE_SIZE,
+            height: FALLBACK_TEXTURE_SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn native_particle_texture(kind: ParticleKind) -> Image {
+    match kind {
+        ParticleKind::Rain => procedural_texture(|point| {
+            let across = (point.x * 5.5).abs();
+            let along = (1.0 - point.y.abs()).clamp(0.0, 1.0);
+            (1.0 - across).clamp(0.0, 1.0).powi(2) * along.sqrt()
+        }),
+        ParticleKind::Leaf => procedural_texture(|point| {
+            let along = point.y.abs();
+            let half_width = (1.0 - along).max(0.0).sqrt() * 0.68;
+            let body = 1.0 - (point.x.abs() / half_width.max(0.001));
+            body.clamp(0.0, 1.0).powf(0.7)
+        }),
+        ParticleKind::Firefly => procedural_texture(|point| {
+            let distance = point.length();
+            (1.0 - distance).clamp(0.0, 1.0).powf(1.6)
+        }),
+        ParticleKind::Snow | ParticleKind::Ambient => soft_particle_texture(),
+    }
+}
+
+fn procedural_texture(alpha_at: impl Fn(Vec2) -> f32) -> Image {
+    let center = (FALLBACK_TEXTURE_SIZE as f32 - 1.0) * 0.5;
+    let mut rgba = Vec::with_capacity((FALLBACK_TEXTURE_SIZE * FALLBACK_TEXTURE_SIZE * 4) as usize);
+    for y in 0..FALLBACK_TEXTURE_SIZE {
+        for x in 0..FALLBACK_TEXTURE_SIZE {
+            let point = Vec2::new(x as f32 - center, y as f32 - center) / center;
+            let alpha = alpha_at(point).clamp(0.0, 1.0);
+            rgba.extend_from_slice(&[255, 255, 255, (alpha * 255.0).round() as u8]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: FALLBACK_TEXTURE_SIZE,
+            height: FALLBACK_TEXTURE_SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn respawn_x(particle: &Particle) -> f32 {
+    let seed = particle
+        .cycle
+        .wrapping_mul(1_597_334_677)
+        .wrapping_add(particle.phase.to_bits());
+    hash(seed) * (DESIGN_WIDTH + 240.0) - 120.0
+}
+
+fn random(index: usize, salt: u32) -> f32 {
+    hash((index as u32).wrapping_mul(31).wrapping_add(salt))
 }
 
 fn hash(value: u32) -> f32 {
     let value = value.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let value = ((value >> ((value >> 28) + 4)) ^ value).wrapping_mul(277_803_737);
     ((value >> 22) ^ value) as f32 / u32::MAX as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presets_have_bounded_gal_friendly_density() {
+        for preset in [
+            "LIGHT_SNOW",
+            "MODERATE_SNOW",
+            "HEAVY_SNOW",
+            "LIGHT_RAIN",
+            "MODERATE_RAIN",
+            "HEAVY_RAIN",
+            "FIREFLY",
+            "FALLEN_LEAVES",
+        ] {
+            let style = ParticleStyle::from_effect(&ParticleEffect::preset(preset));
+            assert!((1..=MAX_PARTICLE_COUNT).contains(&style.count));
+            assert!(style.size > 0.0);
+            assert!(style.alpha > 0.0 && style.alpha <= 1.0);
+        }
+    }
+
+    #[test]
+    fn fallback_texture_has_soft_transparent_edges() {
+        let image = soft_particle_texture();
+        let data = image.data.as_ref().unwrap();
+        assert_eq!(data[3], 0);
+        let center =
+            ((FALLBACK_TEXTURE_SIZE / 2 * FALLBACK_TEXTURE_SIZE + FALLBACK_TEXTURE_SIZE / 2) * 4
+                + 3) as usize;
+        assert!(data[center] > 240);
+    }
+
+    #[test]
+    fn native_weather_textures_are_not_reused_snow_discs() {
+        let rain = native_particle_texture(ParticleKind::Rain);
+        let leaf = native_particle_texture(ParticleKind::Leaf);
+        let rain = rain.data.as_ref().unwrap();
+        let leaf = leaf.data.as_ref().unwrap();
+        assert_ne!(rain, leaf);
+
+        let style = ParticleStyle::from_effect(&ParticleEffect::preset("LIGHT_RAIN"));
+        assert_eq!(style.kind, ParticleKind::Rain);
+        assert_eq!(style.angular_velocity, 0.0);
+    }
+
+    #[test]
+    fn emitter_mesh_batches_four_vertices_and_six_indices_per_particle() {
+        let mesh = particle_mesh(192);
+        assert_eq!(mesh.count_vertices(), 192 * 4);
+        assert_eq!(mesh.indices().unwrap().len(), 192 * 6);
+    }
 }

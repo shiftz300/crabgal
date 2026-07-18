@@ -6,7 +6,7 @@ A visual novel engine built with Rust and Bevy 0.19, with WebGAL script compatib
 
 ```bash
 # Run in dev mode (hot reload, windowed preview)
-cargo run -- dev projects/test-project
+cargo dev projects/test-project
 ```
 
 ## WebGAL Script Format
@@ -37,7 +37,7 @@ crabgal/
 - **Bevy UI** — dialogue box, control bar, modal confirmation dialogs
 - **WebGAL migration path** — parse and execute a growing, explicitly tracked subset of `.txt` scripts
 - **Hot reload** — script file changes are watched during development
-- **Quick save/load** — v5 Postcard slots, Program fingerprints, confirmation UI and independent WebP previews
+- **Quick save/load** — v6 Postcard slots, Program fingerprints, confirmation UI and independent WebP previews
 - **Sprite animations** — fade, slide, instant transitions
 - **Choice UI** — deterministic choice state with mouse and keyboard interaction
 - **Scene flow** — `changeScene`, nested `callScene` returns and terminal `end`
@@ -45,7 +45,8 @@ crabgal/
 - **Local asset pipeline** — parser-generated manifests and bounded Bevy `AssetServer` prefetch
 - **Local vocal playback** — WebGAL vocal shorthand and per-line volume
 - **Unified Opus distribution** — streaming decode for BGM, voice, effects and engine UI audio
-- **Project-sized audio build** — release packaging compiles only the codecs used by project assets
+- **Project-sized media build** — release packaging compiles only the codecs and video backend used by project assets
+- **Native video** — bounded streaming FFmpeg decode, dynamic GPU textures, audio ducking and double-click skip
 - **Auto / Skip modes** — A toggles auto, S toggles skip, Shift+S switches Read/All, Ctrl temporarily skips
 - **Rich dialogue** — styled spans, ruby/furigana, concatenation and player input
 - **Unified input** — keyboard, mouse, touch and gamepad actions behind one runtime API
@@ -107,8 +108,10 @@ and [engine advantages](dev/docs/reference/11-engine-advantages.md) defines the 
 | 6 — Text | Done; awaiting acceptance | Rich spans, ruby/furigana, concatenation and player input |
 | 7 — Engineering | Done; awaiting acceptance | Unified input, gallery unlocks, Hexz, app bundle and encrypted release CI |
 
-Phase 7 keeps video, Live2D, Spine and Steam as explicit optional adapters. They are not linked into
-the default engine until a backend and its distribution/licensing policy are selected.
+Video is represented by typed core state and uses the optional `video-ffmpeg` native backend. `cargo dev`
+and `cargo preview` enable it; release packaging detects project media and enables only the required
+features. `cargo dev-lite` is the explicit no-FFmpeg development build. Live2D, Spine and Steam remain
+optional integrations.
 
 ## Credits
 

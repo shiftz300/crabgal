@@ -7,6 +7,7 @@ pub(crate) enum UiText {
     Save,
     Load,
     Config,
+    Title,
     Back,
     Confirm,
     Cancel,
@@ -79,6 +80,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhCn, Save) => "存档",
         (ZhCn, Load) => "读档",
         (ZhCn, Config) => "设置",
+        (ZhCn, Title) => "标题画面",
         (ZhCn, Back) => "返回",
         (ZhCn, Confirm) => "确定",
         (ZhCn, Cancel) => "取消",
@@ -134,6 +136,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhTw, Save) => "存檔",
         (ZhTw, Load) => "讀檔",
         (ZhTw, Config) => "設定",
+        (ZhTw, Title) => "標題畫面",
         (ZhTw, Back) => "返回",
         (ZhTw, Confirm) => "確定",
         (ZhTw, Cancel) => "取消",
@@ -189,6 +192,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (Ja, Save) => "セーブ",
         (Ja, Load) => "ロード",
         (Ja, Config) => "設定",
+        (Ja, Title) => "タイトル画面",
         (Ja, Back) => "戻る",
         (Ja, Confirm) => "確認",
         (Ja, Cancel) => "キャンセル",
@@ -244,6 +248,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (En, Save) => "SAVE",
         (En, Load) => "LOAD",
         (En, Config) => "CONFIG",
+        (En, Title) => "TITLE",
         (En, Back) => "BACK",
         (En, Confirm) => "CONFIRM",
         (En, Cancel) => "CANCEL",
@@ -339,11 +344,12 @@ mod tests {
     }
 
     #[test]
-    fn translates_ui_without_touching_title_copy() {
+    fn translates_menu_routes_without_touching_project_title_copy() {
         assert_eq!(tr(UiLocale::ZhCn, UiText::System), "系统");
+        assert_eq!(tr(UiLocale::ZhCn, UiText::Title), "标题画面");
         assert_eq!(tr(UiLocale::Ja, UiText::System), "システム");
         assert_eq!(tr(UiLocale::En, UiText::System), "SYSTEM");
-        // START / CONTINUE / LOAD / EXTRA / OPTIONS / EXIT deliberately do
-        // not exist in UiText: title-screen copy is project-facing chrome.
+        // START / CONTINUE / EXTRA / OPTIONS / EXIT remain project-facing
+        // title-screen copy. Title here is only the shared menu route label.
     }
 }

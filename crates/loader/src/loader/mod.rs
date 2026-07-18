@@ -2,15 +2,19 @@ mod scenes;
 mod source;
 mod watcher;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use crabgal_core::config::AssetSourceConfig;
+use crabgal_core::config::{AssetSourceConfig, GameConfig};
 
-use crate::LoaderRegistry;
+use crate::{LoaderRegistry, StructuredSceneLoader};
 
 pub use scenes::{LoadedScene, load_scenes, load_scenes_with};
-pub use source::{ContentBackend, ContentMount, HexzArchive, HexzCursor, HexzFile, hexz_password};
+pub use source::{
+    ContentBackend, ContentFile, ContentMount, HexzArchive, HexzCursor, HexzFile, hexz_password,
+};
 pub use watcher::ScriptWatcher;
 
 /// Mounted roots produced by one complete format adapter.
@@ -77,13 +81,76 @@ impl SourceMount {
 
 /// Ordered mounted view of a project. Consumers resolve from the end, so a
 /// later source deterministically overrides an earlier source.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ContentProject {
     pub root: PathBuf,
     pub sources: Vec<SourceMount>,
+    scene_loader: Option<Arc<dyn StructuredSceneLoader>>,
+}
+
+impl fmt::Debug for ContentProject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContentProject")
+            .field("root", &self.root)
+            .field("sources", &self.sources)
+            .field(
+                "scene_loader",
+                &self.scene_loader.as_ref().map(|loader| loader.name()),
+            )
+            .finish()
+    }
 }
 
 impl ContentProject {
+    pub(crate) fn with_structured_scenes(
+        root: PathBuf,
+        sources: Vec<SourceMount>,
+        loader: Arc<dyn StructuredSceneLoader>,
+    ) -> Self {
+        Self {
+            root,
+            sources,
+            scene_loader: Some(loader),
+        }
+    }
+
+    pub(crate) fn scene_loader(&self) -> Option<&Arc<dyn StructuredSceneLoader>> {
+        self.scene_loader.as_ref()
+    }
+
+    /// Editor-native project adapter currently providing structured scenes.
+    /// `None` means scenes come from the configured script language adapter.
+    pub fn project_adapter(&self) -> Option<&'static str> {
+        self.scene_loader.as_ref().map(|loader| loader.name())
+    }
+
+    pub fn is_debug_cursor_change(&self, path: &Path) -> bool {
+        self.scene_loader
+            .as_ref()
+            .is_some_and(|loader| loader.is_debug_cursor_change(path))
+    }
+
+    pub fn debug_cursor(&self) -> Result<Option<crate::ProjectDebugCursor>> {
+        self.scene_loader
+            .as_ref()
+            .map_or(Ok(None), |loader| loader.debug_cursor(&self.root))
+    }
+
+    pub fn reload_config(&self) -> Result<Option<GameConfig>> {
+        self.scene_loader
+            .as_ref()
+            .map_or(Ok(None), |loader| loader.load_config(&self.root))
+    }
+
+    pub fn contains_asset(&self, path: &Path) -> bool {
+        self.sources
+            .iter()
+            .rev()
+            .filter_map(|source| source.asset.as_ref())
+            .any(|mount| mount.contains_file(path))
+    }
+
     pub fn asset_mounts(&self) -> Vec<ContentMount> {
         self.sources
             .iter()
@@ -131,6 +198,7 @@ pub fn load_project_with(
     Ok(ContentProject {
         root,
         sources: mounted,
+        scene_loader: None,
     })
 }
 
@@ -186,6 +254,7 @@ pub fn load_hexz_project_from_archive(
     Ok(ContentProject {
         root: archive.path().to_owned(),
         sources: mounted,
+        scene_loader: None,
     })
 }
 

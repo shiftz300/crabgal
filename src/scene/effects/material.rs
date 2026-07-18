@@ -7,7 +7,7 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
-use crabgal_core::{BlendMode, VisualFilter};
+use crabgal_core::{BlendMode, CameraTargets, ColorToneMode, PostProcessEffect, VisualFilter};
 
 pub(crate) struct StageMaterialPlugin;
 
@@ -35,8 +35,21 @@ pub(crate) struct StageMaterial {
     pub(crate) filter: Vec4,
     #[uniform(2)]
     pub(crate) transition: Vec4,
-    #[texture(3)]
-    #[sampler(4)]
+    #[uniform(3)]
+    pub(crate) post_a: Vec4,
+    #[uniform(4)]
+    pub(crate) post_b: Vec4,
+    #[uniform(5)]
+    pub(crate) post_c: Vec4,
+    #[uniform(6)]
+    pub(crate) post_d: Vec4,
+    #[uniform(7)]
+    pub(crate) post_e: Vec4,
+    #[texture(8)]
+    #[sampler(9)]
+    pub(crate) lut: Option<Handle<Image>>,
+    #[texture(10)]
+    #[sampler(11)]
     pub(crate) image: Handle<Image>,
     pub(crate) blend: BlendMode,
 }
@@ -48,7 +61,14 @@ impl StageMaterial {
         filter: VisualFilter,
         blend: BlendMode,
         transition: Vec4,
+        post: &PostProcessEffect,
+        lut: Option<Handle<Image>>,
     ) -> Self {
+        let color_tone = match post.color_tone {
+            ColorToneMode::None => 0.0,
+            ColorToneMode::Grayscale => 1.0,
+            ColorToneMode::Sepia => 2.0,
+        };
         Self {
             tint: Vec4::new(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0)),
             filter: Vec4::new(
@@ -58,32 +78,122 @@ impl StageMaterial {
                 filter.saturation.clamp(0.0, 4.0),
             ),
             transition,
+            post_a: Vec4::new(
+                post.distortion_strength.clamp(-1.0, 1.0),
+                post.vignette_intensity.clamp(0.0, 1.0),
+                post.vignette_size.clamp(0.0, 1.0),
+                post.blur_amount.clamp(0.0, 20.0),
+            ),
+            post_b: Vec4::new(
+                color_tone,
+                post.color_tone_intensity.clamp(0.0, 1.0),
+                post.old_film_intensity.clamp(0.0, 1.0),
+                post.shock_intensity.clamp(0.0, 1.0),
+            ),
+            post_c: Vec4::new(
+                post.godray_intensity.clamp(0.0, 1.0),
+                if lut.is_some() {
+                    post.lut_intensity.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+                post.godray_angle.to_radians(),
+                post.godray_speed.clamp(-3.0, 3.0),
+            ),
+            post_d: Vec4::new(
+                post.godray_gain.clamp(0.0, 1.0),
+                post.godray_lacunarity.clamp(1.0, 5.0),
+                f32::from(post.godray_parallel),
+                post.godray_center_x.clamp(0.0, 1.0),
+            ),
+            post_e: Vec4::new(post.godray_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
+            lut,
             image,
             blend,
         }
     }
 }
 
-pub(crate) fn animation_uniform(animation: Option<&crabgal_core::state::PresetAnimation>) -> Vec4 {
+pub(crate) fn effective_post_process(
+    effect: &PostProcessEffect,
+    targets: CameraTargets,
+    group: &str,
+    distance: Option<f32>,
+) -> PostProcessEffect {
+    let targeted = if group == "scene" {
+        targets.scene()
+    } else {
+        targets.characters()
+    };
+    if !targeted {
+        return PostProcessEffect::default();
+    }
+    let mut effect = effect.clone();
+    if let (Some(distance), Some(focal_distance)) = (distance, effect.focal_distance) {
+        effect.blur_amount = (effect.blur_amount
+            + (distance - focal_distance).abs() * effect.blur_strength.max(0.0) * 6.0)
+            .min(20.0);
+    }
+    effect
+}
+
+/// Returns a LUT only when the authored effect can visibly use it. Some source
+/// formats keep a preset name while leaving intensity empty;
+/// loading that inactive preset would produce a false missing-asset error.
+pub(crate) fn active_lut_preset(effect: &PostProcessEffect) -> Option<&str> {
+    effect
+        .lut_preset
+        .as_deref()
+        .filter(|_| effect.lut_intensity > 0.001)
+}
+
+pub(crate) fn animation_uniform(
+    films: crabgal_core::FilmEffects,
+    animation: Option<&crabgal_core::state::PresetAnimation>,
+) -> Vec4 {
     use crabgal_core::AnimationPreset;
-    let Some(animation) = animation else {
-        return Vec4::ZERO;
-    };
-    let kind = match animation.preset {
-        AnimationPreset::OldFilm => 1.0,
-        AnimationPreset::DotFilm => 2.0,
-        AnimationPreset::ReflectionFilm => 3.0,
-        AnimationPreset::GlitchFilm => 4.0,
-        AnimationPreset::RgbFilm => 5.0,
-        AnimationPreset::GodrayFilm => 6.0,
-        _ => 0.0,
-    };
-    Vec4::new(
-        0.0,
-        0.0,
-        kind,
-        (animation.elapsed / animation.duration).clamp(0.0, 1.0),
-    )
+    const SHOCKWAVE_IN: u8 = 1 << 6;
+    const SHOCKWAVE_OUT: u8 = 1 << 7;
+
+    let mut effects = films.bits();
+    let progress = animation.map_or(0.0, |animation| {
+        effects |= match animation.preset {
+            AnimationPreset::ShockwaveIn => SHOCKWAVE_IN,
+            AnimationPreset::ShockwaveOut => SHOCKWAVE_OUT,
+            _ => 0,
+        };
+        (animation.elapsed / animation.duration).clamp(0.0, 1.0)
+    });
+    Vec4::new(0.0, 0.0, f32::from(effects), progress)
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use crabgal_core::state::PresetAnimation;
+    use crabgal_core::{AnimationPreset, FilmEffects, SpriteTransform};
+
+    use super::animation_uniform;
+
+    #[test]
+    fn film_bits_compose_and_shockwave_keeps_progress() {
+        let mut films = FilmEffects::default();
+        assert!(films.apply(&AnimationPreset::OldFilm));
+        assert!(films.apply(&AnimationPreset::RgbFilm));
+        let animation = PresetAnimation {
+            preset: AnimationPreset::ShockwaveOut,
+            base: SpriteTransform::default(),
+            elapsed: 0.5,
+            duration: 1.0,
+            blocking: true,
+            remove_on_finish: false,
+        };
+        let uniform = animation_uniform(films, Some(&animation));
+        assert_eq!(
+            uniform.z as u8,
+            FilmEffects::OLD_FILM | FilmEffects::RGB_FILM | 128
+        );
+        assert_eq!(uniform.w, 0.5);
+    }
 }
 
 #[repr(C)]
@@ -155,5 +265,22 @@ impl Material2d for StageMaterial {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lut_without_visible_intensity_does_not_request_an_asset() {
+        let mut effect = PostProcessEffect {
+            lut_preset: Some("warm".into()),
+            ..default()
+        };
+        assert_eq!(active_lut_preset(&effect), None);
+
+        effect.lut_intensity = 0.5;
+        assert_eq!(active_lut_preset(&effect), Some("warm"));
     }
 }

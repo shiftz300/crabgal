@@ -1,12 +1,11 @@
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
 mod bootstrap;
-pub(crate) mod input;
-pub(crate) mod lifecycle;
-mod logging;
+mod editor_bridge;
+pub(crate) mod host;
+pub(crate) mod platform;
 pub(crate) mod resources;
 pub(crate) mod tick;
-pub(crate) mod viewport;
 
 use bevy::prelude::*;
 
@@ -14,7 +13,7 @@ use crate::scene::ScenePlugin;
 use crate::storage::StoragePlugin;
 use crate::ui::GameUiPlugin;
 
-pub use bootstrap::{run, run_cli, run_with_loader};
+pub use bootstrap::{build_app_with_loader, run, run_cli, run_with_loader};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) enum GameSystemSet {
@@ -28,12 +27,26 @@ pub(crate) struct RuntimePlugin;
 
 impl Plugin for RuntimePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<lifecycle::RuntimeActivity>()
-            .init_resource::<input::InputActions>();
-        app.add_systems(PreUpdate, input::collect);
+        app.init_resource::<platform::RuntimeActivity>()
+            .init_resource::<host::HostCommandDiagnostics>()
+            .init_resource::<host::HostCapabilityRegistry>()
+            .init_resource::<platform::InputActions>()
+            .init_resource::<platform::PointerClickHistory>();
+        app.add_systems(PreUpdate, platform::collect_input);
         app.add_systems(Update, tick::tick.in_set(GameSystemSet::Input));
-        app.add_systems(Update, viewport::on_resize.in_set(GameSystemSet::Layout));
-        app.add_systems(Last, lifecycle::update);
+        app.add_systems(Update, host::dispatch_shell.in_set(GameSystemSet::Sync));
+        app.add_message::<host::HostCommandMessage>();
+        app.add_systems(
+            Update,
+            (host::dispatch, host::diagnose_unhandled)
+                .chain()
+                .in_set(GameSystemSet::Sync),
+        );
+        app.add_systems(
+            Update,
+            platform::resize_viewport.in_set(GameSystemSet::Layout),
+        );
+        app.add_systems(Last, platform::update_lifecycle);
     }
 }
 

@@ -13,7 +13,6 @@ pub(crate) use support::sound;
 pub(crate) use support::{activity, foundation, input_scope};
 pub use support::{loading, performance, text_style};
 
-#[cfg(feature = "ui-sounds")]
 use bevy::asset::embedded_asset;
 use bevy::prelude::*;
 
@@ -28,6 +27,8 @@ pub(crate) struct GameUiPlugin;
 
 impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
+        embedded_asset!(app, "src/ui", "assets/fonts/MavenPro-CJK.ttf");
+        embedded_asset!(app, "src/ui", "assets/fonts/bootstrap-icons.ttf");
         #[cfg(feature = "ui-sounds")]
         {
             embedded_asset!(app, "src/ui", "assets/audio/click.opus");
@@ -57,7 +58,7 @@ impl Plugin for GameUiPlugin {
         app.add_systems(PostUpdate, dialog::spawn_dialog);
         app.add_systems(
             Last,
-            activity::update.before(crate::runtime::lifecycle::update),
+            activity::update.before(crate::runtime::platform::update_lifecycle),
         );
     }
 }
@@ -71,8 +72,10 @@ fn init_resources(app: &mut App) {
         .init_resource::<textbox::TextboxOverlayFade>()
         .init_resource::<textbox::InitialTextboxFade>()
         .init_resource::<textbox::TextboxLayoutMotion>()
+        .init_resource::<overlays::presentation::AdvanceHintState>()
         .init_resource::<user_input::UserInputCaretBlink>()
         .init_resource::<backlog::BacklogUiState>()
+        .init_resource::<backlog::BacklogScrollMotion>()
         .init_resource::<save_load::SaveLoadUi>()
         .init_resource::<save_load::SavePreviewCache>()
         .init_resource::<save_load::SaveLoadPageTransition>()
@@ -110,6 +113,7 @@ fn add_stage_systems(app: &mut App) {
         Update,
         (
             (
+                textbox::sync_visibility,
                 textbox::update_textbox,
                 textbox::update_mini_avatar,
                 textbox::animate_overlay_fade,
@@ -133,6 +137,7 @@ fn add_stage_systems(app: &mut App) {
             control_bar::update_lock_icon,
             loading::update_loading,
             overlays::presentation::sync,
+            overlays::presentation::animate_advance_hint,
             (
                 overlays::user_input::handle
                     .run_if(loading::assets_ready)
@@ -194,6 +199,7 @@ fn add_overlay_systems(app: &mut App) {
                 // Let START produce the first dialogue before the stage UI is
                 // updated. The title remains for this frame, so the textbox
                 // has already begun its fade when the title leaves.
+                .before(textbox::sync_visibility)
                 .before(textbox::update_textbox),
             (
                 extra::handle_navigation.run_if(input_scope::extra_allowed),

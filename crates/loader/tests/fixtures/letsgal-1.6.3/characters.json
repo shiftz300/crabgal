@@ -1,0 +1,21 @@
+{
+  "globalSettings": {
+    "positions": [
+      { "id": "left", "left": 25, "top": 0 },
+      { "id": "center", "left": 50, "top": 0 },
+      { "id": "right", "left": 75, "top": 0 }
+    ],
+    "defaultPositionId": "center"
+  },
+  "characters": [
+    {
+      "id": "heroine",
+      "name": "测试角色",
+      "defaultPosition": "center",
+      "expressions": [
+        { "name": "default", "assetPath": "characters/heroine.png" }
+      ],
+      "attributeValues": {}
+    }
+  ]
+}

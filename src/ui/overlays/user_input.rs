@@ -25,7 +25,11 @@ pub(crate) struct UserInputBlur;
 #[derive(Component)]
 pub(crate) struct UserInputTitle;
 #[derive(Component)]
+pub(crate) struct UserInputDescription;
+#[derive(Component)]
 pub(crate) struct UserInputValue;
+#[derive(Component)]
+pub(crate) struct UserInputError;
 #[derive(Component)]
 pub(crate) struct UserInputConfirm;
 
@@ -154,6 +158,17 @@ pub(crate) fn setup(
                     },
                     TextColor(Color::WHITE),
                 ));
+                panel.spawn((
+                    UserInputDescription,
+                    Text::new(""),
+                    TextFont {
+                        font: fonts.text.clone().into(),
+                        font_size: FontSize::Px(24.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.64)),
+                    TextLayout::justify(Justify::Center),
+                ));
                 panel
                     .spawn((
                         Node {
@@ -199,6 +214,16 @@ pub(crate) fn setup(
                         ));
                     });
                 panel.spawn((
+                    UserInputError,
+                    Text::new(""),
+                    TextFont {
+                        font: fonts.text.clone().into(),
+                        font_size: FontSize::Px(21.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 0.64, 0.64, 0.9)),
+                ));
+                panel.spawn((
                     UserInputConfirm,
                     DialogButtonVisual::default(),
                     Button,
@@ -231,9 +256,51 @@ pub(crate) struct UserInputSyncContext<'w, 's> {
     roots: Query<'w, 's, &'static mut Node, With<UserInputRoot>>,
     blurs: Query<'w, 's, &'static mut Node, (With<UserInputBlur>, Without<UserInputRoot>)>,
     titles: Query<'w, 's, &'static mut Text, (With<UserInputTitle>, Without<UserInputValue>)>,
-    values: Query<'w, 's, &'static mut Text, (With<UserInputValue>, Without<UserInputTitle>)>,
+    descriptions: Query<
+        'w,
+        's,
+        &'static mut Text,
+        (
+            With<UserInputDescription>,
+            Without<UserInputTitle>,
+            Without<UserInputValue>,
+            Without<UserInputError>,
+        ),
+    >,
+    values: Query<
+        'w,
+        's,
+        (&'static mut Text, &'static mut TextColor),
+        (
+            With<UserInputValue>,
+            Without<UserInputTitle>,
+            Without<UserInputDescription>,
+            Without<UserInputError>,
+        ),
+    >,
+    errors: Query<
+        'w,
+        's,
+        &'static mut Text,
+        (
+            With<UserInputError>,
+            Without<UserInputTitle>,
+            Without<UserInputDescription>,
+            Without<UserInputValue>,
+        ),
+    >,
     confirm: Query<'w, 's, &'static Children, With<UserInputConfirm>>,
-    texts: Query<'w, 's, &'static mut Text, (Without<UserInputTitle>, Without<UserInputValue>)>,
+    texts: Query<
+        'w,
+        's,
+        &'static mut Text,
+        (
+            Without<UserInputTitle>,
+            Without<UserInputDescription>,
+            Without<UserInputValue>,
+            Without<UserInputError>,
+        ),
+    >,
 }
 
 pub(crate) fn sync(mut context: UserInputSyncContext) {
@@ -262,8 +329,32 @@ pub(crate) fn sync(mut context: UserInputSyncContext) {
     for mut title in &mut context.titles {
         title.0.clone_from(&input.title);
     }
-    for mut value in &mut context.values {
-        value.0.clone_from(&input.value);
+    for mut description in &mut context.descriptions {
+        description.0.clone_from(&input.description);
+    }
+    let (display_value, placeholder) = match input.value_type {
+        crabgal_core::InputValueType::Bool => (
+            if input.value == "true" {
+                input.true_text.as_str()
+            } else {
+                input.false_text.as_str()
+            },
+            false,
+        ),
+        _ if input.value.is_empty() => (input.placeholder.as_str(), true),
+        _ => (input.value.as_str(), false),
+    };
+    for (mut value, mut color) in &mut context.values {
+        value.0.clear();
+        value.0.push_str(display_value);
+        color.0 = if placeholder {
+            Color::srgba(1.0, 1.0, 1.0, 0.32)
+        } else {
+            Color::srgba(1.0, 1.0, 1.0, 0.78)
+        };
+    }
+    for mut error in &mut context.errors {
+        error.0.clone_from(&input.error);
     }
     for children in &context.confirm {
         for child in children.iter() {
@@ -306,24 +397,52 @@ pub(crate) fn handle(
                 continue;
             }
             match &event.logical_key {
-                Key::Character(value) if input.value.chars().count() < 64 => {
-                    input.value.push_str(value);
+                Key::Character(value)
+                    if input.value_type != crabgal_core::InputValueType::Bool
+                        && (input.max_length == 0
+                            || input.value.chars().count() < input.max_length) =>
+                {
+                    let accepted = input.value_type == crabgal_core::InputValueType::String
+                        || value.chars().all(|character| {
+                            character.is_ascii_digit() || ".-+".contains(character)
+                        });
+                    if accepted {
+                        input.value.push_str(value);
+                        input.error.clear();
+                        changed = true;
+                    }
+                }
+                Key::Space if input.value_type == crabgal_core::InputValueType::Bool => {
+                    input.value = if input.value == "true" {
+                        "false"
+                    } else {
+                        "true"
+                    }
+                    .into();
+                    input.error.clear();
                     changed = true;
                 }
-                Key::Space if input.value.chars().count() < 64 => {
+                Key::Space
+                    if input.value_type == crabgal_core::InputValueType::String
+                        && (input.max_length == 0
+                            || input.value.chars().count() < input.max_length) =>
+                {
                     input.value.push(' ');
+                    input.error.clear();
                     changed = true;
                 }
                 Key::Backspace => {
                     changed |= input.value.pop().is_some();
+                    input.error.clear();
                 }
                 Key::Enter => submit = true,
                 _ => {}
             }
         }
-        if submit && !input.value.trim().is_empty() {
-            crabgal_core::step::submit_user_input(state_value);
-            crabgal_core::step::step(state_value);
+        if submit {
+            if crabgal_core::step::submit_user_input(state_value) {
+                crabgal_core::step::step(state_value);
+            }
             changed = true;
         }
         changed

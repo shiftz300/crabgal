@@ -1,0 +1,290 @@
+{
+  "id": "chapter-compatibility",
+  "name": "Compatibility",
+  "disabled": false,
+  "fragments": [
+    {
+      "id": "fragment-compatibility",
+      "name": "All 1.6.3 runtime blocks",
+      "blocks": [
+        {
+          "id": "block-01-animate",
+          "type": "animateSprite",
+          "content": null,
+          "props": {
+            "targetType": "character",
+            "targetId": "heroine",
+            "frames": "[{\"duration\":120,\"properties\":{\"x\":\"24\"}},{\"duration\":80,\"properties\":{\"alpha\":0.8}}]",
+            "loop": "1",
+            "waitForComplete": "true"
+          }
+        },
+        {
+          "id": "block-02-branch",
+          "type": "branch",
+          "content": null,
+          "props": {
+            "title": "选择测试",
+            "choices": "[{\"mode\":\"change\",\"text\":\"继续\",\"fragmentId\":\"fragment-compatibility\"}]"
+          }
+        },
+        {
+          "id": "block-03-extension-method",
+          "type": "callExtensionFunction",
+          "content": null,
+          "props": { "target": "fixture.extension/ping", "paramsJson": "{}" }
+        },
+        {
+          "id": "block-04-call-fragment",
+          "type": "callFragment",
+          "content": null,
+          "props": { "fragmentId": "fragment-compatibility" }
+        },
+        {
+          "id": "block-05-camera",
+          "type": "camera",
+          "content": null,
+          "props": {
+            "offsetX": "20",
+            "offsetY": "-10",
+            "zoom": "1.05",
+            "blurAmount": "2",
+            "godrayIntensity": "0.45",
+            "godrayAngle": "30",
+            "godrayGain": "0.50",
+            "godrayLacunarity": "2.50",
+            "godraySpeed": "1.00",
+            "godrayParallel": "false",
+            "godrayCenterX": "0.50",
+            "godrayCenterY": "0.00",
+            "duration": "180",
+            "easing": "easeInOut",
+            "targets": "scene,characters",
+            "waitForComplete": "true"
+          }
+        },
+        {
+          "id": "block-06-comment",
+          "type": "comment",
+          "content": [{ "type": "text", "text": "compiler comment" }],
+          "props": {}
+        },
+        {
+          "id": "block-07-curtain",
+          "type": "curtain",
+          "content": null,
+          "props": { "op": "close", "mode": "fullscreen", "color": "#101820", "duration": "120" }
+        },
+        {
+          "id": "block-08-destroy-scene",
+          "type": "destroyScene",
+          "content": null,
+          "props": { "sceneId": "scene-main", "animated": "false" }
+        },
+        {
+          "id": "block-09-dialogue",
+          "type": "dialogue",
+          "content": [{ "type": "text", "text": "Studio 光标测试落在这一句。" }],
+          "props": {
+            "characterId": "heroine",
+            "characterName": "测试角色",
+            "expression": "default",
+            "position": "center",
+            "isFirst": "true",
+            "isLast": "false",
+            "showCharacter": "true",
+            "keepCharacter": "true"
+          }
+        },
+        {
+          "id": "block-10-end-chapter",
+          "type": "endChapter",
+          "content": null,
+          "props": {}
+        },
+        {
+          "id": "block-11-enter-autoplay",
+          "type": "enterAutoPlay",
+          "content": null,
+          "props": {}
+        },
+        {
+          "id": "block-12-exit-autoplay",
+          "type": "exitAutoPlay",
+          "content": null,
+          "props": {}
+        },
+        {
+          "id": "block-13-floating-text",
+          "type": "floatingText",
+          "content": [{ "type": "text", "text": "FLOATING TEXT" }],
+          "props": {
+            "position": "(50%, 35%)",
+            "fontSize": "54",
+            "color": "#ffffff",
+            "inDuration": "80",
+            "duration": "120",
+            "outDuration": "80",
+            "blocking": "true"
+          }
+        },
+        {
+          "id": "block-14-hide-extension-ui",
+          "type": "hideExtensionUI",
+          "content": null,
+          "props": { "target": "slot:internal.system.settings" }
+        },
+        {
+          "id": "block-15-if",
+          "type": "if",
+          "content": null,
+          "props": {
+            "expression": "fixtureFlag == 1",
+            "thenFragmentId": "fragment-compatibility",
+            "elseFragmentId": "fragment-compatibility"
+          }
+        },
+        {
+          "id": "block-16-narration",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "这是旁白测试。" }],
+          "props": {}
+        },
+        {
+          "id": "block-17-particle",
+          "type": "particle",
+          "content": null,
+          "props": { "mode": "show", "preset": "snow" }
+        },
+        {
+          "id": "block-18-player-input",
+          "type": "playerInput",
+          "content": null,
+          "props": { "variable": "playerName", "title": "输入名字", "confirmText": "确认" }
+        },
+        {
+          "id": "block-19-portrait-rule",
+          "type": "portraitStyleRule",
+          "content": null,
+          "props": {
+            "enabled": "true",
+            "speakingScale": "1.0",
+            "speakingBrightness": "1.0",
+            "speakingSaturation": "1.0",
+            "speakingContrast": "1.0",
+            "speakingBlur": "0",
+            "speakingAlpha": "1.0",
+            "othersState": "inactive",
+            "inactiveScale": "0.96",
+            "inactiveBrightness": "0.7",
+            "inactiveSaturation": "0.6",
+            "inactiveContrast": "1.0",
+            "inactiveBlur": "1",
+            "inactiveAlpha": "0.75",
+            "narrationState": "listening",
+            "listeningScale": "0.98",
+            "listeningBrightness": "0.85",
+            "listeningSaturation": "0.8",
+            "listeningContrast": "1.0",
+            "listeningBlur": "0",
+            "listeningAlpha": "0.9",
+            "transitionDuration": "160",
+            "transitionEasing": "easeOut"
+          }
+        },
+        {
+          "id": "block-20-remove-character",
+          "type": "removeCharacter",
+          "content": null,
+          "props": { "characterId": "heroine", "animated": "true" }
+        },
+        {
+          "id": "block-21-reset-camera",
+          "type": "resetCamera",
+          "content": null,
+          "props": {}
+        },
+        {
+          "id": "block-22-return-entry",
+          "type": "returnToEntry",
+          "content": null,
+          "props": {}
+        },
+        {
+          "id": "block-23-scene",
+          "type": "scene",
+          "content": null,
+          "props": { "sceneId": "scene-main", "transitionDuration": "120" }
+        },
+        {
+          "id": "block-24-set-variable",
+          "type": "setver",
+          "content": null,
+          "props": { "key": "fixtureFlag", "op": "=", "aKind": "lit", "aLit": "1" }
+        },
+        {
+          "id": "block-25-show-character",
+          "type": "showCharacter",
+          "content": null,
+          "props": { "characterId": "heroine", "expression": "default", "position": "left", "animated": "true" }
+        },
+        {
+          "id": "block-26-show-extension-ui",
+          "type": "showExtensionUI",
+          "content": null,
+          "props": { "target": "slot:internal.system.settings" }
+        },
+        {
+          "id": "block-27-sound",
+          "type": "sound",
+          "content": null,
+          "props": { "soundType": "BGM", "uri": "bgm/test.opus", "volume": "50", "fadeDuration": "120" }
+        },
+        {
+          "id": "block-28-stop-sound",
+          "type": "stopSound",
+          "content": null,
+          "props": { "soundType": "BGM", "fadeDuration": "120" }
+        },
+        {
+          "id": "block-29-stop-video",
+          "type": "stopVideo",
+          "content": null,
+          "props": { "videoId": "fixture-video" }
+        },
+        {
+          "id": "block-30-story-paragraph",
+          "type": "storyParagraph",
+          "content": [{ "type": "text", "text": "这是文学段落测试。" }],
+          "props": {}
+        },
+        {
+          "id": "block-31-dialogue-style",
+          "type": "switchDialogueStyle",
+          "content": null,
+          "props": { "targetId": "cinematic-centered" }
+        },
+        {
+          "id": "block-32-video",
+          "type": "video",
+          "content": null,
+          "props": {
+            "videoId": "fixture-video",
+            "uri": "video/test.mp4",
+            "loop": "false",
+            "muted": "true",
+            "alpha": "100",
+            "waitForFinished": "false",
+            "mode": "mixed"
+          }
+        },
+        {
+          "id": "block-33-wait",
+          "type": "wait",
+          "content": null,
+          "props": { "duration": "120" }
+        }
+      ]
+    }
+  ]
+}

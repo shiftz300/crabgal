@@ -316,12 +316,12 @@ fn spawn_button(
                 ButtonAction::Save => Some(UiText::Save),
                 ButtonAction::Load => Some(UiText::Load),
                 ButtonAction::System => Some(UiText::Config),
+                ButtonAction::Title => Some(UiText::Title),
                 _ => None,
             };
             if let Some(key) = key {
                 button.spawn((LocalizedText(key), text(label, font, 21.0, 0.82)));
             } else {
-                // TITLE is intentionally invariant, matching WebGAL K.
                 button.spawn(text(label, font, 21.0, 0.82));
             }
         });

@@ -203,6 +203,12 @@ pub struct AssetMap {
     /// Sound-effect name → file path.
     #[serde(default)]
     pub effects: HashMap<String, String>,
+    /// Video name → file path.
+    #[serde(default)]
+    pub videos: HashMap<String, String>,
+    /// Camera color-grade preset → LUT image path.
+    #[serde(default)]
+    pub luts: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,6 +373,23 @@ impl GameConfig {
             .get(name)
             .cloned()
             .unwrap_or_else(|| format!("bgm/{name}"))
+    }
+
+    /// Resolve video below the local asset root.
+    pub fn video_path(&self, name: &str) -> String {
+        self.assets
+            .videos
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("video/{name}"))
+    }
+
+    pub fn lut_path(&self, name: &str) -> String {
+        self.assets
+            .luts
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("luts/{name}.png"))
     }
 }
 

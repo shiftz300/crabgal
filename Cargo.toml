@@ -21,6 +21,7 @@ audio-wav = ["bevy/wav"]
 audio-mp3 = ["bevy/mp3"]
 audio-vorbis = ["bevy/vorbis"]
 audio-flac = ["bevy/flac"]
+video-ffmpeg = ["dep:video-rs", "dep:tempfile", "dep:rodio"]
 
 [workspace.package]
 version = "0.8.0"
@@ -54,6 +55,9 @@ webbrowser = "1"
 rodio = { version = "0.22.2", default-features = false }
 symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 symphonia-adapter-libopus = { version = "0.3", default-features = false }
+video-rs = { version = "0.11", features = ["ndarray"] }
+tempfile = "3"
+winit = { version = "0.30.13", default-features = false }
 
 [dependencies]
 crabgal-core = { workspace = true }
@@ -62,14 +66,27 @@ log = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 libwebp-sys = { workspace = true }
 futures-lite = { workspace = true }
+notify = { workspace = true }
 rfd = { workspace = true }
 webbrowser = { workspace = true }
 rodio = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 symphonia-adapter-libopus = { workspace = true, optional = true }
+video-rs = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+winit = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
+
+[build-dependencies]
+winresource = "0.1.31"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData"] }
 
 # Winit has no implicit Linux backend when Bevy's default features are disabled.
 # X11 also covers Wayland desktops through XWayland without adding native

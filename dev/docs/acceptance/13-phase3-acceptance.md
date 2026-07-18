@@ -5,7 +5,7 @@
 1. 在仓库根目录运行：
 
    ```bash
-   cargo run -- dev projects/test-project
+   cargo dev projects/test-project
    ```
 
 2. 点击 `START`，推进到出现姓名、正文和语音的对话。

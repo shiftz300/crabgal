@@ -539,7 +539,7 @@ pub fn update_blur_regions(
     let Ok(w) = window_query.single() else { return };
     let sf = w.scale_factor();
     let sh = w.height() * sf;
-    let design_viewport = crate::runtime::viewport::DesignViewport::from_window(w);
+    let design_viewport = crate::runtime::platform::DesignViewport::from_window(w);
     let ui_origin = design_viewport.offset * sf;
     let blur_scale = design_viewport.scale * sf;
 

@@ -119,6 +119,24 @@ impl ContentMount {
         self.backend.read(&self.resolve(path)?)
     }
 
+    /// Opens one logical file as an adapter-neutral seekable stream.
+    pub fn open_file(&self, path: &Path) -> Result<ContentFile> {
+        let path = self.resolve(path)?;
+        let inner = match &self.backend {
+            ContentBackend::FileSystem(root) => {
+                let physical = root.join(&path);
+                ContentFileInner::FileSystem(
+                    fs::File::open(&physical)
+                        .with_context(|| format!("failed to open {}", physical.display()))?,
+                )
+            }
+            ContentBackend::Hexz(archive) => {
+                ContentFileInner::Archive(archive.open_file(&path)?.cursor())
+            }
+        };
+        Ok(ContentFile { inner })
+    }
+
     pub fn contains_file(&self, path: &Path) -> bool {
         self.resolve(path)
             .is_ok_and(|path| self.backend.contains_file(&path))
@@ -138,6 +156,11 @@ impl ContentMount {
             .collect()
     }
 
+    pub fn is_directory(&self, path: &Path) -> bool {
+        self.resolve(path)
+            .is_ok_and(|path| self.backend.is_directory(&path))
+    }
+
     /// Recursively collects every file below this mount.
     ///
     /// Hexz mounts filter the archive's in-memory file index once instead of
@@ -155,6 +178,44 @@ impl ContentMount {
         self.backend
             .filesystem_root()
             .map(|root| root.join(&self.prefix))
+    }
+}
+
+/// Seekable logical content stream exposed without leaking its container
+/// implementation to Bevy or other consumers.
+pub struct ContentFile {
+    inner: ContentFileInner,
+}
+
+enum ContentFileInner {
+    FileSystem(fs::File),
+    Archive(HexzCursor),
+}
+
+impl ContentFile {
+    pub fn read_remaining_into(&mut self, output: &mut Vec<u8>) -> std::io::Result<usize> {
+        match &mut self.inner {
+            ContentFileInner::FileSystem(file) => file.read_to_end(output),
+            ContentFileInner::Archive(cursor) => cursor.read_remaining_into(output),
+        }
+    }
+}
+
+impl Read for ContentFile {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.inner {
+            ContentFileInner::FileSystem(file) => file.read(output),
+            ContentFileInner::Archive(cursor) => cursor.read(output),
+        }
+    }
+}
+
+impl Seek for ContentFile {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        match &mut self.inner {
+            ContentFileInner::FileSystem(file) => file.seek(position),
+            ContentFileInner::Archive(cursor) => cursor.seek(position),
+        }
     }
 }
 

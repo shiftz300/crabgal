@@ -1,0 +1,24 @@
+{
+  "id": "chapter-title",
+  "name": "Title",
+  "disabled": false,
+  "fragments": [
+    {
+      "id": "fragment-title",
+      "name": "main",
+      "blocks": [
+        {
+          "id": "block-title-shell",
+          "type": "showExtensionUI",
+          "content": null,
+          "props": {
+            "target": "slot:internal.system.title",
+            "modal": true,
+            "layer": "topmost",
+            "seekBehavior": "skip-if-seeking"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::{SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
 const MAGIC: [u8; 8] = *b"CRABGAL\0";
-const VERSION: u32 = 5;
+const VERSION: u32 = 7;
 const HEADER_SIZE: usize = 28;
 const MAX_METADATA_SIZE: usize = 64 * 1024;
 const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
@@ -363,6 +363,7 @@ mod tests {
             text: "Tomorrow, together.".into(),
             markup: "[Tomorrow](bold), together.".into(),
             visible_chars: 7,
+            pauses: Vec::new(),
             vocal: Some("mio.opus".into()),
             volume: 0.6,
             auto_advance: false,
@@ -412,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn save_v5_golden_is_stable() {
+    fn save_v7_golden_is_stable() {
         let mut state = State::new();
         state.install_program(Program::from_scenes([(
             "main".into(),
@@ -423,12 +424,12 @@ mod tests {
         let bytes = encode_at(&state, 1_700_000_000).unwrap();
         if std::env::var_os("CRABGAL_UPDATE_STORE_GOLDEN").is_some() {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src/adapter/store/fixtures/store-v5.sav");
+                .join("src/adapter/store/fixtures/store-v7.sav");
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, &bytes).unwrap();
             return;
         }
-        let expected = include_bytes!("fixtures/store-v5.sav");
+        let expected = include_bytes!("fixtures/store-v7.sav");
 
         assert_eq!(bytes.as_slice(), expected);
     }

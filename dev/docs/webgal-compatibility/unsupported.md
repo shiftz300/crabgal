@@ -1,12 +1,11 @@
 # 不支持项与兼容边界
 
-## 明确不支持的 4 个官方命令
+## 明确不支持的 3 个官方命令
 
-这四个关键词在 loader 中作为 WebGAL 保留字单独识别。它们会产生带行列信息的 warning，然后被跳过；不会进入 core，也不会被未知命令回退策略误显示成普通对话。
+这三个关键词在 loader 中作为 WebGAL 保留字单独识别。它们会产生带行列信息的 warning，然后被跳过；不会进入 core，也不会被未知命令回退策略误显示成普通对话。
 
 | 命令 | WebGAL 行为 | crabgal 当前行为 | 缺失能力 | 引入前置条件 |
 |---|---|---|---|---|
-| `playVideo` | 全屏视频、临时静音 voice/BGM、结束继续、可配置禁止跳过 | warning + skip | 视频解码、纹理上传、音画时钟、ducking、阻塞/双击跳过、保存恢复 | 选定 Bevy 0.19 可维护后端与许可证；定义桌面/GPU fallback；补跨平台视觉与音频验收 |
 | `showVars` | 在对话框输出本地/全局变量 | warning + skip | 调试展示 Action、稳定排序/格式、敏感值策略 | 定义仅开发模式还是发布版可用；编写确定性格式测试 |
 | `applyStyle` | 把 WebGAL UI 模板样式名运行时映射到新样式 | warning + skip | React/CSS class/template 等价层 | crabgal 使用 Bevy UI，需先设计 typed theme token 映射；不能直接执行项目 CSS |
 | `callSteam` | 通过 Electron/Steam 桥接解锁 achievementId | warning + skip | AppID 配置、Steam SDK/桥接、成就结果与平台错误处理 | feature-gated 后端、再分发许可、非 Steam 构建的确定性行为、真实客户端验收 |
@@ -52,6 +51,9 @@
 - Choice 条件提取会跟踪括号深度、引号和转义，`[clues[2]]` 与带嵌套数组/括号的条件不会在内层 `]` 提前截断。
 - `global_vars` 已从单槽 save 与 Backlog rollback 分离，使用独立 `saves/profile.bin`；读档保留当前 profile。
 - CLEAR ALL 删除整个 `saves/` 数据域并同步清空 settings/profile/read/gallery 与 writer cache，磁盘、内存和重复调用已有自动回归。
+- `playVideo` 已使用 typed Action/State、按播放时钟有界解码、动态 GPU 纹理、音频 duck、
+  阻塞和双击跳过；缺少 `video-ffmpeg` 的最小构建会明确报错，不能冒充播放成功。剩余工作是
+  各桌面平台 FFmpeg 分发和组合人工验收，不再属于 parser/runtime 缺失。
 
 这些修复没有把对应命令自动升级为“已实现”：`setTransform` 仍缺完整参数/滤镜/视觉证据，Choice/`-when` 仍是安全表达式子集；profile 剩余缺口主要是 GUI 端到端与 import/export 完整流程，而不是基础磁盘 round-trip 或 CLEAR ALL 生命周期。
 

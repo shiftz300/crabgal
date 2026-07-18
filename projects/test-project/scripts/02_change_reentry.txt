@@ -1,0 +1,4 @@
+; ChoiceTarget::ChangeScene enters here; the explicit Action::ChangeScene returns to the hub.
+
+绫:02-12 ChoiceTarget::ChangeScene 已替换当前场景；下一步再用 changeScene Action 返回主菜单。
+changeScene:start.txt

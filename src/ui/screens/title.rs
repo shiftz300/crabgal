@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::input::InputActions;
+use crate::runtime::platform::DesignViewport;
+use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
-use crate::runtime::viewport::DesignViewport;
 use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePreview};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{UiFonts, exp_lerp, text};

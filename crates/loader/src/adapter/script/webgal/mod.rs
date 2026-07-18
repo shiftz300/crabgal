@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use crabgal_core::action::{Action, Choice, ChoiceTarget, SayOptions};
 use crabgal_core::types::{
-    AnimationPreset, BlendMode, Easing, Position, SpriteTransform, TransformPatch, Transition,
-    VisualFilter,
+    AnimationPreset, BlendMode, Easing, Position, SpriteLayout, SpriteTransform, TransformPatch,
+    Transition, VideoMode, VideoSpec, VisualFilter,
 };
 
 use crate::ScriptLanguage;
@@ -255,12 +255,24 @@ fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
     }
 
     if cmd == "pixiInit" || cmd.starts_with("pixiInit:") {
-        return Some(Action::Particle { effect: None });
+        return Some(Action::HideParticles {
+            id: None,
+            duration: 0.0,
+        });
     }
     if let Some(rest) = cmd.strip_prefix("pixiPerform:") {
         let effect = statement_value(rest)
             .filter(|value| !value.is_empty() && !matches!(value.as_str(), "none" | "stop"));
-        return Some(Action::Particle { effect });
+        return Some(match effect {
+            Some(effect) => Action::ShowParticles {
+                id: "webgal".into(),
+                effect: crabgal_core::ParticleEffect::preset(effect),
+            },
+            None => Action::HideParticles {
+                id: Some("webgal".into()),
+                duration: 0.0,
+            },
+        });
     }
 
     // setTransform:id x=100 y=0 alpha=0.5 ...
@@ -360,6 +372,7 @@ fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
             id,
             image,
             position: parse_position(side),
+            layout: SpriteLayout::Natural,
             transition,
             transform: args
                 .get("transform")
@@ -413,6 +426,30 @@ fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
             volume: percent_arg(args, "volume", 100.0),
             id: args.get("id").cloned().filter(|id| !id.is_empty()),
         });
+    }
+
+    if let Some(rest) = cmd.strip_prefix("playVideo:") {
+        let file = statement_value(rest).unwrap_or_default();
+        if file == "none" {
+            return Some(Action::StopVideo {
+                id: Some("webgal".into()),
+                fade_out: 0.0,
+            });
+        }
+        if !file.is_empty() {
+            return Some(Action::PlayVideo {
+                video: VideoSpec {
+                    id: "webgal".into(),
+                    file,
+                    looped: false,
+                    muted: false,
+                    alpha: 1.0,
+                    skippable: !args.boolean("skipOff"),
+                    wait_for_finished: true,
+                    mode: VideoMode::Fullscreen,
+                },
+            });
+        }
     }
 
     // Say: speaker:text [flags]
@@ -1061,7 +1098,6 @@ fn unsupported_command(input: &str) -> Option<&'static str> {
         })
         .unwrap_or(input.len());
     match &input[..end] {
-        "playVideo" => Some("playVideo"),
         "showVars" => Some("showVars"),
         "applyStyle" => Some("applyStyle"),
         "callSteam" => Some("callSteam"),
@@ -1419,12 +1455,12 @@ Bob:hello // trailing comment"#,
             "playVideo:opening.mp4;\nshowVars;\napplyStyle:#app;\ncallSteam:achievement;\nfutureCommand:value;",
         );
 
-        assert_eq!(report.diagnostics.len(), 4);
-        for (index, command) in ["playVideo", "showVars", "applyStyle", "callSteam"]
+        assert_eq!(report.diagnostics.len(), 3);
+        for (index, command) in ["showVars", "applyStyle", "callSteam"]
             .into_iter()
             .enumerate()
         {
-            assert_eq!(report.diagnostics[index].span.line, index + 1);
+            assert_eq!(report.diagnostics[index].span.line, index + 2);
             assert_eq!(
                 report.diagnostics[index].message,
                 format!("unsupported WebGAL command `{command}`")
@@ -1432,8 +1468,30 @@ Bob:hello // trailing comment"#,
         }
         assert!(matches!(
             &report.actions[..],
-            [Action::Say { speaker, text, .. }]
+            [Action::PlayVideo { .. }, Action::Say { speaker, text, .. }]
                 if speaker == "futureCommand" && text == "value"
+        ));
+    }
+
+    #[test]
+    fn video_is_typed_blocking_and_resource_tracked() {
+        let report = parse_webgal_report("playVideo:opening.mp4 -skipOff;\nplayVideo:none;");
+
+        assert!(matches!(
+            &report.actions[0],
+            Action::PlayVideo { video }
+                if video.file == "opening.mp4"
+                    && !video.skippable
+                    && video.wait_for_finished
+        ));
+        assert!(matches!(
+            &report.actions[1],
+            Action::StopVideo { id: Some(id), .. } if id == "webgal"
+        ));
+        assert!(matches!(
+            report.resources.as_slice(),
+            [crate::ResourceRef { kind: crate::ResourceKind::Video, path, .. }]
+                if path == "opening.mp4"
         ));
     }
 

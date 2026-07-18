@@ -57,6 +57,51 @@ impl Position {
     }
 }
 
+/// How a sprite is laid out before its authored transform is applied.
+///
+/// Normal figures use crabgal's character baseline. Editor scene layers use
+/// the source editor's explicit canvas fitting and anchor rules instead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum SpriteLayout {
+    #[default]
+    Natural,
+    Scene(SceneLayerLayout),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SceneFit {
+    Cover,
+    Contain,
+    ByWidth,
+    #[default]
+    ByHeight,
+    Stretch,
+    Center,
+}
+
+/// Layout shared by every image in one editor-authored scene.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SceneLayerLayout {
+    pub fit: SceneFit,
+    /// Top-left-origin position in the 1920x1080 design canvas.
+    pub position: [f32; 2],
+    /// Normalized pivot: top-left is `[0, 0]`, center is `[0.5, 0.5]`.
+    pub anchor: [f32; 2],
+    /// Optional explicit design-space size.
+    pub size: Option<[f32; 2]>,
+}
+
+impl Default for SceneLayerLayout {
+    fn default() -> Self {
+        Self {
+            fit: SceneFit::ByHeight,
+            position: [0.0, 0.0],
+            anchor: [0.0, 0.0],
+            size: None,
+        }
+    }
+}
+
 /// Transition / enter animation kind.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum Transition {
@@ -115,6 +160,56 @@ pub enum AnimationPreset {
     Custom(String),
 }
 
+/// Persistent film effects attached to one stage object.
+///
+/// WebGAL models these as independent boolean properties, so several effects
+/// may be enabled at once and `removeFilm` clears the complete set. Keeping the
+/// state as a compact bit set preserves those semantics without allocating a
+/// collection for every background and sprite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct FilmEffects(u8);
+
+impl FilmEffects {
+    pub const OLD_FILM: u8 = 1 << 0;
+    pub const DOT_FILM: u8 = 1 << 1;
+    pub const REFLECTION_FILM: u8 = 1 << 2;
+    pub const GLITCH_FILM: u8 = 1 << 3;
+    pub const RGB_FILM: u8 = 1 << 4;
+    pub const GODRAY_FILM: u8 = 1 << 5;
+
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
+
+    /// Applies one built-in film preset. Returns `false` for non-film presets.
+    pub fn apply(&mut self, preset: &AnimationPreset) -> bool {
+        let bit = match preset {
+            AnimationPreset::OldFilm => Self::OLD_FILM,
+            AnimationPreset::DotFilm => Self::DOT_FILM,
+            AnimationPreset::ReflectionFilm => Self::REFLECTION_FILM,
+            AnimationPreset::GlitchFilm => Self::GLITCH_FILM,
+            AnimationPreset::RgbFilm => Self::RGB_FILM,
+            AnimationPreset::GodrayFilm => Self::GODRAY_FILM,
+            AnimationPreset::RemoveFilm => {
+                self.clear();
+                return true;
+            }
+            _ => return false,
+        };
+        self.0 |= bit;
+        true
+    }
+}
+
 /// Per-image color processing. Values are deliberately backend-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct VisualFilter {
@@ -141,6 +236,67 @@ impl Default for VisualFilter {
             contrast: 1.0,
             saturation: 1.0,
         }
+    }
+}
+
+/// Adapter-neutral visual state used when a VN highlights the speaking
+/// portrait and de-emphasizes the other visible characters.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PortraitStyle {
+    pub scale: f32,
+    pub brightness: f32,
+    pub saturation: f32,
+    pub contrast: f32,
+    pub blur: f32,
+    pub alpha: f32,
+}
+
+impl Default for PortraitStyle {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            brightness: 1.0,
+            saturation: 1.0,
+            contrast: 1.0,
+            blur: 0.0,
+            alpha: 1.0,
+        }
+    }
+}
+
+/// Adapter-neutral dialogue presentation presets.
+///
+/// The named variants cover the engine's built-in dialogue styles. Unknown
+/// editor-defined styles keep their stable identifier so a presentation host
+/// can opt into richer rendering without making the script VM depend on CSS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DialogueStyle {
+    #[default]
+    Default,
+    Cinematic,
+    CinematicCentered,
+    Literary,
+    Sharp,
+    Handwritten,
+    Custom(String),
+}
+
+impl DialogueStyle {
+    pub fn from_id(id: impl Into<String>) -> Self {
+        let id = id.into();
+        match id.as_str() {
+            "" | "default" => Self::Default,
+            "cinematic" => Self::Cinematic,
+            "cinematic-centered" => Self::CinematicCentered,
+            "literary" => Self::Literary,
+            "sharp" => Self::Sharp,
+            "handwritten" => Self::Handwritten,
+            _ => Self::Custom(id),
+        }
+    }
+
+    pub fn is_centered(&self) -> bool {
+        matches!(self, Self::CinematicCentered)
     }
 }
 
@@ -337,12 +493,350 @@ pub enum Easing {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum InputValueType {
+    #[default]
+    String,
+    Number,
+    Bool,
+}
+
+/// Backend-neutral input contract used by visual editors. Presentation layers
+/// may choose different widgets, but validation and the stored value remain
+/// deterministic in core.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserInputSpec {
+    pub variable: String,
+    pub value_type: InputValueType,
+    pub title: String,
+    pub description: String,
+    pub placeholder: String,
+    pub confirm_text: String,
+    pub required_text: String,
+    pub required: bool,
+    pub min_length: usize,
+    /// Zero means unlimited.
+    pub max_length: usize,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub step: f64,
+    pub true_text: String,
+    pub false_text: String,
+}
+
+impl Default for UserInputSpec {
+    fn default() -> Self {
+        Self {
+            variable: String::new(),
+            value_type: InputValueType::String,
+            title: "请输入".into(),
+            description: String::new(),
+            placeholder: "请输入…".into(),
+            confirm_text: "确认".into(),
+            required_text: "请填写后再继续".into(),
+            required: true,
+            min_length: 0,
+            max_length: 0,
+            min_value: None,
+            max_value: None,
+            step: 1.0,
+            true_text: "是".into(),
+            false_text: "否".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BlendMode {
     #[default]
     Alpha,
     Add,
     Multiply,
     Screen,
+}
+
+/// Adapter-neutral description of one particle emitter.
+///
+/// The renderer deliberately derives the full simulation from a small preset
+/// plus optional source texture. This keeps save data compact while allowing
+/// project adapters to retain authored density and fade timing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParticleEffect {
+    pub texture: Option<String>,
+    pub preset: String,
+    /// Zero asks the renderer to use the preset's tuned native density.
+    pub count: u16,
+    /// Optional editor-authored horizontal velocity override in design px/s.
+    #[serde(default)]
+    pub wind: Option<f32>,
+    /// Optional editor-authored downward acceleration in design px/s².
+    #[serde(default)]
+    pub gravity: Option<f32>,
+    pub fade_in: f32,
+}
+
+impl ParticleEffect {
+    pub fn preset(name: impl Into<String>) -> Self {
+        Self {
+            texture: None,
+            preset: name.into(),
+            count: 0,
+            wind: None,
+            gravity: None,
+            fade_in: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VideoMode {
+    #[default]
+    Fullscreen,
+    Mixed,
+}
+
+/// Adapter-neutral video playback request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoSpec {
+    pub id: String,
+    pub file: String,
+    pub looped: bool,
+    pub muted: bool,
+    pub alpha: f32,
+    pub skippable: bool,
+    pub wait_for_finished: bool,
+    pub mode: VideoMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CameraShakeAxis {
+    X,
+    Y,
+    #[default]
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CameraShakeFalloff {
+    #[default]
+    Linear,
+    Exponential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraShakeSpec {
+    pub amplitude: f32,
+    pub frequency: f32,
+    pub duration: f32,
+    pub axis: CameraShakeAxis,
+    pub falloff: CameraShakeFalloff,
+}
+
+/// Compact camera target mask shared by adapters, state and render backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct CameraTargets(u8);
+
+impl CameraTargets {
+    const SCENE_BIT: u8 = 1;
+    const CHARACTERS_BIT: u8 = 2;
+
+    pub const NONE: Self = Self(0);
+    pub const SCENE: Self = Self(Self::SCENE_BIT);
+    pub const CHARACTERS: Self = Self(Self::CHARACTERS_BIT);
+    pub const ALL: Self = Self(Self::SCENE_BIT | Self::CHARACTERS_BIT);
+
+    pub const fn new(scene: bool, characters: bool) -> Self {
+        Self(((scene as u8) * Self::SCENE_BIT) | ((characters as u8) * Self::CHARACTERS_BIT))
+    }
+
+    pub const fn scene(self) -> bool {
+        self.0 & Self::SCENE_BIT != 0
+    }
+
+    pub const fn characters(self) -> bool {
+        self.0 & Self::CHARACTERS_BIT != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ColorToneMode {
+    #[default]
+    None,
+    Grayscale,
+    Sepia,
+}
+
+/// Full camera/filter state shared by editor adapters and the renderer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PostProcessEffect {
+    pub focal_distance: Option<f32>,
+    pub blur_strength: f32,
+    pub distortion_strength: f32,
+    pub vignette_intensity: f32,
+    pub vignette_size: f32,
+    pub blur_amount: f32,
+    pub color_tone: ColorToneMode,
+    pub color_tone_intensity: f32,
+    pub old_film_intensity: f32,
+    pub shock_intensity: f32,
+    pub godray_intensity: f32,
+    pub godray_angle: f32,
+    pub godray_gain: f32,
+    pub godray_lacunarity: f32,
+    pub godray_speed: f32,
+    pub godray_parallel: bool,
+    pub godray_center_x: f32,
+    pub godray_center_y: f32,
+    pub lut_preset: Option<String>,
+    pub lut_intensity: f32,
+}
+
+impl Default for PostProcessEffect {
+    fn default() -> Self {
+        Self {
+            focal_distance: None,
+            blur_strength: 0.0,
+            distortion_strength: 0.0,
+            vignette_intensity: 0.0,
+            vignette_size: 0.7,
+            blur_amount: 0.0,
+            color_tone: ColorToneMode::None,
+            color_tone_intensity: 0.0,
+            old_film_intensity: 0.0,
+            shock_intensity: 0.0,
+            godray_intensity: 0.0,
+            godray_angle: 30.0,
+            godray_gain: 0.5,
+            godray_lacunarity: 2.5,
+            godray_speed: 1.0,
+            godray_parallel: true,
+            godray_center_x: 0.5,
+            godray_center_y: 0.0,
+            lut_preset: None,
+            lut_intensity: 0.0,
+        }
+    }
+}
+
+impl PostProcessEffect {
+    pub fn is_identity(&self) -> bool {
+        self.focal_distance.is_none()
+            && self.blur_strength.abs() <= f32::EPSILON
+            && self.distortion_strength.abs() <= f32::EPSILON
+            && self.vignette_intensity <= f32::EPSILON
+            && self.blur_amount <= f32::EPSILON
+            && self.color_tone == ColorToneMode::None
+            && self.color_tone_intensity <= f32::EPSILON
+            && self.old_film_intensity <= f32::EPSILON
+            && self.shock_intensity <= f32::EPSILON
+            && self.godray_intensity <= f32::EPSILON
+            && self.lut_preset.is_none()
+            && self.lut_intensity <= f32::EPSILON
+    }
+
+    pub fn interpolate(&self, target: &Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let lerp = |from: f32, to: f32| from + (to - from) * progress;
+        Self {
+            focal_distance: match (self.focal_distance, target.focal_distance) {
+                (Some(from), Some(to)) => Some(lerp(from, to)),
+                (_, target) => target,
+            },
+            blur_strength: lerp(self.blur_strength, target.blur_strength),
+            distortion_strength: lerp(self.distortion_strength, target.distortion_strength),
+            vignette_intensity: lerp(self.vignette_intensity, target.vignette_intensity),
+            vignette_size: lerp(self.vignette_size, target.vignette_size),
+            blur_amount: lerp(self.blur_amount, target.blur_amount),
+            color_tone: if target.color_tone != ColorToneMode::None || progress >= 1.0 {
+                target.color_tone
+            } else {
+                self.color_tone
+            },
+            color_tone_intensity: lerp(self.color_tone_intensity, target.color_tone_intensity),
+            old_film_intensity: lerp(self.old_film_intensity, target.old_film_intensity),
+            shock_intensity: lerp(self.shock_intensity, target.shock_intensity),
+            godray_intensity: lerp(self.godray_intensity, target.godray_intensity),
+            godray_angle: lerp(self.godray_angle, target.godray_angle),
+            godray_gain: lerp(self.godray_gain, target.godray_gain),
+            godray_lacunarity: lerp(self.godray_lacunarity, target.godray_lacunarity),
+            godray_speed: lerp(self.godray_speed, target.godray_speed),
+            godray_parallel: if progress >= 1.0 {
+                target.godray_parallel
+            } else {
+                self.godray_parallel
+            },
+            godray_center_x: lerp(self.godray_center_x, target.godray_center_x),
+            godray_center_y: lerp(self.godray_center_y, target.godray_center_y),
+            lut_preset: if target.lut_preset.is_some() || progress >= 1.0 {
+                target.lut_preset.clone()
+            } else {
+                self.lut_preset.clone()
+            },
+            lut_intensity: lerp(self.lut_intensity, target.lut_intensity),
+        }
+    }
+}
+
+/// Sparse camera/filter update. Missing fields preserve the current value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PostProcessPatch {
+    pub focal_distance: Option<Option<f32>>,
+    pub blur_strength: Option<f32>,
+    pub distortion_strength: Option<f32>,
+    pub vignette_intensity: Option<f32>,
+    pub vignette_size: Option<f32>,
+    pub blur_amount: Option<f32>,
+    pub color_tone: Option<ColorToneMode>,
+    pub color_tone_intensity: Option<f32>,
+    pub old_film_intensity: Option<f32>,
+    pub shock_intensity: Option<f32>,
+    pub godray_intensity: Option<f32>,
+    pub godray_angle: Option<f32>,
+    pub godray_gain: Option<f32>,
+    pub godray_lacunarity: Option<f32>,
+    pub godray_speed: Option<f32>,
+    pub godray_parallel: Option<bool>,
+    pub godray_center_x: Option<f32>,
+    pub godray_center_y: Option<f32>,
+    pub lut_preset: Option<Option<String>>,
+    pub lut_intensity: Option<f32>,
+}
+
+impl PostProcessPatch {
+    pub fn apply_to(&self, mut effect: PostProcessEffect) -> PostProcessEffect {
+        macro_rules! apply {
+            ($field:ident) => {
+                if let Some(value) = &self.$field {
+                    effect.$field = value.clone();
+                }
+            };
+        }
+        apply!(focal_distance);
+        apply!(blur_strength);
+        apply!(distortion_strength);
+        apply!(vignette_intensity);
+        apply!(vignette_size);
+        apply!(blur_amount);
+        apply!(color_tone);
+        apply!(color_tone_intensity);
+        apply!(old_film_intensity);
+        apply!(shock_intensity);
+        apply!(godray_intensity);
+        apply!(godray_angle);
+        apply!(godray_gain);
+        apply!(godray_lacunarity);
+        apply!(godray_speed);
+        apply!(godray_parallel);
+        apply!(godray_center_x);
+        apply!(godray_center_y);
+        apply!(lut_preset);
+        apply!(lut_intensity);
+        effect
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

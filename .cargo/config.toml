@@ -1,3 +1,22 @@
 [alias]
-dev = "run -- dev"
+dev = "run --features video-ffmpeg -- dev"
+# Minimal runtime for machines without FFmpeg development libraries. Projects
+# that contain video deliberately fail that capability at runtime instead of
+# pretending playback succeeded.
+dev-lite = "run -- dev"
+# Optimized interactive preview. Keeping `--release` inside the alias avoids
+# leaking Cargo's option ordering into the project-facing command line.
+preview = "run --release --features video-ffmpeg -- dev"
+studio-install = "run --features video-ffmpeg -- integration-install letsgal-studio"
+# Preferred name for both first install and later binary/extension refreshes.
+studio-sync = "run --features video-ffmpeg -- integration-install letsgal-studio"
+studio-uninstall = "run -- integration-uninstall letsgal-studio"
+# Stable SDK-only workflow: Studio owns editing, while crabgal watches its
+# persisted cursor and listens for the extension lifecycle on localhost.
+studio-dev = "run --features video-ffmpeg -- studio"
+studio-check = "run -- check"
+studio-test = "test --workspace --all-targets --no-default-features"
+studio-lint = "clippy --workspace --all-targets --no-default-features -- -D warnings"
+validate = "run -- check"
+# Backward-compatible name used by earlier local workflows.
 parse = "run -- check"

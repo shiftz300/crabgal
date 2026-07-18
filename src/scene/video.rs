@@ -1,0 +1,814 @@
+#[cfg(feature = "video-ffmpeg")]
+use std::collections::HashMap;
+
+#[cfg(feature = "video-ffmpeg")]
+use bevy::camera::visibility::RenderLayers;
+use bevy::prelude::*;
+
+#[cfg(not(feature = "video-ffmpeg"))]
+use crate::runtime::resources::GameState;
+
+#[cfg(feature = "video-ffmpeg")]
+#[derive(Component)]
+struct VideoNode;
+
+pub(crate) struct VideoPlugin;
+
+impl Plugin for VideoPlugin {
+    fn build(&self, app: &mut App) {
+        #[cfg(feature = "video-ffmpeg")]
+        {
+            use bevy::audio::AddAudioSource;
+
+            if let Err(error) = video_rs::init() {
+                log::error!("failed to initialize FFmpeg video backend: {error}");
+            }
+            app.init_resource::<VideoPlayback>()
+                .init_asset::<ffmpeg_backend::FfmpegVideoAudio>()
+                .add_audio_source::<ffmpeg_backend::FfmpegVideoAudio>()
+                .add_systems(
+                    Update,
+                    sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
+                );
+        }
+        #[cfg(not(feature = "video-ffmpeg"))]
+        app.init_resource::<MissingVideoBackend>().add_systems(
+            Update,
+            reject_unavailable_video.in_set(crate::runtime::GameSystemSet::Sync),
+        );
+    }
+}
+
+#[cfg(not(feature = "video-ffmpeg"))]
+#[derive(Resource, Default)]
+struct MissingVideoBackend(bool);
+
+#[cfg(not(feature = "video-ffmpeg"))]
+fn reject_unavailable_video(mut state: ResMut<GameState>, mut warned: ResMut<MissingVideoBackend>) {
+    if state.videos.is_empty() {
+        return;
+    }
+    if !warned.0 {
+        warned.0 = true;
+        log::error!(
+            "video playback was requested, but this binary was built without `video-ffmpeg`"
+        );
+    }
+    state.videos.clear();
+}
+
+#[cfg(feature = "video-ffmpeg")]
+mod ffmpeg_backend {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    use bevy::asset::RenderAssetUsages;
+    use bevy::audio::{AudioPlayer, Decodable, PlaybackMode, PlaybackSettings, Volume};
+    use bevy::ecs::system::SystemParam;
+    use bevy::prelude::*;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use crabgal_core::{BlendMode, VideoMode, VisualFilter};
+    use crabgal_loader::ContentMount;
+    use rodio::{ChannelCount, SampleRate, Source};
+    use tempfile::NamedTempFile;
+    use video_rs::ffmpeg;
+
+    use super::{HashMap, RenderLayers, VideoNode};
+    use crate::runtime::platform::DesignViewport;
+    use crate::runtime::resources::{ContentProjectResource, GameConfigResource, GameState};
+    use crate::scene::effects::material::{StageMaterial, StageQuad};
+    use crate::storage::settings::RuntimeSettings;
+
+    #[derive(Resource, Default)]
+    pub(super) struct VideoPlayback {
+        sessions: HashMap<String, VideoSession>,
+    }
+
+    struct VideoSession {
+        receiver: Mutex<Receiver<DecoderEvent>>,
+        cancelled: Arc<AtomicBool>,
+        pending: Option<DecodedFrame>,
+        image: Option<Handle<Image>>,
+        material: Option<Handle<StageMaterial>>,
+        entity: Option<Entity>,
+        audio_entity: Option<Entity>,
+        audio_asset: Option<Handle<FfmpegVideoAudio>>,
+        source: Option<Arc<PreparedSource>>,
+        start_elapsed: Option<f32>,
+        mode: VideoMode,
+        muted: bool,
+        revision: u64,
+    }
+
+    impl Drop for VideoSession {
+        fn drop(&mut self) {
+            self.cancelled.store(true, Ordering::Release);
+        }
+    }
+
+    enum DecoderEvent {
+        Ready(Arc<PreparedSource>),
+        Frame(DecodedFrame),
+        End,
+        Error(String),
+    }
+
+    struct DecodedFrame {
+        timestamp: f32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    }
+
+    #[derive(Debug)]
+    struct PreparedSource {
+        path: PathBuf,
+        _temporary: Option<NamedTempFile>,
+    }
+
+    #[derive(Asset, TypePath, Clone, Debug)]
+    pub(super) struct FfmpegVideoAudio {
+        source: Arc<PreparedSource>,
+    }
+
+    impl Decodable for FfmpegVideoAudio {
+        type Decoder = FfmpegAudioStream;
+
+        fn decoder(&self) -> Self::Decoder {
+            FfmpegAudioStream::open(self.source.clone()).unwrap_or_else(|error| {
+                log::warn!("video audio track is unavailable: {error}");
+                FfmpegAudioStream::failed(self.source.clone())
+            })
+        }
+    }
+
+    #[derive(SystemParam)]
+    pub(super) struct VideoResources<'w> {
+        content: Res<'w, ContentProjectResource>,
+        config: Res<'w, GameConfigResource>,
+        settings: Res<'w, RuntimeSettings>,
+        images: ResMut<'w, Assets<Image>>,
+        materials: ResMut<'w, Assets<StageMaterial>>,
+        quad: Res<'w, StageQuad>,
+        audio: ResMut<'w, Assets<FfmpegVideoAudio>>,
+    }
+
+    pub(super) fn sync_video_playback(
+        mut commands: Commands,
+        mut state: ResMut<GameState>,
+        windows: Query<Ref<Window>>,
+        mut playback: ResMut<VideoPlayback>,
+        mut resources: VideoResources,
+        mut nodes: Query<
+            (
+                &MeshMaterial2d<StageMaterial>,
+                &mut Transform,
+                &mut RenderLayers,
+            ),
+            With<VideoNode>,
+        >,
+    ) {
+        let Ok(window) = windows.single() else {
+            return;
+        };
+        let viewport = DesignViewport::from_window(&window);
+
+        let removed = playback
+            .sessions
+            .keys()
+            .filter(|id| {
+                state.videos.get(*id).is_none_or(|video| {
+                    playback
+                        .sessions
+                        .get(*id)
+                        .is_some_and(|session| session.revision != video.revision)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in removed {
+            if let Some(session) = playback.sessions.remove(&id) {
+                cleanup_session(
+                    session,
+                    &mut commands,
+                    &mut resources.images,
+                    &mut resources.materials,
+                    &mut resources.audio,
+                );
+            }
+        }
+
+        for (id, video) in &state.videos {
+            playback.sessions.entry(id.clone()).or_insert_with(|| {
+                spawn_decoder(
+                    resources.content.asset_mounts(),
+                    resources.config.video_path(&video.spec.file),
+                    video.spec.looped,
+                    video.spec.mode,
+                    video.spec.muted,
+                    video.revision,
+                )
+            });
+        }
+
+        let mut ended = Vec::new();
+        for (id, session) in &mut playback.sessions {
+            let Some(video) = state.videos.get(id) else {
+                continue;
+            };
+            let mut newest = None;
+            if let Some(frame) = session.pending.take() {
+                if frame.timestamp <= playback_elapsed(video.elapsed, session.start_elapsed) {
+                    newest = Some(frame);
+                } else {
+                    session.pending = Some(frame);
+                }
+            }
+            while session.pending.is_none() {
+                let event = session
+                    .receiver
+                    .lock()
+                    .map_or(Err(TryRecvError::Disconnected), |receiver| {
+                        receiver.try_recv()
+                    });
+                match event {
+                    Ok(DecoderEvent::Ready(source)) => {
+                        session.start_elapsed.get_or_insert(video.elapsed);
+                        if !session.muted && session.audio_entity.is_none() {
+                            let asset = resources.audio.add(FfmpegVideoAudio {
+                                source: source.clone(),
+                            });
+                            let entity = commands
+                                .spawn((
+                                    Name::new(format!("video-audio::{id}")),
+                                    AudioPlayer(asset.clone()),
+                                    PlaybackSettings {
+                                        mode: if video.spec.looped {
+                                            PlaybackMode::Loop
+                                        } else {
+                                            PlaybackMode::Despawn
+                                        },
+                                        volume: Volume::Linear(resources.settings.master_volume),
+                                        ..default()
+                                    },
+                                ))
+                                .id();
+                            session.audio_entity = Some(entity);
+                            session.audio_asset = Some(asset);
+                        }
+                        session.source = Some(source);
+                    }
+                    Ok(DecoderEvent::Frame(frame))
+                        if frame.timestamp
+                            <= playback_elapsed(video.elapsed, session.start_elapsed) =>
+                    {
+                        newest = Some(frame);
+                    }
+                    Ok(DecoderEvent::Frame(frame)) => {
+                        session.pending = Some(frame);
+                        break;
+                    }
+                    Ok(DecoderEvent::End) => {
+                        ended.push(id.clone());
+                        break;
+                    }
+                    Ok(DecoderEvent::Error(error)) => {
+                        log::error!("video `{}` failed: {error}", video.spec.file);
+                        ended.push(id.clone());
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        ended.push(id.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(frame) = newest {
+                present_frame(
+                    id,
+                    session,
+                    frame,
+                    video.opacity,
+                    viewport,
+                    &mut commands,
+                    &mut resources,
+                );
+            }
+            if let Some(entity) = session.entity
+                && let Ok((material, mut transform, mut layers)) = nodes.get_mut(entity)
+            {
+                if let Some(mut material) = resources.materials.get_mut(&material.0) {
+                    material.tint.w = video.opacity;
+                }
+                transform.translation = viewport.content_center().extend(video_z(session.mode));
+                transform.scale = Vec3::new(
+                    crabgal_core::DESIGN_WIDTH * viewport.scale,
+                    crabgal_core::DESIGN_HEIGHT * viewport.scale,
+                    1.0,
+                );
+                *layers = RenderLayers::layer(video_layer(session.mode));
+            }
+        }
+        for id in ended {
+            state.videos.remove(&id);
+        }
+    }
+
+    fn present_frame(
+        id: &str,
+        session: &mut VideoSession,
+        frame: DecodedFrame,
+        opacity: f32,
+        viewport: DesignViewport,
+        commands: &mut Commands,
+        resources: &mut VideoResources,
+    ) {
+        let image = video_image(frame.width, frame.height, frame.rgba);
+        let handle = if let Some(handle) = &session.image {
+            if let Some(mut current) = resources.images.get_mut(handle) {
+                *current = image;
+            }
+            handle.clone()
+        } else {
+            let handle = resources.images.add(image);
+            session.image = Some(handle.clone());
+            handle
+        };
+        if session.entity.is_none() {
+            let blend = video_blend(session.mode);
+            let material = resources.materials.add(StageMaterial::new(
+                handle,
+                opacity,
+                VisualFilter::default(),
+                blend,
+                Vec4::ZERO,
+                &crabgal_core::PostProcessEffect::default(),
+                None,
+            ));
+            session.material = Some(material.clone());
+            session.entity = Some(
+                commands
+                    .spawn((
+                        Name::new(format!("video::{id}")),
+                        VideoNode,
+                        Mesh2d(resources.quad.0.clone()),
+                        MeshMaterial2d(material),
+                        Transform::from_translation(
+                            viewport.content_center().extend(video_z(session.mode)),
+                        )
+                        .with_scale(Vec3::new(
+                            crabgal_core::DESIGN_WIDTH * viewport.scale,
+                            crabgal_core::DESIGN_HEIGHT * viewport.scale,
+                            1.0,
+                        )),
+                        RenderLayers::layer(video_layer(session.mode)),
+                    ))
+                    .id(),
+            );
+        }
+    }
+
+    fn video_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
+        Image::new(
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            rgba,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+
+    fn cleanup_session(
+        mut session: VideoSession,
+        commands: &mut Commands,
+        images: &mut Assets<Image>,
+        materials: &mut Assets<StageMaterial>,
+        audio_assets: &mut Assets<FfmpegVideoAudio>,
+    ) {
+        if let Some(entity) = session.entity {
+            commands.entity(entity).try_despawn();
+        }
+        if let Some(entity) = session.audio_entity {
+            commands.entity(entity).try_despawn();
+        }
+        if let Some(image) = session.image.take() {
+            images.remove(image.id());
+        }
+        if let Some(material) = session.material.take() {
+            materials.remove(material.id());
+        }
+        if let Some(audio) = session.audio_asset.take() {
+            audio_assets.remove(audio.id());
+        }
+    }
+
+    const fn video_layer(mode: VideoMode) -> usize {
+        match mode {
+            VideoMode::Fullscreen => 2,
+            VideoMode::Mixed => 0,
+        }
+    }
+
+    const fn video_blend(mode: VideoMode) -> BlendMode {
+        match mode {
+            VideoMode::Fullscreen => BlendMode::Alpha,
+            VideoMode::Mixed => BlendMode::Screen,
+        }
+    }
+
+    const fn video_z(mode: VideoMode) -> f32 {
+        match mode {
+            VideoMode::Fullscreen => 1_000.0,
+            VideoMode::Mixed => 50.0,
+        }
+    }
+
+    fn spawn_decoder(
+        mounts: Vec<ContentMount>,
+        path: String,
+        looped: bool,
+        mode: VideoMode,
+        muted: bool,
+        revision: u64,
+    ) -> VideoSession {
+        let (sender, receiver) = sync_channel(3);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let thread_cancelled = cancelled.clone();
+        thread::Builder::new()
+            .name(format!("crabgal-video-{path}"))
+            .spawn(move || decode_video(mounts, &path, looped, thread_cancelled, sender))
+            .unwrap_or_else(|error| {
+                log::error!("failed to start video decoder thread: {error}");
+                thread::spawn(|| {})
+            });
+        VideoSession {
+            receiver: Mutex::new(receiver),
+            cancelled,
+            pending: None,
+            image: None,
+            material: None,
+            entity: None,
+            audio_entity: None,
+            audio_asset: None,
+            source: None,
+            start_elapsed: None,
+            mode,
+            muted,
+            revision,
+        }
+    }
+
+    fn playback_elapsed(state_elapsed: f32, start_elapsed: Option<f32>) -> f32 {
+        start_elapsed.map_or(0.0, |start| (state_elapsed - start).max(0.0))
+    }
+
+    fn decode_video(
+        mounts: Vec<ContentMount>,
+        logical_path: &str,
+        looped: bool,
+        cancelled: Arc<AtomicBool>,
+        sender: SyncSender<DecoderEvent>,
+    ) {
+        let source = match prepare_source(&mounts, Path::new(logical_path)) {
+            Ok(source) => Arc::new(source),
+            Err(error) => {
+                let _ = sender.send(DecoderEvent::Error(error));
+                return;
+            }
+        };
+        let mut decoder = match video_rs::Decoder::new(source.path.as_path()) {
+            Ok(decoder) => decoder,
+            Err(error) => {
+                let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                return;
+            }
+        };
+        let duration = decoder
+            .duration()
+            .map_or(0.0, |duration| duration.as_secs());
+        if !send_event(&sender, DecoderEvent::Ready(source), &cancelled) {
+            return;
+        }
+        let mut loop_offset = 0.0;
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            match decoder.decode() {
+                Ok((timestamp, frame)) => {
+                    let (height, width, _) = frame.dim();
+                    let mut rgba = Vec::with_capacity(width * height * 4);
+                    let (rgb, offset) = frame.into_raw_vec_and_offset();
+                    let start = offset.unwrap_or(0);
+                    for pixel in rgb[start..].chunks_exact(3) {
+                        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                    }
+                    let frame = DecodedFrame {
+                        timestamp: loop_offset + timestamp.as_secs().max(0.0),
+                        width: width as u32,
+                        height: height as u32,
+                        rgba,
+                    };
+                    if !send_event(&sender, DecoderEvent::Frame(frame), &cancelled) {
+                        return;
+                    }
+                }
+                Err(video_rs::Error::DecodeExhausted) if looped => {
+                    loop_offset += duration;
+                    if let Err(error) = decoder.seek_to_start() {
+                        let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                        return;
+                    }
+                }
+                Err(video_rs::Error::DecodeExhausted) => {
+                    let _ = sender.send(DecoderEvent::End);
+                    return;
+                }
+                Err(error) => {
+                    let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                    return;
+                }
+            }
+        }
+    }
+
+    fn send_event(
+        sender: &SyncSender<DecoderEvent>,
+        mut event: DecoderEvent,
+        cancelled: &AtomicBool,
+    ) -> bool {
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return false;
+            }
+            match sender.try_send(event) {
+                Ok(()) => return true,
+                Err(TrySendError::Full(returned)) => {
+                    event = returned;
+                    thread::sleep(Duration::from_millis(2));
+                }
+                Err(TrySendError::Disconnected(_)) => return false,
+            }
+        }
+    }
+
+    fn prepare_source(mounts: &[ContentMount], path: &Path) -> Result<PreparedSource, String> {
+        for mount in mounts.iter().rev() {
+            if !mount.contains_file(path) {
+                continue;
+            }
+            if let Some(root) = mount.filesystem_root() {
+                return Ok(PreparedSource {
+                    path: root.join(path),
+                    _temporary: None,
+                });
+            }
+            let bytes = mount.read(path).map_err(|error| error.to_string())?;
+            let suffix = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map_or(String::new(), |extension| format!(".{extension}"));
+            let mut file = tempfile::Builder::new()
+                .prefix("crabgal-video-")
+                .suffix(&suffix)
+                .tempfile()
+                .map_err(|error| error.to_string())?;
+            std::io::Write::write_all(&mut file, &bytes).map_err(|error| error.to_string())?;
+            return Ok(PreparedSource {
+                path: file.path().to_owned(),
+                _temporary: Some(file),
+            });
+        }
+        Err(format!("video asset does not exist: {}", path.display()))
+    }
+
+    pub(super) struct FfmpegAudioStream {
+        source: Arc<PreparedSource>,
+        input: Option<ffmpeg::format::context::Input>,
+        decoder: Option<ffmpeg::decoder::Audio>,
+        resampler: Option<ffmpeg::software::resampling::Context>,
+        stream_index: usize,
+        samples: Vec<f32>,
+        position: usize,
+        sample_rate: SampleRate,
+        duration: Option<Duration>,
+        eof_sent: bool,
+        ended: bool,
+    }
+
+    impl FfmpegAudioStream {
+        fn open(source: Arc<PreparedSource>) -> Result<Self, ffmpeg::Error> {
+            let input = ffmpeg::format::input(&source.path)?;
+            let stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Audio)
+                .ok_or(ffmpeg::Error::StreamNotFound)?;
+            let stream_index = stream.index();
+            let duration = (stream.duration() > 0).then(|| {
+                let base = stream.time_base();
+                Duration::from_secs_f64(
+                    stream.duration() as f64 * f64::from(base.numerator())
+                        / f64::from(base.denominator()),
+                )
+            });
+            let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
+            let decoder = context.decoder().audio()?;
+            let source_layout = if decoder.channel_layout().is_empty() {
+                ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
+            } else {
+                decoder.channel_layout()
+            };
+            let rate = decoder.rate().max(1);
+            let resampler = ffmpeg::software::resampling::Context::get(
+                decoder.format(),
+                source_layout,
+                rate,
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                ffmpeg::ChannelLayout::STEREO,
+                rate,
+            )?;
+            Ok(Self {
+                source,
+                input: Some(input),
+                decoder: Some(decoder),
+                resampler: Some(resampler),
+                stream_index,
+                samples: Vec::new(),
+                position: 0,
+                sample_rate: SampleRate::new(rate).unwrap_or(SampleRate::MIN),
+                duration,
+                eof_sent: false,
+                ended: false,
+            })
+        }
+
+        fn failed(source: Arc<PreparedSource>) -> Self {
+            Self {
+                source,
+                input: None,
+                decoder: None,
+                resampler: None,
+                stream_index: 0,
+                samples: Vec::new(),
+                position: 0,
+                sample_rate: SampleRate::new(48_000).unwrap_or(SampleRate::MIN),
+                duration: None,
+                eof_sent: true,
+                ended: true,
+            }
+        }
+
+        fn receive_frames(&mut self) -> Result<bool, ffmpeg::Error> {
+            let Some(decoder) = self.decoder.as_mut() else {
+                return Ok(false);
+            };
+            let Some(resampler) = self.resampler.as_mut() else {
+                return Ok(false);
+            };
+            let mut received = false;
+            let mut decoded = ffmpeg::frame::Audio::empty();
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                let mut converted = ffmpeg::frame::Audio::empty();
+                resampler.run(&decoded, &mut converted)?;
+                self.samples.clear();
+                self.position = 0;
+                for &(left, right) in converted.plane::<(f32, f32)>(0) {
+                    self.samples.extend_from_slice(&[left, right]);
+                }
+                if !self.samples.is_empty() {
+                    received = true;
+                    break;
+                }
+            }
+            Ok(received)
+        }
+
+        fn decode_next(&mut self) -> bool {
+            loop {
+                if self.receive_frames().unwrap_or(false) {
+                    return true;
+                }
+                if self.eof_sent {
+                    self.ended = true;
+                    return false;
+                }
+                let packet = self.input.as_mut().and_then(|input| {
+                    input
+                        .packets()
+                        .find(|(stream, _)| stream.index() == self.stream_index)
+                        .map(|(_, packet)| packet)
+                });
+                if let Some(packet) = packet {
+                    if self
+                        .decoder
+                        .as_mut()
+                        .is_none_or(|decoder| decoder.send_packet(&packet).is_err())
+                    {
+                        self.ended = true;
+                        return false;
+                    }
+                } else {
+                    self.eof_sent = true;
+                    if self
+                        .decoder
+                        .as_mut()
+                        .is_none_or(|decoder| decoder.send_eof().is_err())
+                    {
+                        self.ended = true;
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    impl Iterator for FfmpegAudioStream {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                if let Some(sample) = self.samples.get(self.position).copied() {
+                    self.position += 1;
+                    return Some(sample);
+                }
+                if self.ended || !self.decode_next() {
+                    return None;
+                }
+            }
+        }
+    }
+
+    impl Source for FfmpegAudioStream {
+        fn current_span_len(&self) -> Option<usize> {
+            self.ended.then_some(0)
+        }
+
+        fn channels(&self) -> ChannelCount {
+            ChannelCount::new(2).unwrap_or(ChannelCount::MIN)
+        }
+
+        fn sample_rate(&self) -> SampleRate {
+            self.sample_rate
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            self.duration
+        }
+
+        fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+            let mut reopened = Self::open(self.source.clone()).map_err(|error| {
+                rodio::source::SeekError::Other(Arc::new(std::io::Error::other(error.to_string())))
+            })?;
+            let samples =
+                (position.as_secs_f64() * f64::from(reopened.sample_rate.get()) * 2.0) as usize;
+            for _ in 0..samples {
+                if reopened.next().is_none() {
+                    break;
+                }
+            }
+            *self = reopened;
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn mixed_video_uses_the_authored_screen_blend() {
+            assert_eq!(video_blend(VideoMode::Mixed), BlendMode::Screen);
+            assert_eq!(video_blend(VideoMode::Fullscreen), BlendMode::Alpha);
+        }
+
+        #[test]
+        #[ignore = "set CRABGAL_TEST_VIDEO to a local video with an audio track"]
+        fn decodes_video_and_audio_incrementally() {
+            let path = std::env::var_os("CRABGAL_TEST_VIDEO")
+                .map(PathBuf::from)
+                .expect("CRABGAL_TEST_VIDEO is required");
+            let source = Arc::new(PreparedSource {
+                path: path.clone(),
+                _temporary: None,
+            });
+            let mut video = video_rs::Decoder::new(path.as_path()).unwrap();
+            let (_, frame) = video.decode().unwrap();
+            assert!(frame.dim().0 > 0 && frame.dim().1 > 0);
+
+            let mut audio = FfmpegAudioStream::open(source).unwrap();
+            assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
+        }
+    }
+}
+
+#[cfg(feature = "video-ffmpeg")]
+use ffmpeg_backend::{VideoPlayback, sync_video_playback};

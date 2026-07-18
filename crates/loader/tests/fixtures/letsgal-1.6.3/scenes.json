@@ -1,0 +1,22 @@
+{
+  "scenes": [
+    {
+      "id": "scene-main",
+      "name": "Compatibility Scene",
+      "layers": [
+        {
+          "id": "layer-background",
+          "name": "Background",
+          "assetPath": "backgrounds/test.png",
+          "distance": 1
+        },
+        {
+          "id": "layer-overlay",
+          "name": "Overlay",
+          "assetPath": "backgrounds/overlay.png",
+          "distance": 0.8
+        }
+      ]
+    }
+  ]
+}

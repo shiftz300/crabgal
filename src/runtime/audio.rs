@@ -416,17 +416,18 @@ mod tests {
 
     #[test]
     fn decodes_project_ogg_opus_incrementally() {
-        let bytes: Arc<[u8]> =
-            include_bytes!("../../projects/test-project/content/shared/vocal/v16.opus")
-                .as_slice()
-                .into();
+        let bytes: Arc<[u8]> = include_bytes!(
+            "../../projects/test-project/content/shared/audio/calibration_voice.opus"
+        )
+        .as_slice()
+        .into();
         let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
         let duration = stream
             .total_duration()
             .expect("seekable Ogg Opus should expose its duration");
         let samples = stream.by_ref().take(4_800).collect::<Vec<_>>();
 
-        assert_eq!(stream.channels().get(), 1);
+        assert_eq!(stream.channels().get(), 2);
         assert_eq!(stream.sample_rate().get(), 48_000);
         assert!(duration > Duration::from_millis(100));
         assert_eq!(samples.len(), 4_800);
@@ -456,10 +457,11 @@ mod tests {
 
     #[test]
     fn opus_stream_can_seek_forward_and_back_to_the_start() {
-        let bytes: Arc<[u8]> =
-            include_bytes!("../../projects/test-project/content/shared/vocal/v16.opus")
-                .as_slice()
-                .into();
+        let bytes: Arc<[u8]> = include_bytes!(
+            "../../projects/test-project/content/shared/audio/calibration_voice.opus"
+        )
+        .as_slice()
+        .into();
         let mut fresh = OpusStream::new(bytes.clone()).expect("test Opus asset should open");
         let duration = fresh.total_duration().expect("test Opus has a duration");
         let full_sample_count = fresh.by_ref().count();

@@ -17,15 +17,41 @@ config.yaml
 adapter/
 ├── asset/          资源目录或容器挂载
 │   ├── fs.rs
-│   ├── auto.rs
-│   └── hexz.rs     hexz_k 标准资源包适配
+│   ├── hexz.rs     hexz_k 标准资源包适配
+│   └── mod.rs      registry 与 auto 选择器
+├── editor/         完整编辑器工程的检测、编译与可选宿主集成
+│   └── letsgal/    LetsGal 多文件工程、统一 IR 与资源清单
+│       └── studio/ 显式安装的 Studio 扩展包；不参与普通加载
 ├── script/
 │   └── webgal/     WebGAL parser 与统一 Action 导出
 └── store/          存档状态格式编码、检查与解析
 ```
 
-三个类别各自有独立 registry 和 trait 边界。loader 只组合配置选中的实现，不再要求一个
-adapter 同时假装理解资源、脚本和存档。新增资源包、脚本语言或存档格式时只扩展对应目录。
+顶层只表示稳定能力类别。asset/script/store 各有独立 registry 和 trait 边界；
+editor 负责一次读取 project、chapter、character、scene 与 manifest 的完整编辑器工程。
+具体格式始终位于所属类别下，例如 `editor/letsgal` 、`script/webgal` 和 `store/crabgal`。
+
+### 职责不可越界
+
+| 层 | 负责 | 明确不负责 |
+|---|---|---|
+| `adapter/asset/hexz` | 检测完整 `.hxz` 工程、解析包内 config、生成通用 seekable content mount | Bevy `AssetReader`、渲染资源、运行状态 |
+| `adapter/editor/letsgal` | 检测工程、只读解析 JSON/manifest/Studio 光标、补齐来源默认值、生成统一 config/mount/Action | 文件监控、写回工程、Bevy、窗口、进程、TCP、Studio DOM |
+| `adapter/editor/letsgal/studio` | 打包官方 SDK 扩展；在显式 integration 命令中安装、卸载并写入工程 opt-in | 参与普通 project open、编译 IR、持有 Bevy App、实现 TCP 服务 |
+| loader | adapter registry、来源合并、`notify` 监控、临时编译完整 Program | 运行游戏状态、重放剧情、渲染 UI |
+| core/runtime | 消费统一 Action、原子替换 Program、保留持久状态并重建瞬态演出 | 理解 LetsGal JSON 字段或 UUID 模型 |
+| `runtime/editor_bridge` | adapter 无关的 localhost 矩形/重启协议与原生窗口生命周期 | 安装扩展、解析某种编辑器工程、依赖 Studio SDK/DOM |
+
+Rust crate 依赖方向强制这一边界：`crabgal-loader -> crabgal-core`，loader 不依赖根引擎、
+Bevy、Winit 或 Electron。LetsGal adapter 的回归测试还会对 fixture 做调用前后逐文件快照，
+保证 detect/open/load/config/cursor 全流程不修改源工程。
+
+根引擎只调用 `ProjectAdapter`、`EditorIntegrationAdapter`、`StructuredSceneLoader` 和统一
+`ContentProject`；它不导入任何 LetsGal 类型。普通 `dev`/发行启动不会创建 editor bridge，
+只有宿主 adapter 显式以 `editor --bridge-port` 启动 sidecar 时才加载该通用插件。因此移除或
+替换某个 editor adapter 不会改变 VM、渲染器、UI 或原生 crabgal 工程的启动路径。
+library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`
+只是最终 crabgal 二进制采用的内置组合，并不是 runtime 的类型依赖。
 
 ## 配置
 
@@ -56,7 +82,7 @@ adapter:
 | asset / `auto` | 本地目录或容器 | 根据路径委派 asset adapter |
 | asset / `hexz` | 标准 `.hxz` 包 | `hexz_k::ResourcePack` 校验、解密与随机读取 |
 | script / `webgal` | `.txt` scene | `ParseReport<Action>` |
-| store / `crabgal` | v5 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
+| store / `crabgal` | v7 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
 
 `LoaderRegistry` 按类别解析名称。asset source 可以有多个且保持后声明覆盖；script 和 store
 各选一个明确格式，未知名称在启动阶段直接报错，而不是静默回退。
@@ -71,19 +97,28 @@ adapter:
 
 `SavedState` 只允许通过 `snapshot()` 做只读预览投影，或通过 `restore_into(&mut current)` 合入当前项目。恢复时 core 会核对存档与当前 `Program` 的 fingerprint，重新附着当前 `Arc<Program>`，保留 profile/read-history/gallery 等槽外数据，并拒绝不同脚本布局的存档。UI 的 metadata 过滤只是提前反馈，不能替代 core 检查。
 
-当前 crabgal store 使用 v5、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
+当前 crabgal store 使用 v7、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
 
 ## 运行时规则
 
 - `crabgal-loader` 从统一 `ContentMount` 合并脚本并生成最终 scene/resource manifest。
-- `OverlayAssetReader` 只做 Bevy 接口桥接，按相反顺序查找资产，且不会复制或落盘 Hexz entry。
+- `OverlayAssetReader` 只做 Bevy 接口桥接，按相反顺序查找资产，只消费通用
+  `ContentMount/ContentFile`；它不知道底层容器格式，也不会复制或落盘 archive entry。
 - 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。
-- 热重载只监听开发期 FS 脚本根；只读 Hexz 来源不创建无意义 watcher。Program fingerprint 改变时会从当前 scene 开头重建演出/交互状态，避免新脚本身份与旧对白、Choice 或动画混合后进入存档。
+- FS 脚本/结构化工程由 `notify` 递归监控；变更后先完整解析到临时 Program，再一次替换，
+  并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。
+- FS 资源根由 `OverlayAssetWatcher` 监控；逻辑路径事件交给 Bevy AssetServer，原 handle 原位
+  重载。多来源中高优先级文件被删除时会立即重新读取低优先级 fallback；图片重新执行尺寸
+  限制与 CPU 像素释放。Hexz 是只读发行来源，不创建 watcher。
+- macOS/Windows/Linux 使用同一 `notify::RecommendedWatcher` 生命周期与相同逻辑路径，差异仅在
+  notify 选择的系统后端；Windows 的反斜杠不会进入 IR 或资源键。
 - Hexz 使用受限 block cache 和 seekable `ResourceFile`；配置、脚本、图片、字体与音频共享一个归档索引。
 
 ## 约束
 
 - adapter 必须返回只读、稳定、规范化的逻辑 mount。
+- editor adapter 只描述 `watch_roots/accepts_change` 这类格式规则；实际 watcher 生命周期由
+  loader 持有，实际 reload/state rebuild 由 runtime 执行。
 - 不把 Bevy handle、ECS 类型或 UI 状态放入 `crabgal-loader`。
 - store adapter 不得把 decoded payload 暴露成可直接运行的 `State`；执行态恢复必须经过 `SavedState::restore_into`。
 - 不允许业务代码直接拼接某个 source 的物理路径。

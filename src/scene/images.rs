@@ -70,8 +70,12 @@ pub(crate) struct ImageDimensions(HashMap<AssetId<Image>, UVec2>);
 pub(crate) struct PreparedImages(HashSet<AssetId<Image>>);
 
 impl ImageDimensions {
+    pub(crate) fn size(&self, handle: &Handle<Image>) -> Option<UVec2> {
+        self.0.get(&handle.id()).copied()
+    }
+
     pub(crate) fn aspect(&self, handle: &Handle<Image>) -> Option<f32> {
-        let size = self.0.get(&handle.id())?;
+        let size = self.size(handle)?;
         (size.y > 0).then_some(size.x as f32 / size.y as f32)
     }
 }
@@ -84,8 +88,19 @@ pub(crate) fn prepare(
     mut images: ResMut<Assets<Image>>,
     mut dimensions: ResMut<ImageDimensions>,
     mut prepared: ResMut<PreparedImages>,
+    mut events: MessageReader<AssetEvent<Image>>,
 ) {
-    let is_image = |path: &str| path.starts_with("background/") || path.starts_with("figure/");
+    for event in events.read() {
+        let id = match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                *id
+            }
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
+        };
+        prepared.0.remove(&id);
+        dimensions.0.remove(&id);
+    }
+    let is_image = |path: &str| is_background_path(path) || is_figure_path(path);
     let has_pending = cache.0.iter().any(|(path, handle)| {
         is_image(path) && !prepared.0.contains(&handle.id().typed::<Image>())
     });
@@ -109,7 +124,7 @@ pub(crate) fn prepare(
     }
 
     for (path, handle) in &cache.0 {
-        if !path.starts_with("background/") && !path.starts_with("figure/") {
+        if !is_background_path(path) && !is_figure_path(path) {
             continue;
         }
         let id = handle.id().typed::<Image>();
@@ -161,17 +176,31 @@ fn is_resizeable(image: &Image) -> bool {
 }
 
 fn target_size(path: &str, original: UVec2, sprite_height: f32) -> UVec2 {
-    let limit = if path.starts_with("figure/") {
+    let limit = if is_figure_path(path) {
         UVec2::new(
             crabgal_core::DESIGN_WIDTH as u32,
             sprite_height.ceil() as u32,
         )
-    } else if path.starts_with("background/") {
+    } else if is_background_path(path) {
         BACKGROUND_LIMIT
     } else {
         return original;
     };
     fit_within(original, limit.max(UVec2::ONE))
+}
+
+fn is_background_path(path: &str) -> bool {
+    matches!(
+        path.split('/').next().unwrap_or_default(),
+        "background" | "backgrounds" | "cg"
+    )
+}
+
+fn is_figure_path(path: &str) -> bool {
+    matches!(
+        path.split('/').next().unwrap_or_default(),
+        "figure" | "figures" | "character" | "characters"
+    )
 }
 
 pub(crate) fn decode_preview(bytes: &[u8]) -> io::Result<Image> {

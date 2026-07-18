@@ -14,6 +14,9 @@ pub struct LoadedScene {
     pub name: String,
     pub path: PathBuf,
     pub actions: Vec<Action>,
+    /// Source position for every action, kept parallel to `actions` for
+    /// editor-driven seek and diagnostics.
+    pub action_spans: Vec<crate::SourceSpan>,
     pub diagnostics: Vec<Diagnostic>,
     pub resources: Vec<ResourceRef>,
     pub sub_scenes: Vec<SceneRef>,
@@ -29,6 +32,9 @@ pub fn load_scenes_with(
     project: &ContentProject,
     languages: &ScriptLanguageRegistry,
 ) -> Result<Vec<LoadedScene>> {
+    if let Some(loader) = project.scene_loader() {
+        return loader.load(&project.root);
+    }
     let mut merged = BTreeMap::new();
     for script_mount in project.script_mounts() {
         for mut scene in load_directory(&script_mount, languages)? {
@@ -127,6 +133,7 @@ fn load_scene(
         name,
         path,
         actions: report.actions,
+        action_spans: report.spans,
         diagnostics: report.diagnostics,
         resources: report.resources,
         sub_scenes: report.sub_scenes,
@@ -146,6 +153,7 @@ mod tests {
         ContentProject {
             root: root.to_owned(),
             sources: vec![crate::SourceMount::project("project", root.to_owned())],
+            scene_loader: None,
         }
     }
 
@@ -353,6 +361,7 @@ mod tests {
                 crate::SourceMount::project("project", base_project),
                 crate::SourceMount::project("project", patch_project),
             ],
+            scene_loader: None,
         };
 
         let scenes = load_scenes(&project).unwrap();

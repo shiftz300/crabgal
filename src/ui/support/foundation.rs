@@ -8,8 +8,8 @@ use bevy::prelude::*;
 use bevy::text::FontWeight;
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
-pub(crate) const TEXT_FONT_PATH: &str = "fonts/MavenPro-CJK.ttf";
-pub(crate) const ICON_FONT_PATH: &str = "fonts/bootstrap-icons.ttf";
+pub(crate) const TEXT_FONT_PATH: &str = "embedded://crabgal/assets/fonts/MavenPro-CJK.ttf";
+pub(crate) const ICON_FONT_PATH: &str = "embedded://crabgal/assets/fonts/bootstrap-icons.ttf";
 
 #[derive(Resource, Clone)]
 pub(crate) struct UiFonts {

@@ -22,12 +22,12 @@ detect_audio_features() {
         return
     fi
 
-    local wav=0 mp3=0 vorbis=0 flac=0 file lower
+    local wav=0 mp3=0 vorbis=0 flac=0 video=0 file lower
     while IFS= read -r -d '' file; do
         lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
         case "$lower" in
             *.hxz)
-                printf '%s\n' 'audio-all,ui-sounds'
+                printf '%s\n' 'audio-all,ui-sounds,video-ffmpeg'
                 return
                 ;;
             *.opus) : ;;
@@ -35,6 +35,7 @@ detect_audio_features() {
             *.mp3) mp3=1 ;;
             *.ogg|*.oga|*.spx) vorbis=1 ;;
             *.flac) flac=1 ;;
+            *.mp4|*.m4v|*.mov|*.webm|*.mkv) video=1 ;;
         esac
     done < <(find "$project" -type f -print0)
 
@@ -47,6 +48,7 @@ detect_audio_features() {
     [[ "$mp3" -eq 1 ]] && features+=(audio-mp3)
     [[ "$vorbis" -eq 1 ]] && features+=(audio-vorbis)
     [[ "$flac" -eq 1 ]] && features+=(audio-flac)
+    [[ "$video" -eq 1 ]] && features+=(video-ffmpeg)
 
     local joined="" feature
     for feature in "${features[@]}"; do
@@ -63,10 +65,10 @@ build_engine_for_project() {
     local features
     features="$(detect_audio_features "$project")"
     if [[ -n "$features" ]]; then
-        echo "audio features: $features"
+        echo "content features: $features"
         cargo build "$@" --no-default-features --features "$features"
     else
-        echo "audio features: none"
+        echo "content features: none"
         cargo build "$@" --no-default-features
     fi
 }

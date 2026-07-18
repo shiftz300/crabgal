@@ -13,10 +13,12 @@ crabgal-core   <- crabgal-loader <- crabgal
 ```text
 crabgal/
 ├── Cargo.toml                     根 package、workspace 与公共依赖
+├── build.rs                       Windows PE 图标资源嵌入
+├── assets/icons/                  跨平台图标母版及 PNG、ICO、ICNS 发行资源
 ├── src/
 │   ├── lib.rs                     可复用引擎 library 入口
 │   ├── main.rs                    最小桌面 binary 入口
-│   ├── runtime/                   App bootstrap、统一输入、多根 AssetReader、viewport、帧推进
+│   ├── runtime/                   App bootstrap、原生平台、通用 editor bridge、AssetReader、帧推进
 │   ├── scene/                     ScenePlugin、资源/音频/背景/立绘
 │   │   └── effects/               特殊 blend/filter 材质与有界粒子层
 │   ├── storage/                   StoragePlugin、存档、设置、已读历史和鉴赏解锁
@@ -36,6 +38,8 @@ crabgal/
 │       └── src/
 │           ├── adapter/           可配置的格式适配类别
 │           │   ├── asset/         fs、auto 与 hexz_k 适配
+│           │   ├── editor/        完整编辑器工程 adapter
+│           │   │   └── letsgal/   LetsGal 工程 adapter；studio/ 为可选宿主扩展包
 │           │   ├── script/webgal/ WebGAL 语法解析与统一 IR 导出
 │           │   └── store/         存档状态格式编码与解析
 │           ├── loader/            多来源挂载、场景发现和开发热重载
@@ -82,9 +86,15 @@ crabgal/
 - 三相机职责固定：Scene、普通 UI、Dialog/Modal。
 - `crabgal-core` 不依赖 Bevy。
 - 内容来源按配置顺序分层，后声明来源覆盖前面的同路径资产和同名 scene。
-- adapter 按 `asset`、`script`、`store` 能力类别组织，具体实现由 `config.yaml` 分别选择。
+- adapter 顶层只按 `asset`、`editor`、`script`、`store` 能力类别组织。
+- 需要跨多个 JSON 建立引用关系的格式放入 `editor/<format>/`（如
+  `editor/letsgal/`）；它只负责检测、统一 IR 编译、资源挂载和调试游标。
+- 特定编辑器的安装包放在该 adapter 的宿主子模块；根 runtime 只保留格式无关的本地桥接
+  协议，普通启动不得启用桥接或导入具体 adapter 类型。
 - Hexz 属于 asset，容器协议完全由 `hexz_k`/Hexz 生态库负责。
-- Bevy 仅通过只读 overlay reader 消费统一逻辑路径；包格式和语言适配不得进入渲染层。
+- 完整资源包也由 asset adapter 作为通用 `ProjectAdapter` 打开；bootstrap 不按扩展名分支。
+- Bevy 仅通过只读 `ContentMount/ContentFile` overlay reader 消费统一逻辑路径；包格式和语言
+  适配不得进入 runtime 或渲染层。
 - 专用 MainCore UI 不引入主题系统。
 - 桌面优先，但 library 入口必须可供后续 Web/Android/iOS launcher 复用。
 
@@ -95,3 +105,15 @@ crabgal/
 - 新模块优先放入现有领域，并通过领域 `mod.rs` 暴露最小 API，避免调用方依赖物理路径。
 - 每个阶段结束时检查零引用源码、资源、测试夹具和依赖；确认无运行时或测试用途后删除。
 - 构建产物、存档和导入缓存只能存在于忽略目录，不得成为项目结构的一部分。
+
+## Application icon
+
+`assets/icons/crabgal.png` 是唯一高清透明母版。运行时嵌入 256 px PNG，供 Windows 与
+Linux/X11 窗口使用；macOS 裸二进制开发运行通过 AppKit 设置同一 PNG 的 Dock 图标；
+Windows 构建由 `build.rs` 将 ICO 嵌入可执行文件；macOS app bundle 仍由
+`bundle-macos.sh` 安装 ICNS。`package-release.sh` 只携带 256 px PNG，供 Linux
+`.desktop`/hicolor 使用；Android adaptive icon 与 iOS asset catalog 的后续平台 launcher
+应从仓库内母版生成自己的尺寸集合。
+
+Wayland 不允许普通客户端自行设置窗口图标，因此 Linux 正式安装器仍应将母版安装到系统
+图标主题并在 `.desktop` 中声明；这属于 launcher/安装包职责，不进入引擎生命周期。

@@ -18,6 +18,7 @@ rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/project"
 cp target/release/crabgal "$bundle/Contents/MacOS/crabgal"
 cp -R "$project"/. "$bundle/Contents/Resources/project/"
+cp "$root/assets/icons/crabgal.icns" "$bundle/Contents/Resources/crabgal.icns"
 
 sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +28,7 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$bundle/Contents/In
 <key>CFBundleIdentifier</key><string>dev.crabgal.__NAME__</string>
 <key>CFBundleName</key><string>__NAME__</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>crabgal.icns</string>
 <key>CFBundleShortVersionString</key><string>__VERSION__</string>
 </dict></plist>
 PLIST

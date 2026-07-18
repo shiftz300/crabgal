@@ -2,8 +2,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::adapter::{FormatAdapter, resolve_local};
 use crate::loader::SourceMount;
+
+use super::{FormatAdapter, resolve_local};
 
 /// Development filesystem source with direct logical-path access and no unpack step.
 pub(crate) struct FsFormat;

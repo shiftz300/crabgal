@@ -1,8 +1,8 @@
 # crabgal game configuration
-title: "crabgal Demo"
-title_background: "bg.webp"
+title: "crabgal Feature Lab"
+title_background: "calibration_day.webp"
 project:
-  description: "A compact crabgal feature and visual acceptance project."
+  description: "A self-contained, numbered acceptance project for every WebGAL-adapter action and native visual effect."
 
 # Sources are layered from low to high priority. The shared asset layer proves
 # that scripts and media no longer need to live under one physical root.
@@ -17,7 +17,13 @@ adapter:
 
 assets:
   bgm:
-    v16.opus: "vocal/v16.opus"
+    calibration_bgm.opus: "audio/calibration_bgm.opus"
+  voices:
+    calibration_voice.opus: "audio/calibration_voice.opus"
+  effects:
+    calibration_effect.opus: "audio/calibration_effect.opus"
+  videos:
+    calibration_pan.mp4: "video/calibration_pan.mp4"
 
 fonts:
   speaker_size: 39.0

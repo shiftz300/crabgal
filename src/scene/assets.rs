@@ -22,6 +22,7 @@ pub(crate) struct PrefetchState {
     vocal: Option<String>,
     bgm: Option<String>,
     effects: HashMap<String, String>,
+    particles: HashMap<String, Option<String>>,
 }
 
 impl PrefetchState {
@@ -47,6 +48,11 @@ impl PrefetchState {
                 .looping_effects
                 .iter()
                 .all(|(id, effect)| self.effects.get(id) == Some(&effect.file))
+            && self.particles.len() == state.particle_effects.len()
+            && state
+                .particle_effects
+                .iter()
+                .all(|(id, effect)| self.particles.get(id) == Some(&effect.effect.texture))
     }
 
     fn capture(&mut self, state: &GameState) {
@@ -74,6 +80,13 @@ impl PrefetchState {
                 .iter()
                 .map(|(id, effect)| (id.clone(), effect.file.clone())),
         );
+        self.particles.clear();
+        self.particles.extend(
+            state
+                .particle_effects
+                .iter()
+                .map(|(id, effect)| (id.clone(), effect.effect.texture.clone())),
+        );
     }
 }
 
@@ -85,7 +98,7 @@ pub fn prefetch_local_assets(
     mut cache: ResMut<LocalAssetCache>,
     mut previous: Local<PrefetchState>,
 ) {
-    if previous.matches(&state) && !manifest.is_changed() {
+    if previous.matches(&state) && !manifest.is_changed() && !config.is_changed() {
         return;
     }
     previous.capture(&state);
@@ -102,7 +115,7 @@ pub fn prefetch_local_assets(
         for resource in scene.resources.iter().filter(|resource| {
             resource.action_index >= cursor && resource.action_index <= cursor + LOOKAHEAD_ACTIONS
         }) {
-            let path = resolve_path(resource.kind, &resource.path, &config);
+            let path = resource.resolved_path(&config);
             desired.insert(path, resource.kind);
         }
         for reference in scene.sub_scenes.iter().filter(|reference| {
@@ -116,7 +129,7 @@ pub fn prefetch_local_assets(
                     .iter()
                     .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
                 {
-                    let path = resolve_path(resource.kind, &resource.path, &config);
+                    let path = resource.resolved_path(&config);
                     desired.insert(path, resource.kind);
                 }
             }
@@ -149,19 +162,37 @@ pub fn prefetch_local_assets(
     for effect in state.looping_effects.values() {
         desired.insert(config.effect_path(&effect.file), ResourceKind::Effect);
     }
+    for effect in state.particle_effects.values() {
+        if let Some(texture) = effect
+            .effect
+            .texture
+            .as_ref()
+            .filter(|path| !path.is_empty())
+        {
+            desired.insert(texture.clone(), ResourceKind::Particle);
+        }
+    }
 
     if cache.0.len() == desired.len() && desired.keys().all(|path| cache.0.contains_key(path)) {
         return;
     }
     cache.0.retain(|path, _| desired.contains_key(path));
     for (path, kind) in desired {
+        // Video is streamed by the dedicated playback backend. Keeping the
+        // whole container alive in Bevy's generic asset cache would defeat
+        // bounded-memory decoding and duplicate the compressed payload.
+        if kind == ResourceKind::Video {
+            continue;
+        }
         cache.0.entry(path.clone()).or_insert_with(|| match kind {
-            ResourceKind::Background | ResourceKind::Figure | ResourceKind::MiniAvatar => {
-                asset_server.load::<Image>(path).untyped()
-            }
+            ResourceKind::Background
+            | ResourceKind::Figure
+            | ResourceKind::Particle
+            | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
             ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
                 crate::runtime::audio::load_untyped(&asset_server, path)
             }
+            ResourceKind::Video => unreachable!("video prefetch is handled above"),
         });
     }
 }
@@ -186,16 +217,6 @@ pub fn update_loading_gate(
         || pending(fonts.icons.id().untyped());
 }
 
-fn resolve_path(kind: ResourceKind, path: &str, config: &GameConfigResource) -> String {
-    match kind {
-        ResourceKind::Background => config.bg_path(path),
-        ResourceKind::Figure | ResourceKind::MiniAvatar => config.figure_path(path),
-        ResourceKind::Voice => config.voice_path(path),
-        ResourceKind::Bgm => config.bgm_path(path),
-        ResourceKind::Effect => config.effect_path(path),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +230,7 @@ mod tests {
             text: "hello".into(),
             markup: "hello".into(),
             visible_chars: 1,
+            pauses: Vec::new(),
             vocal: Some("line.ogg".into()),
             volume: 1.0,
             auto_advance: false,

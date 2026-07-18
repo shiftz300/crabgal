@@ -9,9 +9,12 @@ pub mod runtime;
 pub use model::{action, state, types};
 pub use runtime::{dissolve, expression, step};
 
+pub use model::ShellEvent;
 pub use model::types::*;
 pub use model::{
-    Action, BgmState, ChoiceTarget, EffectCue, EffectEvent, EffectState, MenuChoice, MenuState,
-    Program, RestoreError, SayOptions, SceneFrame, State,
+    Action, ActiveParticleEffect, BgmState, CameraShakeState, ChoiceTarget, DialoguePause,
+    EffectCue, EffectEvent, EffectState, HostCommandEvent, MenuChoice, MenuState,
+    PostProcessAnimation, Program, RestoreError, SayOptions, SceneFrame, State, SystemUiSlot,
+    TransformKeyframe, VideoState, VocalCue,
 };
 pub use runtime::StepResult;
