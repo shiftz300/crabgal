@@ -50,12 +50,12 @@ hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "4cf5287", defa
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.17.2", default-features = false }
 webbrowser = "1"
 rodio = { version = "0.22.2", default-features = false }
 symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 symphonia-adapter-libopus = { version = "0.3", default-features = false }
-video-rs = { version = "0.11", features = ["ndarray"] }
+video-rs = { version = "0.11", default-features = false }
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 
@@ -93,3 +93,4 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 # Wayland development libraries to release builds.
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { workspace = true, features = ["x11"] }
+rfd = { workspace = true, features = ["xdg-portal"] }

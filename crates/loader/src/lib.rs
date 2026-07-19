@@ -1,5 +1,7 @@
 // Unified asset/source adapters, script languages and hot reload.
 
+#![warn(unused_crate_dependencies)]
+
 pub mod adapter;
 mod language;
 mod loader;

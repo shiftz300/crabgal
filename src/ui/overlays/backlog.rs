@@ -573,30 +573,36 @@ pub fn animate_backlog_buttons(time: Res<Time>, mut buttons: BacklogButtonQuery)
     }
 }
 
-pub fn scroll_backlog(
-    mut wheel: MessageReader<MouseWheel>,
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    loading: Res<crate::runtime::resources::AssetLoadingGate>,
-    scope: Res<UiInputScope>,
-    mut ui: ResMut<BacklogUiState>,
-    mut motion: ResMut<BacklogScrollMotion>,
-    mut scroll: Query<(&mut ScrollPosition, &ComputedNode), With<BacklogScroll>>,
-) {
-    if loading.blocked || !scope.allows_backlog() {
-        wheel.read().for_each(drop);
-        motion.reset();
+#[derive(SystemParam)]
+pub(crate) struct BacklogScrollContext<'w, 's> {
+    wheel: MessageReader<'w, 's, MouseWheel>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    time: Res<'w, Time>,
+    loading: Res<'w, crate::runtime::resources::AssetLoadingGate>,
+    scope: Res<'w, UiInputScope>,
+    ui: ResMut<'w, BacklogUiState>,
+    motion: ResMut<'w, BacklogScrollMotion>,
+    scroll:
+        Query<'w, 's, (&'static mut ScrollPosition, &'static ComputedNode), With<BacklogScroll>>,
+}
+
+pub fn scroll_backlog(mut context: BacklogScrollContext) {
+    if context.loading.blocked || !context.scope.allows_backlog() {
+        context.wheel.read().for_each(drop);
+        context.motion.reset();
         return;
     }
-    let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let control_pressed = context
+        .keys
+        .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let mut delta = 0.0;
-    for event in wheel.read() {
+    for event in context.wheel.read() {
         if control_pressed {
             continue;
         }
-        if !ui.open {
+        if !context.ui.open {
             if event.y > 0.0 {
-                ui.open = true;
+                context.ui.open = true;
             }
             continue;
         }
@@ -607,41 +613,42 @@ pub fn scroll_backlog(
             };
         delta += amount;
     }
-    let Ok((mut position, computed)) = scroll.single_mut() else {
-        motion.reset();
+    let Ok((mut position, computed)) = context.scroll.single_mut() else {
+        context.motion.reset();
         return;
     };
-    if !motion.initialized {
-        motion.current = position.y;
-        motion.target = position.y;
-        motion.initialized = true;
+    if !context.motion.initialized {
+        context.motion.current = position.y;
+        context.motion.target = position.y;
+        context.motion.initialized = true;
     }
-    if keys.just_pressed(KeyCode::PageUp) {
+    if context.keys.just_pressed(KeyCode::PageUp) {
         delta += computed.size().y * 0.8;
     }
-    if keys.just_pressed(KeyCode::PageDown) {
+    if context.keys.just_pressed(KeyCode::PageDown) {
         delta -= computed.size().y * 0.8;
     }
     let max =
         (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();
-    motion.target = (motion.target + delta).clamp(0.0, max);
-    if delta < 0.0 && motion.current <= 0.5 && motion.target <= f32::EPSILON {
+    context.motion.target = (context.motion.target + delta).clamp(0.0, max);
+    if delta < 0.0 && context.motion.current <= 0.5 && context.motion.target <= f32::EPSILON {
         // A trackpad emits many tiny inertial events. Require one deliberate
         // gesture instead of closing the panel on the first negative pixel.
-        motion.close_gesture += -delta;
-        if motion.close_gesture >= 72.0 {
-            ui.open = false;
-            motion.reset();
+        context.motion.close_gesture += -delta;
+        if context.motion.close_gesture >= 72.0 {
+            context.ui.open = false;
+            context.motion.reset();
         }
     } else {
         if delta > 0.0 {
-            motion.close_gesture = 0.0;
+            context.motion.close_gesture = 0.0;
         }
-        motion.current += (motion.target - motion.current) * exp_lerp(time.delta_secs(), 24.0);
-        if (motion.current - motion.target).abs() <= 0.1 {
-            motion.current = motion.target;
+        let amount = exp_lerp(context.time.delta_secs(), 24.0);
+        context.motion.current += (context.motion.target - context.motion.current) * amount;
+        if (context.motion.current - context.motion.target).abs() <= 0.1 {
+            context.motion.current = context.motion.target;
         }
-        position.y = motion.current.clamp(0.0, max);
+        position.y = context.motion.current.clamp(0.0, max);
     }
 }
 

@@ -256,52 +256,60 @@ pub(crate) struct UserInputSyncContext<'w, 's> {
     roots: Query<'w, 's, &'static mut Node, With<UserInputRoot>>,
     blurs: Query<'w, 's, &'static mut Node, (With<UserInputBlur>, Without<UserInputRoot>)>,
     titles: Query<'w, 's, &'static mut Text, (With<UserInputTitle>, Without<UserInputValue>)>,
-    descriptions: Query<
-        'w,
-        's,
-        &'static mut Text,
-        (
-            With<UserInputDescription>,
-            Without<UserInputTitle>,
-            Without<UserInputValue>,
-            Without<UserInputError>,
-        ),
-    >,
-    values: Query<
-        'w,
-        's,
-        (&'static mut Text, &'static mut TextColor),
-        (
-            With<UserInputValue>,
-            Without<UserInputTitle>,
-            Without<UserInputDescription>,
-            Without<UserInputError>,
-        ),
-    >,
-    errors: Query<
-        'w,
-        's,
-        &'static mut Text,
-        (
-            With<UserInputError>,
-            Without<UserInputTitle>,
-            Without<UserInputDescription>,
-            Without<UserInputValue>,
-        ),
-    >,
+    descriptions: UserInputDescriptionQuery<'w, 's>,
+    values: UserInputValueQuery<'w, 's>,
+    errors: UserInputErrorQuery<'w, 's>,
     confirm: Query<'w, 's, &'static Children, With<UserInputConfirm>>,
-    texts: Query<
-        'w,
-        's,
-        &'static mut Text,
-        (
-            Without<UserInputTitle>,
-            Without<UserInputDescription>,
-            Without<UserInputValue>,
-            Without<UserInputError>,
-        ),
-    >,
+    texts: UserInputOtherTextQuery<'w, 's>,
 }
+
+type UserInputDescriptionQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<UserInputDescription>,
+        Without<UserInputTitle>,
+        Without<UserInputValue>,
+        Without<UserInputError>,
+    ),
+>;
+
+type UserInputValueQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Text, &'static mut TextColor),
+    (
+        With<UserInputValue>,
+        Without<UserInputTitle>,
+        Without<UserInputDescription>,
+        Without<UserInputError>,
+    ),
+>;
+
+type UserInputErrorQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<UserInputError>,
+        Without<UserInputTitle>,
+        Without<UserInputDescription>,
+        Without<UserInputValue>,
+    ),
+>;
+
+type UserInputOtherTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        Without<UserInputTitle>,
+        Without<UserInputDescription>,
+        Without<UserInputValue>,
+        Without<UserInputError>,
+    ),
+>;
 
 pub(crate) fn sync(mut context: UserInputSyncContext) {
     if !context.state.is_changed() {

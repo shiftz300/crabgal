@@ -503,14 +503,18 @@ mod ffmpeg_backend {
             if cancelled.load(Ordering::Acquire) {
                 return;
             }
-            match decoder.decode() {
-                Ok((timestamp, frame)) => {
-                    let (height, width, _) = frame.dim();
+            match decoder.decode_raw() {
+                Ok(frame) => {
+                    let timestamp =
+                        video_rs::Time::new(Some(frame.packet().dts), decoder.time_base());
+                    let width = frame.width() as usize;
+                    let height = frame.height() as usize;
+                    let stride = frame.stride(0);
                     let mut rgba = Vec::with_capacity(width * height * 4);
-                    let (rgb, offset) = frame.into_raw_vec_and_offset();
-                    let start = offset.unwrap_or(0);
-                    for pixel in rgb[start..].chunks_exact(3) {
-                        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                    for row in frame.data(0).chunks(stride).take(height) {
+                        for pixel in row[..width * 3].chunks_exact(3) {
+                            rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                        }
                     }
                     let frame = DecodedFrame {
                         timestamp: loop_offset + timestamp.as_secs().max(0.0),
@@ -522,14 +526,16 @@ mod ffmpeg_backend {
                         return;
                     }
                 }
-                Err(video_rs::Error::DecodeExhausted) if looped => {
+                Err(video_rs::Error::DecodeExhausted | video_rs::Error::ReadExhausted)
+                    if looped =>
+                {
                     loop_offset += duration;
                     if let Err(error) = decoder.seek_to_start() {
                         let _ = sender.send(DecoderEvent::Error(error.to_string()));
                         return;
                     }
                 }
-                Err(video_rs::Error::DecodeExhausted) => {
+                Err(video_rs::Error::DecodeExhausted | video_rs::Error::ReadExhausted) => {
                     let _ = sender.send(DecoderEvent::End);
                     return;
                 }
@@ -801,8 +807,8 @@ mod ffmpeg_backend {
                 _temporary: None,
             });
             let mut video = video_rs::Decoder::new(path.as_path()).unwrap();
-            let (_, frame) = video.decode().unwrap();
-            assert!(frame.dim().0 > 0 && frame.dim().1 > 0);
+            let frame = video.decode_raw().unwrap();
+            assert!(frame.width() > 0 && frame.height() > 0);
 
             let mut audio = FfmpegAudioStream::open(source).unwrap();
             assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));

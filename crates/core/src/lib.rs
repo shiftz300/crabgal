@@ -1,5 +1,7 @@
 //! Language-neutral visual-novel model and deterministic state machine.
 
+#![warn(unused_crate_dependencies)]
+
 pub mod config;
 pub mod model;
 pub mod runtime;
