@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crabgal_core::State;
 use crabgal_loader::{SavedState, StoreAdapter, StoreStatus};
 
-use crate::runtime::resources::{GameState, ProjectRoot, StoreCodec};
+use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot, StoreCodec};
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 pub use crabgal_loader::StoreMetadata as SaveMetadata;
@@ -75,7 +75,11 @@ pub(crate) fn quick_save_on_exit(
     state: Res<GameState>,
     project_root: Res<ProjectRoot>,
     store: Res<StoreCodec>,
+    editor_sync: Option<Res<EditorSyncSession>>,
 ) {
+    if editor_sync.is_some() {
+        return;
+    }
     if exits.read().next().is_none() || state.ended {
         return;
     }
@@ -302,6 +306,30 @@ mod tests {
             inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
             SlotStatus::Empty
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn editor_sync_exit_never_writes_into_the_source_project() {
+        let root = temp_root("editor-sync-exit");
+        let mut state = sample_state();
+        state.ended = false;
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .insert_resource(GameState(state))
+            .insert_resource(ProjectRoot(root.clone()))
+            .insert_resource(StoreCodec(Arc::new(CrabgalStore)))
+            .init_resource::<EditorSyncSession>()
+            .add_systems(Last, quick_save_on_exit);
+
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+
+        assert_eq!(
+            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            SlotStatus::Empty
+        );
+        assert!(!root.join("saves").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

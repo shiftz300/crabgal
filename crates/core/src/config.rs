@@ -89,7 +89,7 @@ pub struct AdapterConfig {
     /// Ordered asset layers. Later sources override earlier logical paths.
     #[serde(default = "default_asset_sources")]
     pub asset: Vec<AssetSourceConfig>,
-    /// Script syntax selected from `adapter/script/*`.
+    /// Script syntax selected from the loader adapter's script category.
     #[serde(default = "default_script_adapter")]
     pub script: String,
     /// Save-state codec selected from `adapter/store/*`.

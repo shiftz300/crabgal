@@ -149,7 +149,17 @@ pub(super) struct CharactersDocument {
     #[serde(default)]
     pub global_settings: CharacterGlobalSettings,
     #[serde(default)]
+    pub attribute_template: Vec<CharacterAttribute>,
+    #[serde(default)]
     pub characters: Vec<CharacterDefinition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CharacterAttribute {
+    pub name: String,
+    #[serde(default)]
+    pub default_value: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -232,4 +242,24 @@ pub(super) struct StudioState {
     pub cursor_block_index: usize,
     #[serde(default)]
     pub cursor_block_index_by_fragment: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(super) struct VariablesDocument {
+    #[serde(default)]
+    pub variables: Vec<VariableDeclaration>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct VariableDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(rename = "type", default)]
+    pub value_type: String,
+    #[serde(default)]
+    pub default_value: Value,
+    #[serde(default)]
+    pub persistence: String,
 }

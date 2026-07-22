@@ -128,20 +128,26 @@ pub(crate) fn sync(
 
         let particles = (0..count)
             .map(|index| {
-                let depth = random(index, 1).mul_add(0.7, 0.3);
-                let scale = (0.64 + random(index, 2) * 0.72) * (0.55 + depth * 0.7);
-                let size = style.size * scale;
-                let speed = style.speed * (0.72 + random(index, 3) * 0.56);
+                let perspective = ParticlePerspective::new(style.kind, index);
+                let depth = perspective.depth;
+                let size = style.size * perspective.size;
+                let speed = style.speed * perspective.speed;
                 let horizontal = if style.kind == ParticleKind::Rain {
                     effect.wind.unwrap_or(style.wind) * (speed / style.speed)
                 } else {
-                    effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * style.spread
+                    let horizontal =
+                        effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * style.spread;
+                    if style.kind == ParticleKind::Snow {
+                        horizontal * perspective.speed
+                    } else {
+                        horizontal
+                    }
                 };
                 let position = Vec2::new(
                     random(index, 5) * (DESIGN_WIDTH + 240.0) - 120.0,
                     random(index, 6) * (DESIGN_HEIGHT + 160.0) - 40.0,
                 );
-                let base_alpha = style.alpha * (0.72 + random(index, 7) * 0.28) * depth.sqrt();
+                let base_alpha = style.alpha * perspective.alpha;
                 let rotation = if style.kind == ParticleKind::Rain {
                     style.rotation
                 } else {
@@ -151,7 +157,7 @@ pub(crate) fn sync(
                     position,
                     velocity: Vec2::new(horizontal, -speed),
                     size: Vec2::new(size * style.aspect, size),
-                    drift: style.drift * (0.55 + random(index, 9) * 0.9),
+                    drift: style.drift * perspective.drift,
                     phase: random(index, 10) * std::f32::consts::TAU,
                     angular_velocity: style.angular_velocity
                         * (0.55 + random(index, 11) * 0.9)
@@ -247,7 +253,12 @@ pub(crate) fn animate(
             }
 
             let motion = match kind {
-                ParticleKind::Snow | ParticleKind::Leaf => Vec2::new(
+                ParticleKind::Snow => Vec2::new(
+                    (elapsed * (0.72 + particle.depth * 0.86) + particle.phase).sin()
+                        * particle.drift,
+                    0.0,
+                ),
+                ParticleKind::Leaf => Vec2::new(
                     (elapsed * 1.15 + particle.phase).sin() * particle.drift,
                     0.0,
                 ),
@@ -282,6 +293,71 @@ pub(crate) fn animate(
         }
         transform.translation = viewport.content_center().extend(0.8);
         transform.scale = Vec3::splat(viewport.scale);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParticlePerspective {
+    depth: f32,
+    size: f32,
+    speed: f32,
+    alpha: f32,
+    drift: f32,
+}
+
+impl ParticlePerspective {
+    fn new(kind: ParticleKind, index: usize) -> Self {
+        if kind == ParticleKind::Rain {
+            let selector = random(index, 1);
+            let within_band = random(index, 13);
+            let depth = if selector < 0.42 {
+                0.24 + within_band * 0.20
+            } else if selector < 0.80 {
+                0.48 + within_band * 0.24
+            } else {
+                0.78 + within_band * 0.22
+            };
+            return Self {
+                depth,
+                // Rain uses a restrained perspective range so its parallel
+                // direction remains the dominant visual characteristic.
+                size: (0.72 + depth * 0.56) * (0.90 + random(index, 2) * 0.20),
+                speed: (0.76 + depth * 0.42) * (0.94 + random(index, 3) * 0.12),
+                alpha: (0.58 + depth * 0.42) * (0.88 + random(index, 7) * 0.12),
+                drift: 1.0,
+            };
+        }
+
+        if kind != ParticleKind::Snow {
+            let depth = random(index, 1).mul_add(0.7, 0.3);
+            return Self {
+                depth,
+                size: (0.64 + random(index, 2) * 0.72) * (0.55 + depth * 0.7),
+                speed: 0.72 + random(index, 3) * 0.56,
+                alpha: (0.72 + random(index, 7) * 0.28) * depth.sqrt(),
+                drift: 0.55 + random(index, 9) * 0.9,
+            };
+        }
+
+        // Deliberately separated depth bands read more clearly than a uniform
+        // distribution: many distant flakes establish scale, while a smaller
+        // foreground layer crosses the screen faster and larger.
+        let selector = random(index, 1);
+        let within_band = random(index, 13);
+        let depth = if selector < 0.46 {
+            0.16 + within_band * 0.22
+        } else if selector < 0.82 {
+            0.42 + within_band * 0.30
+        } else {
+            0.78 + within_band * 0.22
+        };
+        Self {
+            depth,
+            size: (0.20 + depth.powf(1.35) * 1.50) * (0.82 + random(index, 2) * 0.36),
+            speed: (0.38 + depth * 1.10) * (0.88 + random(index, 3) * 0.24),
+            alpha: (0.40 + depth * 0.60) * (0.82 + random(index, 7) * 0.18),
+            drift: (0.50 + depth * 0.90) * (0.72 + random(index, 9) * 0.56),
+        }
     }
 }
 
@@ -355,15 +431,15 @@ struct ParticleStyle {
 impl ParticleStyle {
     fn from_effect(effect: &ParticleEffect) -> Self {
         match effect.preset.to_ascii_uppercase().as_str() {
-            "LIGHT_SNOW" => Self::snow(64, 58.0, 11.0),
-            "MODERATE_SNOW" => Self::snow(120, 86.0, 12.0),
-            "HEAVY_SNOW" => Self::snow(192, 125.0, 13.0),
+            "LIGHT_SNOW" => Self::snow(64, 82.0, 8.0),
+            "MODERATE_SNOW" => Self::snow(120, 118.0, 9.0),
+            "HEAVY_SNOW" => Self::snow(192, 154.0, 10.0),
             "LIGHT_RAIN" => Self::rain(56, 660.0),
             "MODERATE_RAIN" => Self::rain(112, 820.0),
             "HEAVY_RAIN" => Self::rain(192, 980.0),
             "FIREFLY" => Self::firefly(),
             "FALLEN_LEAVES" => Self::leaves(),
-            name if name.contains("SNOW") => Self::snow(96, 82.0, 12.0),
+            name if name.contains("SNOW") => Self::snow(96, 112.0, 9.0),
             name if name.contains("RAIN") => Self::rain(96, 760.0),
             name if name.contains("FIREFLY") || name.contains("LIGHT") => Self::firefly(),
             name if name.contains("LEAF") || name.contains("SAKURA") || name.contains("PETAL") => {
@@ -379,8 +455,10 @@ impl ParticleStyle {
             color: Color::WHITE,
             count,
             speed,
-            wind: 12.0,
-            spread: 26.0,
+            // Scale horizontal velocity with fall speed so every density
+            // keeps the same clearly diagonal trajectory.
+            wind: -speed * 0.34,
+            spread: speed * 0.08,
             acceleration_x: 0.0,
             acceleration_y: 8.0,
             drag: 0.035,
@@ -605,6 +683,83 @@ mod tests {
         let style = ParticleStyle::from_effect(&ParticleEffect::preset("LIGHT_RAIN"));
         assert_eq!(style.kind, ParticleKind::Rain);
         assert_eq!(style.angular_velocity, 0.0);
+    }
+
+    #[test]
+    fn snow_uses_distinct_perspective_layers() {
+        let profiles = (0..MAX_PARTICLE_COUNT)
+            .map(|index| ParticlePerspective::new(ParticleKind::Snow, index))
+            .collect::<Vec<_>>();
+        let far = profiles
+            .iter()
+            .filter(|profile| profile.depth < 0.4)
+            .collect::<Vec<_>>();
+        let middle = profiles
+            .iter()
+            .filter(|profile| (0.4..0.76).contains(&profile.depth))
+            .collect::<Vec<_>>();
+        let near = profiles
+            .iter()
+            .filter(|profile| profile.depth >= 0.76)
+            .collect::<Vec<_>>();
+
+        assert!(!far.is_empty() && !middle.is_empty() && !near.is_empty());
+        assert!(
+            near.iter()
+                .map(|profile| profile.size)
+                .fold(f32::MAX, f32::min)
+                > far.iter().map(|profile| profile.size).fold(0.0, f32::max)
+        );
+        assert!(
+            near.iter()
+                .map(|profile| profile.speed)
+                .fold(f32::MAX, f32::min)
+                > far.iter().map(|profile| profile.speed).fold(0.0, f32::max)
+        );
+    }
+
+    #[test]
+    fn snow_presets_are_fine_fast_and_diagonal() {
+        let light = ParticleStyle::from_effect(&ParticleEffect::preset("LIGHT_SNOW"));
+        let moderate = ParticleStyle::from_effect(&ParticleEffect::preset("MODERATE_SNOW"));
+        let heavy = ParticleStyle::from_effect(&ParticleEffect::preset("HEAVY_SNOW"));
+
+        assert!(light.size <= 8.0 && moderate.size <= 9.0 && heavy.size <= 10.0);
+        assert!(light.speed >= 82.0 && moderate.speed >= 118.0 && heavy.speed >= 154.0);
+        for style in [light, moderate, heavy] {
+            assert!(style.wind < 0.0);
+            assert!((style.wind / style.speed + 0.34).abs() < 0.001);
+            assert!(style.spread <= style.speed * 0.08 + f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn rain_has_subtle_depth_without_changing_its_direction() {
+        let profiles = (0..MAX_PARTICLE_COUNT)
+            .map(|index| ParticlePerspective::new(ParticleKind::Rain, index))
+            .collect::<Vec<_>>();
+        let far = profiles
+            .iter()
+            .filter(|profile| profile.depth < 0.46)
+            .collect::<Vec<_>>();
+        let near = profiles
+            .iter()
+            .filter(|profile| profile.depth >= 0.76)
+            .collect::<Vec<_>>();
+
+        assert!(!far.is_empty() && !near.is_empty());
+        let average = |values: &[&ParticlePerspective], read: fn(&ParticlePerspective) -> f32| {
+            values.iter().map(|profile| read(profile)).sum::<f32>() / values.len() as f32
+        };
+        assert!(average(&near, |profile| profile.size) > average(&far, |profile| profile.size));
+        assert!(average(&near, |profile| profile.speed) > average(&far, |profile| profile.speed));
+
+        let style = ParticleStyle::rain(96, 760.0);
+        for profile in profiles {
+            let vertical = style.speed * profile.speed;
+            let horizontal = style.wind * (vertical / style.speed);
+            assert!((horizontal / vertical - style.wind / style.speed).abs() < f32::EPSILON);
+        }
     }
 
     #[test]

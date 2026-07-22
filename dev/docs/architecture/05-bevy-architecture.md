@@ -66,31 +66,39 @@ PostUpdate after UiSystems::Layout:
 src/
   main.rs              最小二进制入口
   lib.rs               库入口
+  runtime.rs           系统阶段、Plugin 组合、资源类型与顺序
   runtime/
-    mod.rs             系统阶段、Plugin 组合与顺序
     bootstrap.rs       App 构建、项目 bootstrap、相机
     asset_reader.rs    多资源根只读覆盖桥接
-    resources.rs       GameState、配置、项目根目录、watcher
-    viewport.rs        设计空间与窗口空间转换
+    platform.rs        设计空间、窗口空间、输入与生命周期
     tick.rs            输入、热重载、文本计时、状态推进、转场生命周期
-    resize.rs          UiScale 与 ContentRoot letterbox 定位
+  scene.rs             ScenePlugin 入口
   scene/
-    components.rs      背景与立绘的稳定 ECS 标识
     background.rs      背景增量同步
     sprites.rs         立绘增量同步、排序与变换
+  storage.rs           StoragePlugin 门面与跨存储域协调
   storage/
-    mod.rs             持久化系统入口
     save.rs            原子存档与截图元数据
-    settings.rs        运行时设置
+    settings.rs        运行设置加载与持久化
+    profile.rs         profile 与退出刷新
     read_history.rs    已读历史
+    gallery.rs         鉴赏解锁
+  ui.rs                固定 UI 入口与系统组合
   ui/
-    stage/             Textbox、控制栏与选项
-    overlays/          Backlog、Dialog 与玩家输入
-    screens/           Title、Save/Load 与 Config
-    support/           字体、输入域、加载状态与通用交互
+    stage.rs + stage/  舞台 UI 门面、Textbox、控制栏与选项
+    overlays.rs + overlays/ 覆盖层门面、Backlog 与 Dialog
+    screens.rs + screens/ 页面门面、Title、Save/Load 与 Config
+    support.rs + support/ 通用 UI 门面、字体、输入域、加载状态与音效
+  render.rs            渲染插件门面
   render/
-    blur.rs/.wgsl      两阶段可分离高斯模糊
+    blur.rs            两阶段可分离高斯模糊 pipeline
+  assets/shaders/
+    blur.wgsl          模糊 shader
 ```
+
+每个领域采用“同名 `.rs` 门面 + 同名目录”：门面声明稳定接口、插件注册和系统顺序；目录中的
+文件各自实现一个可独立描述的生命周期或执行机制。视觉预设不单独制造文件，除非它已经拥有
+独立状态、资源或渲染阶段。
 
 ## 质量门槛
 

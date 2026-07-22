@@ -4,7 +4,7 @@ set -euo pipefail
 project="${1:-projects/test-project}"
 output="${2:-target/release-package}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-source "$root/dev/scripts/lib/audio-features.sh"
+source "$root/dev/scripts/audio-features.sh"
 
 cd "$root"
 require_project_directory "$project"

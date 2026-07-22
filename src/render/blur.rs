@@ -71,7 +71,7 @@ impl Default for BlurCamera {
 pub struct BlurPlugin;
 impl Plugin for BlurPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "blur.wgsl");
+        embedded_asset!(app, "src", "../assets/shaders/blur.wgsl");
         app.add_plugins(ExtractComponentPlugin::<BlurCamera>::default());
         app.add_plugins(UniformComponentPlugin::<BlurCamera>::default());
         app.add_plugins(ExtractComponentPlugin::<SceneBlurCamera>::default());
@@ -82,7 +82,7 @@ impl Plugin for BlurPlugin {
             return;
         };
         let shader_handle: Handle<Shader> =
-            load_embedded_asset!(render_app.world_mut(), "blur.wgsl");
+            load_embedded_asset!(render_app.world_mut(), "../assets/shaders/blur.wgsl");
         render_app.insert_resource(BlurShader(shader_handle));
         render_app.add_systems(
             Core2d,

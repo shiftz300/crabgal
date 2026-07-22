@@ -60,7 +60,7 @@ Update 是事件驱动的 `step_until_interactive()`，Render 是固定的 vsync
 crabgal/
 ├── core/               # package crabgal-core
 ├── loader/             # package crabgal-loader；统一 asset/script/store adapter
-│   └── adapter/asset/  # fs、auto、hexz_k 标准 Hexz 资源包
+│   └── adapter/asset.rs # fs、auto、hexz_k 标准 Hexz 资源包
 ├── crabgal-render/     # wgpu 渲染后端 + Displayable trait
 ├── crabgal-audio/      # rodio 音频
 ├── crabgal-rollback/   # 差分快照 + 回退

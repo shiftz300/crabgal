@@ -7,12 +7,10 @@ dev-lite = "run -- dev"
 # Optimized interactive preview. Keeping `--release` inside the alias avoids
 # leaking Cargo's option ordering into the project-facing command line.
 preview = "run --release --features video-ffmpeg -- dev"
-studio-install = "run --features video-ffmpeg -- integration-install letsgal-studio"
-# Preferred name for both first install and later binary/extension refreshes.
-studio-sync = "run --features video-ffmpeg -- integration-install letsgal-studio"
-studio-uninstall = "run -- integration-uninstall letsgal-studio"
-# Stable SDK-only workflow: Studio owns editing, while crabgal watches its
-# persisted cursor and listens for the extension lifecycle on localhost.
+# Studio owns authoring and persists its current fragment/block in the project.
+# crabgal remains a separate native process and follows those files directly;
+# no Studio extension, injected UI, localhost server or installation step.
+studio-sync = "run --features video-ffmpeg -- studio"
 studio-dev = "run --features video-ffmpeg -- studio"
 studio-check = "run -- check"
 studio-test = "test --workspace --all-targets --no-default-features"

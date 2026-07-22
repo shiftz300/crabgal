@@ -76,6 +76,7 @@ mod ffmpeg_backend {
     use rodio::{ChannelCount, SampleRate, Source};
     use tempfile::NamedTempFile;
     use video_rs::ffmpeg;
+    use video_rs::ffmpeg::software::scaling::{context::Context as VideoScaler, flag::Flags};
 
     use super::{HashMap, RenderLayers, VideoNode};
     use crate::runtime::platform::DesignViewport;
@@ -383,7 +384,11 @@ mod ffmpeg_backend {
             TextureDimension::D2,
             rgba,
             TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            // Video frames are write-only CPU data. With RENDER_WORLD-only
+            // usage Bevy moves the allocation into extraction instead of
+            // cloning a full 1080p frame before every GPU upload. The stable
+            // asset handle and descriptor let GpuImage reuse its texture.
+            RenderAssetUsages::RENDER_WORLD,
         )
     }
 
@@ -440,7 +445,9 @@ mod ffmpeg_backend {
         muted: bool,
         revision: u64,
     ) -> VideoSession {
-        let (sender, receiver) = sync_channel(3);
+        // Two frames cover normal decoder jitter without retaining another
+        // 8 MiB 1080p RGBA allocation or adding a visible frame of latency.
+        let (sender, receiver) = sync_channel(2);
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = cancelled.clone();
         thread::Builder::new()
@@ -485,7 +492,7 @@ mod ffmpeg_backend {
                 return;
             }
         };
-        let mut decoder = match video_rs::Decoder::new(source.path.as_path()) {
+        let mut decoder = match open_decoder(source.path.as_path()) {
             Ok(decoder) => decoder,
             Err(error) => {
                 let _ = sender.send(DecoderEvent::Error(error.to_string()));
@@ -499,6 +506,7 @@ mod ffmpeg_backend {
             return;
         }
         let mut loop_offset = 0.0;
+        let mut rgba_scaler = None;
         loop {
             if cancelled.load(Ordering::Acquire) {
                 return;
@@ -509,13 +517,15 @@ mod ffmpeg_backend {
                         video_rs::Time::new(Some(frame.packet().dts), decoder.time_base());
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
-                    let stride = frame.stride(0);
-                    let mut rgba = Vec::with_capacity(width * height * 4);
-                    for row in frame.data(0).chunks(stride).take(height) {
-                        for pixel in row[..width * 3].chunks_exact(3) {
-                            rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                    let rgba = convert_to_rgba(&frame, &mut rgba_scaler)
+                        .map_err(|error| error.to_string());
+                    let rgba = match rgba {
+                        Ok(rgba) => rgba,
+                        Err(error) => {
+                            let _ = sender.send(DecoderEvent::Error(error));
+                            return;
                         }
-                    }
+                    };
                     let frame = DecodedFrame {
                         timestamp: loop_offset + timestamp.as_secs().max(0.0),
                         width: width as u32,
@@ -545,6 +555,44 @@ mod ffmpeg_backend {
                 }
             }
         }
+    }
+
+    fn open_decoder(path: &Path) -> Result<video_rs::Decoder, video_rs::Error> {
+        log::info!("video decoder · software");
+        video_rs::Decoder::new(path)
+    }
+
+    fn convert_to_rgba(
+        source: &ffmpeg::frame::Video,
+        scaler: &mut Option<VideoScaler>,
+    ) -> Result<Vec<u8>, ffmpeg::Error> {
+        let width = source.width();
+        let height = source.height();
+        let scaler = scaler.get_or_insert(VideoScaler::get(
+            source.format(),
+            width,
+            height,
+            ffmpeg::format::Pixel::RGBA,
+            width,
+            height,
+            Flags::FAST_BILINEAR,
+        )?);
+        let mut target = ffmpeg::frame::Video::empty();
+        scaler.run(source, &mut target)?;
+
+        let row_bytes = width as usize * 4;
+        let height = height as usize;
+        let stride = target.stride(0);
+        let data = target.data(0);
+        if stride == row_bytes {
+            return Ok(data[..row_bytes * height].to_vec());
+        }
+
+        let mut rgba = Vec::with_capacity(row_bytes * height);
+        for row in data.chunks(stride).take(height) {
+            rgba.extend_from_slice(&row[..row_bytes]);
+        }
+        Ok(rgba)
     }
 
     fn send_event(
@@ -794,6 +842,31 @@ mod ffmpeg_backend {
         fn mixed_video_uses_the_authored_screen_blend() {
             assert_eq!(video_blend(VideoMode::Mixed), BlendMode::Screen);
             assert_eq!(video_blend(VideoMode::Fullscreen), BlendMode::Alpha);
+        }
+
+        #[test]
+        fn video_frames_do_not_keep_a_second_main_world_copy() {
+            let image = video_image(1, 1, vec![0, 0, 0, 255]);
+            assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD);
+        }
+
+        #[test]
+        #[ignore = "set CRABGAL_TEST_VIDEO to a local video"]
+        fn decodes_video_frames_with_the_runtime_pipeline() {
+            video_rs::init().unwrap();
+            let path = std::env::var_os("CRABGAL_TEST_VIDEO")
+                .map(PathBuf::from)
+                .expect("CRABGAL_TEST_VIDEO is required");
+            let mut decoder = open_decoder(path.as_path()).unwrap();
+            let mut scaler = None;
+            for _ in 0..60 {
+                let frame = decoder.decode_raw().unwrap();
+                let expected = frame.width() as usize * frame.height() as usize * 4;
+                assert_eq!(
+                    convert_to_rgba(&frame, &mut scaler).unwrap().len(),
+                    expected
+                );
+            }
         }
 
         #[test]

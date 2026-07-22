@@ -5,7 +5,7 @@ use std::path::Path;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{GameState, ProjectRoot};
+use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot};
 
 const VERSION: u32 = 2;
 
@@ -39,7 +39,11 @@ pub(crate) fn persist(
     state: Res<GameState>,
     project_root: Res<ProjectRoot>,
     mut previous: ResMut<GallerySnapshot>,
+    editor_sync: Option<Res<EditorSyncSession>>,
 ) {
+    if editor_sync.is_some() {
+        return;
+    }
     if !state.is_changed()
         || (previous.cg == state.unlocked_cg && previous.bgm == state.unlocked_bgm)
     {

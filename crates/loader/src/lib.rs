@@ -8,8 +8,8 @@ mod loader;
 mod report;
 
 pub use adapter::{
-    AdaptedProject, CrabgalStore, EditorIntegrationAdapter, FormatAdapter, LoaderRegistry,
-    ProjectAdapter, ProjectDebugCursor, SavedState, StoreAdapter, StoreMetadata, StoreStatus,
+    AdaptedProject, CrabgalStore, FormatAdapter, LoaderRegistry, ProjectAdapter,
+    ProjectDebugCursor, ProjectInitialState, SavedState, StoreAdapter, StoreMetadata, StoreStatus,
     StructuredSceneLoader, WebGalLanguage, mount_hexz, parse_webgal, parse_webgal_report,
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};

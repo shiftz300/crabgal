@@ -10,7 +10,7 @@ use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin}
 use bevy::ecs::system::NonSendMarker;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
-use bevy::window::{CursorOptions, PrimaryWindow, WindowLevel, WindowPosition, WindowResolution};
+use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
 use crabgal_core::config::GameConfig;
 use crabgal_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
@@ -22,11 +22,10 @@ use crabgal_loader::{
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
 use crate::runtime::resources::{
-    ContentProjectResource, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,
-    LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
+    ContentProjectResource, EditorSyncSession, GameConfigResource, GameState, LocalAssetCache,
+    LocalAssetManifest, LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource,
+    StoreCodec,
 };
-
-const DEFAULT_STUDIO_SYNC_PORT: u16 = 39_698;
 
 pub fn run() {
     run_with_loader(LoaderRegistry::default());
@@ -50,12 +49,8 @@ pub fn run_with_loader(loader: LoaderRegistry) {
 
 fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if run_editor_integration_command(&loader, &args)? {
-        return Ok(());
-    }
     let check_only = args.first().is_some_and(|command| command == "check");
-    let editor_port = editor_bridge_port(&args)?;
-    let editor_embedded = editor_port.is_some() && !editor_standalone_window(&args);
+    let editor_sync = args.first().is_some_and(|command| command == "studio");
     let project_path = project_root_from_args(args.iter().cloned());
     let (project_root, config, content) = open_project(&project_path, &loader)?;
     let languages = loader
@@ -67,15 +62,7 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
-    let mut app = build_opened_app(
-        project_root,
-        config,
-        content,
-        languages,
-        store,
-        editor_port,
-        editor_embedded,
-    );
+    let mut app = build_opened_app(project_root, config, content, languages, store, editor_sync);
     app.run();
     Ok(())
 }
@@ -100,7 +87,6 @@ pub fn build_app_with_loader(
         content,
         languages,
         store,
-        None,
         false,
     ))
 }
@@ -111,8 +97,7 @@ fn build_opened_app(
     content: ContentProject,
     languages: crabgal_loader::ScriptLanguageRegistry,
     store: std::sync::Arc<dyn crabgal_loader::StoreAdapter>,
-    editor_port: Option<u16>,
-    editor_overlay: bool,
+    editor_sync: bool,
 ) -> App {
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
     let asset_mounts = content.asset_mounts();
@@ -125,23 +110,11 @@ fn build_opened_app(
         AssetSourceId::Default,
         crate::runtime::asset_reader::overlay_source(asset_mounts),
     );
-    let initial_editor_frame = editor_overlay
-        .then(super::editor_bridge::initial_editor_frame)
-        .flatten();
     let mut initial_resolution = WindowResolution::new(DESIGN_WIDTH as u32, DESIGN_HEIGHT as u32);
-    if let Some(frame) = initial_editor_frame {
-        // The first winit window is created before the backend reports its
-        // monitor scale. Seed that scale here so a physical editor rectangle is
-        // not interpreted as a logical size and doubled on Retina/HiDPI hosts.
-        initial_resolution.set_scale_factor_override(Some(frame.scale_factor));
-        initial_resolution.set_physical_resolution(frame.size.x, frame.size.y);
-    } else {
-        // Keep the native runtime on the engine's 1920x1080 design grid even
-        // on Retina/HiDPI monitors. Without an override, winit can reinterpret
-        // the requested physical size as logical pixels after discovering the
-        // monitor scale, producing an oversized and clipped preview window.
-        initial_resolution.set_scale_factor_override(Some(1.0));
-    }
+    // Keep the native runtime on the engine's 1920x1080 design grid even on
+    // Retina/HiDPI monitors. Studio sync is a normal independent window; no
+    // host overlay or focus interception is involved.
+    initial_resolution.set_scale_factor_override(Some(1.0));
     app.add_plugins(
         DefaultPlugins
             .build()
@@ -153,31 +126,7 @@ fn build_opened_app(
                 primary_window: Some(Window {
                     title: config.title.clone(),
                     resolution: initial_resolution,
-                    position: if editor_overlay {
-                        initial_editor_frame
-                            .map_or(WindowPosition::At(IVec2::splat(-32_000)), |frame| {
-                                WindowPosition::At(frame.position)
-                            })
-                    } else {
-                        WindowPosition::default()
-                    },
-                    resizable: !editor_overlay,
-                    decorations: !editor_overlay,
-                    visible: !editor_overlay,
-                    focused: !editor_overlay,
-                    skip_taskbar: editor_overlay,
-                    window_level: if editor_overlay {
-                        WindowLevel::AlwaysOnTop
-                    } else {
-                        WindowLevel::Normal
-                    },
-                    ..default()
-                }),
-                // The editor host owns input. The native preview is a visual
-                // surface, so pointer events must reach the editor canvas
-                // below the borderless Bevy window.
-                primary_cursor_options: Some(CursorOptions {
-                    hit_test: !editor_overlay,
+                    visible: true,
                     ..default()
                 }),
                 ..default()
@@ -199,11 +148,8 @@ fn build_opened_app(
     .insert_resource(GameConfigResource(config))
     .add_systems(PreStartup, bootstrap_project)
     .add_systems(PostStartup, set_primary_window_icon);
-    if let Some(port) = editor_port {
-        app.add_plugins(super::editor_bridge::EditorBridgePlugin::new(
-            port,
-            editor_overlay,
-        ));
+    if editor_sync {
+        app.init_resource::<EditorSyncSession>();
     }
     super::platform::install_runtime_diagnostics(&mut app);
     app
@@ -376,12 +322,7 @@ fn ensure_project_directory(project_path: &Path) -> Result<()> {
 fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
     let args = args.collect::<Vec<_>>();
     let relative = match args.as_slice() {
-        [command, path, ..]
-            if command == "dev"
-                || command == "check"
-                || command == "editor"
-                || command == "studio" =>
-        {
+        [command, path, ..] if command == "dev" || command == "check" || command == "studio" => {
             PathBuf::from(path)
         }
         [path, ..] => PathBuf::from(path),
@@ -396,91 +337,31 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
         .join(relative)
 }
 
-fn editor_bridge_port(args: &[std::ffi::OsString]) -> Result<Option<u16>> {
-    if args
-        .first()
-        .is_none_or(|command| command != "editor" && command != "studio")
-    {
-        return Ok(None);
-    }
-    let Some(index) = args.iter().position(|arg| arg == "--bridge-port") else {
-        return if args.first().is_some_and(|command| command == "studio") {
-            Ok(Some(DEFAULT_STUDIO_SYNC_PORT))
-        } else {
-            anyhow::bail!("editor mode requires --bridge-port <port>")
-        };
-    };
-    let raw = args
-        .get(index + 1)
-        .context("--bridge-port requires a port number")?;
-    let port = raw
-        .to_string_lossy()
-        .parse::<u16>()
-        .context("invalid --bridge-port value")?;
-    Ok(Some(port))
-}
-
-fn editor_standalone_window(args: &[std::ffi::OsString]) -> bool {
-    args.first().is_some_and(|command| command == "studio")
-        || args.iter().any(|arg| arg == "--standalone-window")
-}
-
-fn run_editor_integration_command(
-    loader: &LoaderRegistry,
-    args: &[std::ffi::OsString],
-) -> Result<bool> {
-    let Some(command) = args.first().and_then(|value| value.to_str()) else {
-        return Ok(false);
-    };
-    match command {
-        "integration-install" => {
-            let name = args
-                .get(1)
-                .context("integration-install requires an adapter name")?
-                .to_string_lossy();
-            let executable = std::env::current_exe().context("failed to locate crabgal binary")?;
-            let project = args.get(2).map(PathBuf::from);
-            loader.install_editor_integration(&name, &executable, project.as_deref())?;
-            Ok(true)
-        }
-        "integration-uninstall" => {
-            let name = args
-                .get(1)
-                .context("integration-uninstall requires an adapter name")?
-                .to_string_lossy();
-            loader.uninstall_editor_integration(&name)?;
-            Ok(true)
-        }
-        "integration-control" => {
-            let name = args
-                .get(1)
-                .context("integration-control requires an adapter name")?
-                .to_string_lossy();
-            let control_args = args[2..]
-                .iter()
-                .map(|value| value.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            loader.control_editor_integration(&name, &control_args)?;
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
-}
-
 fn bootstrap_project(
     mut commands: Commands,
     project_root: Res<ProjectRoot>,
     content: Res<ContentProjectResource>,
     languages: Res<ScriptLanguages>,
     config: Res<GameConfigResource>,
-    editor_overlay: Option<Res<super::editor_bridge::EditorOverlay>>,
+    editor_sync: Option<Res<EditorSyncSession>>,
 ) {
     spawn_cameras(&mut commands);
 
     let mut state = State::new();
-    state.global_vars = crate::storage::profile::load(&project_root);
-    crate::storage::gallery::load(&mut state, &project_root);
-    state.read_dialogues = crate::storage::read_history::load(&project_root);
+    match content.initial_state() {
+        Ok(initial) => {
+            state.vars = initial.variables;
+            state.global_vars = initial.shared_variables;
+        }
+        Err(error) => log::error!("failed to load project variable defaults: {error:#}"),
+    }
+    if editor_sync.is_none() {
+        state
+            .global_vars
+            .extend(crate::storage::profile::load(&project_root));
+        crate::storage::gallery::load(&mut state, &project_root);
+        state.read_dialogues = crate::storage::read_history::load(&project_root);
+    }
     let read_history_count = state.read_dialogues.len();
     let mut scene_count = 0;
     let mut action_count = 0;
@@ -519,8 +400,8 @@ fn bootstrap_project(
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }
     ensure_playable_scene(&mut state);
-    if editor_overlay.is_some() {
-        // An editor is already the outer shell. Enter its current cursor directly
+    if editor_sync.is_some() {
+        // An editor is already the outer shell. Enter its current selected block directly
         // so the native overlay never flashes crabgal's title screen first.
         state.ended = false;
         if !crate::runtime::tick::sync_editor_cursor(&content, &mut state, &manifest) {
@@ -663,46 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_command_uses_the_explicit_project_and_port() {
-        let args = ["editor", "/tmp/editor-project", "--bridge-port", "39412"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            project_root_from_args(args.iter().cloned()),
-            Path::new("/tmp/editor-project")
-        );
-        assert_eq!(editor_bridge_port(&args).unwrap(), Some(39412));
-        assert!(!editor_standalone_window(&args));
-    }
-
-    #[test]
-    fn editor_can_use_a_normal_standalone_window() {
-        let args = [
-            "editor",
-            "/tmp/editor-project",
-            "--bridge-port",
-            "39412",
-            "--standalone-window",
-        ]
-        .into_iter()
-        .map(std::ffi::OsString::from)
-        .collect::<Vec<_>>();
-        assert_eq!(editor_bridge_port(&args).unwrap(), Some(39412));
-        assert!(editor_standalone_window(&args));
-    }
-
-    #[test]
-    fn normal_project_commands_do_not_enable_the_editor_bridge() {
-        let args = ["dev", "/tmp/project"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        assert_eq!(editor_bridge_port(&args).unwrap(), None);
-    }
-
-    #[test]
-    fn studio_command_uses_the_sdk_sync_defaults() {
+    fn studio_command_uses_the_native_project_path() {
         let args = ["studio", "/tmp/editor-project"]
             .into_iter()
             .map(std::ffi::OsString::from)
@@ -711,11 +553,6 @@ mod tests {
             project_root_from_args(args.iter().cloned()),
             Path::new("/tmp/editor-project")
         );
-        assert_eq!(
-            editor_bridge_port(&args).unwrap(),
-            Some(DEFAULT_STUDIO_SYNC_PORT)
-        );
-        assert!(editor_standalone_window(&args));
     }
 
     #[test]

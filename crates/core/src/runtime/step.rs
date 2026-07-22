@@ -1148,6 +1148,55 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
                 });
                 return StepResult::AwaitInput;
             }
+            Action::StageAnimation { animation } => {
+                // A timeline may reference a character expression before a
+                // separate show-character block. Prepare only missing targets;
+                // visible characters retain their authored position and base.
+                for track in &animation.tracks {
+                    let crate::action::StageTarget::Character {
+                        id,
+                        image: Some(image),
+                    } = &track.target
+                    else {
+                        continue;
+                    };
+                    if image.is_empty() || state.sprites.contains_key(id) {
+                        continue;
+                    }
+                    state.sprites.insert(
+                        id.clone(),
+                        Sprite {
+                            image: interpolate(image, &state.vars, &state.global_vars),
+                            position: crate::types::Position::center(0.0),
+                            layout: crate::types::SpriteLayout::Natural,
+                            transition_progress: 1.0,
+                            transition: Transition::Instant,
+                            entering: true,
+                            transition_offset_x: 0.0,
+                            transition_blocking: false,
+                            transform: Default::default(),
+                            transform_animation: None,
+                            keyframe_animation: None,
+                            filter: Default::default(),
+                            films: Default::default(),
+                            animation: None,
+                            z_index: 100,
+                            blend: crate::types::BlendMode::Alpha,
+                            camera_distance: Some(1.0),
+                        },
+                    );
+                }
+                let mut animation = animation.clone();
+                animation.playback_rate = animation.playback_rate.max(f32::EPSILON);
+                animation.duration = animation.duration.max(0.0);
+                let blocking = animation.blocking && !next && !animation.infinite;
+                animation.blocking = blocking;
+                state.stage_animation = (animation.duration > f32::EPSILON)
+                    .then(|| crate::state::StageAnimationState::new(animation, state));
+                if blocking && state.stage_animation.is_some() {
+                    return StepResult::AwaitPresentation;
+                }
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
@@ -1228,6 +1277,7 @@ fn enter_scene(state: &mut State, scene: &str) -> bool {
     state.cursor = 0;
     state.dialogue = None;
     state.menu = None;
+    state.stage_animation = None;
     true
 }
 
@@ -1258,6 +1308,7 @@ pub fn end_game(state: &mut State) {
     state.camera_shake = None;
     state.camera_effect_targets = crate::types::CameraTargets::NONE;
     state.camera_effect_animation = None;
+    state.stage_animation = None;
     state.videos.clear();
     state.video_revision_counter = 0;
     state.sprites.clear();
@@ -1653,6 +1704,7 @@ mod tests {
             scale_y: 0.85,
             rotation: 0.1,
             blur: 5.0,
+            ..SpriteTransform::default()
         };
         let mut patch = TransformPatch::default();
         patch.set_offset_x(160.0);

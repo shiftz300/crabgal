@@ -128,6 +128,7 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     profile_writer: ResMut<'w, crate::storage::profile::ProfileWriter>,
     read_history_writer: ResMut<'w, crate::storage::read_history::ReadHistoryWriter>,
     gallery_snapshot: ResMut<'w, crate::storage::gallery::GallerySnapshot>,
+    editor_sync: Option<Res<'w, crate::runtime::resources::EditorSyncSession>>,
 }
 
 #[derive(SystemParam)]
@@ -370,6 +371,12 @@ pub fn handle_dialog_click(
     commands.remove_resource::<DialogRequest>();
 
     if left_clicked {
+        if context.editor_sync.is_some()
+            && !matches!(req.action, DialogAction::Noop | DialogAction::ExitGame)
+        {
+            log::debug!("ignored persistent UI action during Studio synchronization");
+            return;
+        }
         match &req.action {
             DialogAction::QuickSave => {
                 if let Err(error) = crate::storage::save::save_game(

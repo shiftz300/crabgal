@@ -4,7 +4,7 @@ set -euo pipefail
 project="${1:-projects/test-project}"
 name="${2:-crabgal}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-source "$root/dev/scripts/lib/audio-features.sh"
+source "$root/dev/scripts/audio-features.sh"
 bundle="$root/target/bundle/macos/$name.app"
 version="$(awk '
     /^\[workspace.package\]$/ { workspace = 1; next }

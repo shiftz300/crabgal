@@ -13,7 +13,7 @@ pub(crate) struct StageMaterialPlugin;
 
 impl Plugin for StageMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "stage_material.wgsl");
+        embedded_asset!(app, "../../assets/shaders/stage_material.wgsl");
         app.add_plugins(Material2dPlugin::<StageMaterial>::default())
             .add_systems(Startup, setup_quad);
     }
@@ -29,27 +29,57 @@ fn setup_quad(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(StageMaterialKey)]
 pub(crate) struct StageMaterial {
+    // Keep all scalar parameters in one uniform buffer. Separate bindings exceed
+    // Metal's vertex-stage buffer limit once the complete post-process set is active.
     #[uniform(0)]
     pub(crate) tint: Vec4,
-    #[uniform(1)]
+    #[uniform(0)]
     pub(crate) filter: Vec4,
-    #[uniform(2)]
+    #[uniform(0)]
     pub(crate) transition: Vec4,
-    #[uniform(3)]
+    #[uniform(0)]
     pub(crate) post_a: Vec4,
-    #[uniform(4)]
+    #[uniform(0)]
     pub(crate) post_b: Vec4,
-    #[uniform(5)]
+    #[uniform(0)]
     pub(crate) post_c: Vec4,
-    #[uniform(6)]
+    #[uniform(0)]
     pub(crate) post_d: Vec4,
-    #[uniform(7)]
+    #[uniform(0)]
     pub(crate) post_e: Vec4,
-    #[texture(8)]
-    #[sampler(9)]
+    #[uniform(0)]
+    pub(crate) post_f: Vec4,
+    #[uniform(0)]
+    pub(crate) post_g: Vec4,
+    #[uniform(0)]
+    pub(crate) post_h: Vec4,
+    #[uniform(0)]
+    pub(crate) post_i: Vec4,
+    #[uniform(0)]
+    pub(crate) post_j: Vec4,
+    #[uniform(0)]
+    pub(crate) post_k: Vec4,
+    #[uniform(0)]
+    pub(crate) post_l: Vec4,
+    #[uniform(0)]
+    pub(crate) post_m: Vec4,
+    #[uniform(0)]
+    pub(crate) post_n: Vec4,
+    #[uniform(0)]
+    pub(crate) post_o: Vec4,
+    #[uniform(0)]
+    pub(crate) post_p: Vec4,
+    #[uniform(0)]
+    pub(crate) post_q: Vec4,
+    #[uniform(0)]
+    pub(crate) post_r: Vec4,
+    #[uniform(0)]
+    pub(crate) post_s: Vec4,
+    #[texture(1, visibility(fragment))]
+    #[sampler(2, visibility(fragment))]
     pub(crate) lut: Option<Handle<Image>>,
-    #[texture(10)]
-    #[sampler(11)]
+    #[texture(3, visibility(fragment))]
+    #[sampler(4, visibility(fragment))]
     pub(crate) image: Handle<Image>,
     pub(crate) blend: BlendMode,
 }
@@ -107,6 +137,85 @@ impl StageMaterial {
                 post.godray_center_x.clamp(0.0, 1.0),
             ),
             post_e: Vec4::new(post.godray_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
+            post_f: Vec4::new(
+                post.color_exposure.clamp(-4.0, 4.0),
+                post.color_brightness.clamp(-1.0, 1.0),
+                post.color_contrast.clamp(-1.0, 3.0),
+                post.color_saturation.clamp(0.0, 4.0),
+            ),
+            post_g: Vec4::new(
+                post.color_temperature.clamp(-1.0, 1.0),
+                post.bloom_intensity.clamp(0.0, 2.0),
+                post.chromatic_aberration.clamp(0.0, 1.0),
+                post.pixelate_size.clamp(1.0, 128.0),
+            ),
+            post_h: Vec4::new(
+                post.glitch_intensity.clamp(0.0, 1.0),
+                post.crt_intensity.clamp(0.0, 1.0),
+                post.sharpen_strength.clamp(0.0, 2.0),
+                post.radial_blur_strength.clamp(0.0, 1.0),
+            ),
+            post_i: Vec4::new(
+                post.radial_blur_center_x.clamp(0.0, 1.0),
+                post.radial_blur_center_y.clamp(0.0, 1.0),
+                post.motion_blur_strength.clamp(0.0, 1.0),
+                post.motion_blur_angle.to_radians(),
+            ),
+            post_j: Vec4::new(
+                post.zoom_blur_strength.clamp(0.0, 1.0),
+                post.zoom_blur_center_x.clamp(0.0, 1.0),
+                post.zoom_blur_center_y.clamp(0.0, 1.0),
+                post.light_leak_intensity.clamp(0.0, 1.0),
+            ),
+            post_k: Vec4::new(
+                post.light_leak_angle.to_radians(),
+                post.lens_flare_intensity.clamp(0.0, 1.0),
+                post.lens_flare_center_x.clamp(0.0, 1.0),
+                post.lens_flare_center_y.clamp(0.0, 1.0),
+            ),
+            post_l: Vec4::new(
+                post.film_grain_intensity.clamp(0.0, 1.0),
+                post.film_grain_size.clamp(0.25, 16.0),
+                post.heat_haze_intensity.clamp(0.0, 1.0),
+                post.heat_haze_speed.clamp(-8.0, 8.0),
+            ),
+            post_m: Vec4::new(
+                post.heat_haze_scale.clamp(0.25, 32.0),
+                post.water_ripple_intensity.clamp(0.0, 1.0),
+                post.water_ripple_frequency.clamp(0.1, 64.0),
+                post.water_ripple_speed.clamp(-8.0, 8.0),
+            ),
+            post_n: Vec4::new(
+                post.water_ripple_center_x.clamp(0.0, 1.0),
+                post.water_ripple_center_y.clamp(0.0, 1.0),
+                post.fog_intensity.clamp(0.0, 1.0),
+                post.fog_speed.clamp(-4.0, 4.0),
+            ),
+            post_o: Vec4::new(
+                post.fog_scale.clamp(0.25, 32.0),
+                post.vhs_intensity.clamp(0.0, 1.0),
+                post.vhs_jitter.clamp(0.0, 1.0),
+                post.vhs_noise.clamp(0.0, 1.0),
+            ),
+            post_p: Vec4::new(
+                post.halftone_intensity.clamp(0.0, 1.0),
+                post.halftone_scale.clamp(1.0, 64.0),
+                post.halftone_angle.to_radians(),
+                post.dither_intensity.clamp(0.0, 1.0),
+            ),
+            post_q: Vec4::new(
+                post.dither_levels.clamp(2.0, 32.0),
+                post.outline_intensity.clamp(0.0, 1.0),
+                post.outline_thickness.clamp(0.25, 8.0),
+                post.eyelid_openness.clamp(0.0, 1.0),
+            ),
+            post_r: Vec4::new(
+                post.eyelid_width.clamp(0.1, 2.0),
+                post.eyelid_curvature.clamp(0.0, 2.0),
+                post.eyelid_softness.clamp(0.001, 0.25),
+                post.eyelid_center_x.clamp(0.0, 1.0),
+            ),
+            post_s: Vec4::new(post.eyelid_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
             lut,
             image,
             blend,
@@ -214,7 +323,8 @@ impl From<&StageMaterial> for StageMaterialKey {
 impl Material2d for StageMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(
-            AssetPath::from_path_buf(embedded_path!("stage_material.wgsl")).with_source("embedded"),
+            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage_material.wgsl"))
+                .with_source("embedded"),
         )
     }
 
@@ -271,6 +381,17 @@ impl Material2d for StageMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_material_keeps_a_compact_bind_group() {
+        let shader = include_str!("../../assets/shaders/stage_material.wgsl");
+
+        assert_eq!(shader.matches("var<uniform>").count(), 1);
+        assert_eq!(shader.matches("@binding(").count(), 5);
+        for binding in 0..=4 {
+            assert!(shader.contains(&format!("@binding({binding})")));
+        }
+    }
 
     #[test]
     fn lut_without_visible_intensity_does_not_request_an_asset() {

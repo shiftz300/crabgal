@@ -416,11 +416,9 @@ mod tests {
 
     #[test]
     fn decodes_project_ogg_opus_incrementally() {
-        let bytes: Arc<[u8]> = include_bytes!(
-            "../../projects/test-project/content/shared/audio/calibration_voice.opus"
-        )
-        .as_slice()
-        .into();
+        let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
+            .as_slice()
+            .into();
         let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
         let duration = stream
             .total_duration()
@@ -437,9 +435,9 @@ mod tests {
     #[test]
     fn decodes_embedded_webgal_k_ui_cues() {
         let cues: [(&[u8], f32); 3] = [
-            (include_bytes!("../ui/assets/audio/click.opus"), 0.25),
-            (include_bytes!("../ui/assets/audio/mouse-enter.opus"), 0.08),
-            (include_bytes!("../ui/assets/audio/switch.opus"), 0.25),
+            (include_bytes!("../assets/audio/click.opus"), 0.25),
+            (include_bytes!("../assets/audio/mouse-enter.opus"), 0.08),
+            (include_bytes!("../assets/audio/switch.opus"), 0.25),
         ];
         for (cue, minimum_seconds) in cues {
             let bytes: Arc<[u8]> = cue.into();
@@ -457,11 +455,9 @@ mod tests {
 
     #[test]
     fn opus_stream_can_seek_forward_and_back_to_the_start() {
-        let bytes: Arc<[u8]> = include_bytes!(
-            "../../projects/test-project/content/shared/audio/calibration_voice.opus"
-        )
-        .as_slice()
-        .into();
+        let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
+            .as_slice()
+            .into();
         let mut fresh = OpusStream::new(bytes.clone()).expect("test Opus asset should open");
         let duration = fresh.total_duration().expect("test Opus has a duration");
         let full_sample_count = fresh.by_ref().count();

@@ -12,7 +12,7 @@
 
 证据缩写：
 
-- **P**：[`crates/loader/src/adapter/script/webgal/mod.rs`](../../../crates/loader/src/adapter/script/webgal/mod.rs)
+- **P**：[`crates/loader/src/adapter/script/webgal.rs`](../../../crates/loader/src/adapter/script/webgal.rs)
 - **C**：[`crates/core/src/model/action.rs`](../../../crates/core/src/model/action.rs)、[`state.rs`](../../../crates/core/src/model/state.rs)、[`runtime/step.rs`](../../../crates/core/src/runtime/step.rs)
 - **R**：[`src/scene/`](../../../src/scene)、[`src/ui/`](../../../src/ui) 或 [`src/runtime/`](../../../src/runtime) 的消费链路
 - **T**：上述模块内的 Rust 自动测试
@@ -122,6 +122,6 @@
 
 ## 当前自动验证结果
 
-当前工作树新增了稀疏 TransformPatch、嵌套 Choice 条件和 profile 分离测试。实际执行过的命令、结果与尚未运行项统一记录在 [test-results.md](test-results.md)；本文件不复制可能很快过期的全量数字。
+当前工作树包含稀疏 TransformPatch、嵌套 Choice 条件和 profile 分离测试。实际结果以仓库根目录执行测试命令的输出为准；本文件不复制可能很快过期的全量数字。
 
 自动测试通过也不证明 GUI 视觉矩阵已经通过。

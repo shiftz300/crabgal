@@ -173,6 +173,7 @@ fn core_is_animating(state: &GameState) -> bool {
         .as_ref()
         .is_some_and(|dialogue| dialogue.visible_chars < dialogue.text.chars().count())
         || state.presentation_blocked()
+        || !state.videos.is_empty()
         || !state.particle_effects.is_empty()
         || !state.bg_films.is_empty()
         || state.bg_transition.is_some()
@@ -401,6 +402,33 @@ mod tests {
         state.bg_films.clear();
         state.camera_effect.godray_intensity = 0.8;
         state.camera_effect.godray_speed = 0.2;
+        assert!(core_is_animating(&state));
+    }
+
+    #[test]
+    fn video_playback_keeps_the_render_loop_active() {
+        let mut state = GameState(crabgal_core::State::new());
+        state.videos.insert(
+            "rain".into(),
+            crabgal_core::VideoState {
+                spec: crabgal_core::VideoSpec {
+                    id: "rain".into(),
+                    file: "video/rain.mp4".into(),
+                    looped: true,
+                    muted: true,
+                    alpha: 1.0,
+                    skippable: false,
+                    wait_for_finished: false,
+                    mode: crabgal_core::VideoMode::Mixed,
+                },
+                revision: 1,
+                elapsed: 0.0,
+                opacity: 1.0,
+                stopping: false,
+                fade_out: 0.0,
+            },
+        );
+
         assert!(core_is_animating(&state));
     }
 

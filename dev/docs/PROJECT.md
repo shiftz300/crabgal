@@ -18,33 +18,34 @@ crabgal/
 ├── src/
 │   ├── lib.rs                     可复用引擎 library 入口
 │   ├── main.rs                    最小桌面 binary 入口
-│   ├── runtime/                   App bootstrap、原生平台、通用 editor bridge、AssetReader、帧推进
-│   ├── scene/                     ScenePlugin、资源/音频/背景/立绘
+│   ├── runtime.rs + runtime/      Plugin 入口及 bootstrap、平台、AssetReader、帧推进
+│   ├── scene.rs + scene/          ScenePlugin、资源/音频/背景/立绘
 │   │   └── effects/               特殊 blend/filter 材质与有界粒子层
-│   ├── storage/                   StoragePlugin、存档、设置、已读历史和鉴赏解锁
-│   ├── render/                    Blur pipeline 和 WGSL
-│   └── ui/                        GameUiPlugin 与固定 MainCore UI
-│       ├── support/               字体、输入域、加载状态与通用交互基础
-│       ├── stage/                 Textbox、控制栏与选项
-│       ├── overlays/              Backlog 与 Dialog 覆盖层
-│       └── screens/               Title、Save/Load、Config 与菜单路由
+│   ├── storage.rs + storage/      StoragePlugin 门面及设置、存档、历史、鉴赏实现
+│   ├── render.rs + render/        RenderPlugin 门面及 Blur pipeline 实现
+│   ├── assets/                    内嵌字体、UI 音效与 WGSL shader
+│   ├── ui.rs + ui/                GameUiPlugin 门面与固定 MainCore UI 实现
+│   └── ui/
+│       ├── support.rs + support/  通用 UI 门面及字体、输入域、加载、音效等机制
+│       ├── stage.rs + stage/      舞台 UI 门面及 Textbox、控制栏与选项
+│       ├── overlays.rs + overlays/ 覆盖层门面及 Backlog、Dialog
+│       └── screens.rs + screens/  页面门面及 Title、Save/Load、Config、菜单路由
 ├── crates/
 │   ├── core/                      package: crabgal-core
 │   │   └── src/
+│   │       ├── lib.rs             公共 model/runtime 门面与转场数学
 │   │       ├── config.rs          游戏配置数据
-│   │       ├── model/             Action、State、公共值与渲染参数
-│   │       └── runtime/           表达式、确定性 step 执行器、转场数学
+│   │       ├── model.rs + model/  model 门面及 Action、State、公共值与渲染参数
+│   │       └── runtime.rs + runtime/ runtime 门面及表达式、确定性 step 执行器
 │   └── loader/                    package: crabgal-loader
 │       └── src/
-│           ├── adapter/           可配置的格式适配类别
-│           │   ├── asset/         fs、auto 与 hexz_k 适配
-│           │   ├── editor/        完整编辑器工程 adapter
-│           │   │   └── letsgal/   LetsGal 工程 adapter；studio/ 为可选宿主扩展包
-│           │   ├── script/webgal/ WebGAL 语法解析与统一 IR 导出
-│           │   └── store/         存档状态格式编码与解析
-│           ├── loader/            多来源挂载、场景发现和开发热重载
-│           ├── language.rs        通用语言注册表
-│           └── report.rs          span、资源与诊断报告
+│           ├── adapter.rs + adapter/ 可配置格式 registry 及四类 adapter 实现
+│           │   ├── asset.rs       fs、auto 与 hexz_k 统一资源适配
+│           │   ├── editor.rs + editor/ 完整编辑器工程门面与 LetsGal 实现
+│           │   ├── script.rs + script/ 脚本门面与 WebGAL 统一 IR 导出
+│           │   └── store.rs       存档状态格式接口与 crabgal codec
+│           ├── loader.rs + loader/ 多来源挂载、场景发现和开发热重载
+│           └── lib.rs             通用语言注册表、span、资源与诊断合同
 ├── projects/
 │   └── test-project/              唯一端到端测试项目
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
@@ -52,7 +53,7 @@ crabgal/
 └── dev/docs/
     ├── architecture/              当前与历史架构设计
     ├── reference/                 WebGAL 对照、参考与产品优势
-    ├── acceptance/                各阶段手工验收清单
+    ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
     ├── PROJECT.md                 项目边界和目录规则
     └── TODO.md                    唯一进度入口
 ```
@@ -102,7 +103,9 @@ crabgal/
 
 - 代码首先按稳定职责域分组；同一目录出现三个以上紧密相关模块时，应建立领域子目录。
 - 不为单个文件制造目录，也不按每个页面、平台或微小类型拆 crate；目录必须表达依赖边界。
-- 新模块优先放入现有领域，并通过领域 `mod.rs` 暴露最小 API，避免调用方依赖物理路径。
+- 新模块优先放入现有领域，并通过同名领域入口 `.rs` 暴露最小 API；门面只保留注册、稳定
+  导出与少量领域协调，具体生命周期或执行机制放入同名目录。不再新增只有声明的 `mod.rs`，
+  也不把互不相干的实现压进一个巨型入口文件。
 - 每个阶段结束时检查零引用源码、资源、测试夹具和依赖；确认无运行时或测试用途后删除。
 - 构建产物、存档和导入缓存只能存在于忽略目录，不得成为项目结构的一部分。
 

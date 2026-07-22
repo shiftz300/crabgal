@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use crabgal_core::{Action, Anchor, AnimationPreset, BlendMode, Easing, Transition};
+use crabgal_core::{
+    Action, Anchor, AnimationPreset, BlendMode, Easing, StageEventKind, StageProperty, StageTarget,
+    Transition,
+};
 
 #[derive(Default)]
 struct Coverage {
@@ -26,7 +29,7 @@ struct Coverage {
 
 #[test]
 fn checked_in_showcase_exercises_every_native_effect_family() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project/scripts");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/webgal-showcase");
     let mut coverage = Coverage::default();
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
@@ -185,6 +188,155 @@ fn checked_in_showcase_exercises_every_native_effect_family() {
     assert!(coverage.has_mini_avatar && coverage.has_input && coverage.has_unlock);
 }
 
+#[test]
+fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+    let project = crabgal_loader::LoaderRegistry::default()
+        .open_project(&root)
+        .expect("the LetsGal showcase should be a valid project")
+        .expect("the LetsGal adapter should detect its showcase");
+    assert_eq!(project.format, "letsgal");
+
+    let scenes = crabgal_loader::load_scenes(&project.content)
+        .expect("the LetsGal showcase should compile through the public loader");
+    let mut properties = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    let mut events = BTreeSet::new();
+    let mut animations = 0;
+    let mut has_muted_track = false;
+    let mut has_repeated_fast_blocking_clip = false;
+    for scene in scenes {
+        assert!(
+            scene.diagnostics.is_empty(),
+            "{}: {:?}",
+            scene.path.display(),
+            scene.diagnostics
+        );
+        for action in scene.actions {
+            let Action::StageAnimation { animation } = action else {
+                continue;
+            };
+            animations += 1;
+            has_repeated_fast_blocking_clip |= animation.repeat == 1
+                && (animation.playback_rate - 1.5).abs() <= f32::EPSILON
+                && animation.blocking;
+            for track in animation.tracks {
+                properties.insert(stage_property_name(track.property));
+                targets.insert(match track.target {
+                    StageTarget::Camera => "camera",
+                    StageTarget::Character { .. } => "character",
+                    StageTarget::SceneLayer { .. } => "scene-layer",
+                });
+                has_muted_track |= track.muted;
+            }
+            for event in animation.events {
+                events.insert(match event.kind {
+                    StageEventKind::CameraShake(_) => "camera-shake",
+                    StageEventKind::CameraPatch { .. } => "camera-patch",
+                    StageEventKind::Particle { .. } => "particle",
+                    StageEventKind::Scene(_) => "scene",
+                });
+            }
+        }
+    }
+
+    assert_eq!(animations, 8);
+    assert_eq!(
+        targets,
+        BTreeSet::from(["camera", "character", "scene-layer"])
+    );
+    assert_eq!(
+        events,
+        BTreeSet::from(["camera-patch", "camera-shake", "particle", "scene"])
+    );
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "alpha",
+            "bloom-intensity",
+            "blur-amount",
+            "blur-strength",
+            "chromatic-aberration",
+            "color-brightness",
+            "color-contrast",
+            "color-exposure",
+            "color-saturation",
+            "color-temperature",
+            "color-tone-intensity",
+            "crt-intensity",
+            "dither-intensity",
+            "dither-levels",
+            "distortion-strength",
+            "eyelid-center-x",
+            "eyelid-center-y",
+            "eyelid-curvature",
+            "eyelid-openness",
+            "eyelid-softness",
+            "eyelid-width",
+            "film-grain-intensity",
+            "film-grain-size",
+            "focal-distance",
+            "fog-intensity",
+            "fog-scale",
+            "fog-speed",
+            "glitch-intensity",
+            "godray-angle",
+            "godray-center-x",
+            "godray-center-y",
+            "godray-gain",
+            "godray-intensity",
+            "godray-lacunarity",
+            "godray-speed",
+            "halftone-angle",
+            "halftone-intensity",
+            "halftone-scale",
+            "heat-haze-intensity",
+            "heat-haze-scale",
+            "heat-haze-speed",
+            "height",
+            "lens-flare-center-x",
+            "lens-flare-center-y",
+            "lens-flare-intensity",
+            "light-leak-angle",
+            "light-leak-intensity",
+            "lut-intensity",
+            "motion-blur-angle",
+            "motion-blur-strength",
+            "old-film-intensity",
+            "outline-intensity",
+            "outline-thickness",
+            "pixelate-size",
+            "radial-blur-center-x",
+            "radial-blur-center-y",
+            "radial-blur-strength",
+            "rotation",
+            "scale-x",
+            "scale-y",
+            "sharpen-strength",
+            "shock-intensity",
+            "vhs-intensity",
+            "vhs-jitter",
+            "vhs-noise",
+            "vignette-intensity",
+            "vignette-size",
+            "water-ripple-center-x",
+            "water-ripple-center-y",
+            "water-ripple-frequency",
+            "water-ripple-intensity",
+            "water-ripple-speed",
+            "width",
+            "x",
+            "y",
+            "zoom",
+            "zoom-blur-center-x",
+            "zoom-blur-center-y",
+            "zoom-blur-strength",
+        ])
+    );
+    assert!(has_muted_track);
+    assert!(has_repeated_fast_blocking_clip);
+}
+
 fn record(action: &Action, coverage: &mut Coverage) {
     coverage.actions.insert(action_name(action));
     if let Action::Flow { action, .. } = action {
@@ -335,6 +487,9 @@ fn action_name(action: &Action) -> &'static str {
         Action::HostCommand { .. } => "host-command",
         Action::Vocal { .. } => "vocal",
         Action::RequestInput { .. } => "request-input",
+        // LetsGal 1.8 owns this adapter-native fixture; the WebGAL showcase
+        // intentionally does not need to manufacture Studio timeline JSON.
+        Action::StageAnimation { .. } => "stage-animation",
     }
 }
 
@@ -388,5 +543,91 @@ fn blend_name(blend: BlendMode) -> &'static str {
         BlendMode::Add => "add",
         BlendMode::Multiply => "multiply",
         BlendMode::Screen => "screen",
+    }
+}
+
+/// Exhaustive on purpose: adding a native timeline property requires adding
+/// a visible fixture track and an acceptance expectation in the same change.
+fn stage_property_name(property: StageProperty) -> &'static str {
+    match property {
+        StageProperty::X => "x",
+        StageProperty::Y => "y",
+        StageProperty::Zoom => "zoom",
+        StageProperty::ScaleX => "scale-x",
+        StageProperty::ScaleY => "scale-y",
+        StageProperty::Alpha => "alpha",
+        StageProperty::Rotation => "rotation",
+        StageProperty::Width => "width",
+        StageProperty::Height => "height",
+        StageProperty::FocalDistance => "focal-distance",
+        StageProperty::BlurStrength => "blur-strength",
+        StageProperty::DistortionStrength => "distortion-strength",
+        StageProperty::VignetteIntensity => "vignette-intensity",
+        StageProperty::VignetteSize => "vignette-size",
+        StageProperty::BlurAmount => "blur-amount",
+        StageProperty::ColorToneIntensity => "color-tone-intensity",
+        StageProperty::ColorExposure => "color-exposure",
+        StageProperty::ColorBrightness => "color-brightness",
+        StageProperty::ColorContrast => "color-contrast",
+        StageProperty::ColorSaturation => "color-saturation",
+        StageProperty::ColorTemperature => "color-temperature",
+        StageProperty::OldFilmIntensity => "old-film-intensity",
+        StageProperty::ShockIntensity => "shock-intensity",
+        StageProperty::GodrayIntensity => "godray-intensity",
+        StageProperty::GodrayAngle => "godray-angle",
+        StageProperty::GodrayGain => "godray-gain",
+        StageProperty::GodrayLacunarity => "godray-lacunarity",
+        StageProperty::GodraySpeed => "godray-speed",
+        StageProperty::GodrayCenterX => "godray-center-x",
+        StageProperty::GodrayCenterY => "godray-center-y",
+        StageProperty::LutIntensity => "lut-intensity",
+        StageProperty::BloomIntensity => "bloom-intensity",
+        StageProperty::ChromaticAberration => "chromatic-aberration",
+        StageProperty::PixelateSize => "pixelate-size",
+        StageProperty::GlitchIntensity => "glitch-intensity",
+        StageProperty::CrtIntensity => "crt-intensity",
+        StageProperty::SharpenStrength => "sharpen-strength",
+        StageProperty::RadialBlurStrength => "radial-blur-strength",
+        StageProperty::RadialBlurCenterX => "radial-blur-center-x",
+        StageProperty::RadialBlurCenterY => "radial-blur-center-y",
+        StageProperty::MotionBlurStrength => "motion-blur-strength",
+        StageProperty::MotionBlurAngle => "motion-blur-angle",
+        StageProperty::ZoomBlurStrength => "zoom-blur-strength",
+        StageProperty::ZoomBlurCenterX => "zoom-blur-center-x",
+        StageProperty::ZoomBlurCenterY => "zoom-blur-center-y",
+        StageProperty::LightLeakIntensity => "light-leak-intensity",
+        StageProperty::LightLeakAngle => "light-leak-angle",
+        StageProperty::LensFlareIntensity => "lens-flare-intensity",
+        StageProperty::LensFlareCenterX => "lens-flare-center-x",
+        StageProperty::LensFlareCenterY => "lens-flare-center-y",
+        StageProperty::FilmGrainIntensity => "film-grain-intensity",
+        StageProperty::FilmGrainSize => "film-grain-size",
+        StageProperty::HeatHazeIntensity => "heat-haze-intensity",
+        StageProperty::HeatHazeSpeed => "heat-haze-speed",
+        StageProperty::HeatHazeScale => "heat-haze-scale",
+        StageProperty::WaterRippleIntensity => "water-ripple-intensity",
+        StageProperty::WaterRippleFrequency => "water-ripple-frequency",
+        StageProperty::WaterRippleSpeed => "water-ripple-speed",
+        StageProperty::WaterRippleCenterX => "water-ripple-center-x",
+        StageProperty::WaterRippleCenterY => "water-ripple-center-y",
+        StageProperty::FogIntensity => "fog-intensity",
+        StageProperty::FogSpeed => "fog-speed",
+        StageProperty::FogScale => "fog-scale",
+        StageProperty::VhsIntensity => "vhs-intensity",
+        StageProperty::VhsJitter => "vhs-jitter",
+        StageProperty::VhsNoise => "vhs-noise",
+        StageProperty::HalftoneIntensity => "halftone-intensity",
+        StageProperty::HalftoneScale => "halftone-scale",
+        StageProperty::HalftoneAngle => "halftone-angle",
+        StageProperty::DitherIntensity => "dither-intensity",
+        StageProperty::DitherLevels => "dither-levels",
+        StageProperty::OutlineIntensity => "outline-intensity",
+        StageProperty::OutlineThickness => "outline-thickness",
+        StageProperty::EyelidOpenness => "eyelid-openness",
+        StageProperty::EyelidWidth => "eyelid-width",
+        StageProperty::EyelidCurvature => "eyelid-curvature",
+        StageProperty::EyelidSoftness => "eyelid-softness",
+        StageProperty::EyelidCenterX => "eyelid-center-x",
+        StageProperty::EyelidCenterY => "eyelid-center-y",
     }
 }

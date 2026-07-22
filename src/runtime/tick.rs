@@ -6,8 +6,8 @@ use crabgal_loader::DiagnosticLevel;
 
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{
-    AssetLoadingGate, ContentProjectResource, GameState, LocalAssetManifest, LocalSceneAssets,
-    ProjectRoot, ScriptLanguages, ScriptWatcherResource,
+    AssetLoadingGate, ContentProjectResource, EditorSyncSession, GameState, LocalAssetManifest,
+    LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource,
 };
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, SkipMode, ToggleStates};
@@ -29,6 +29,16 @@ enum TypewriterPause {
     Timed(f64),
     Input,
 }
+
+#[derive(Default)]
+struct EditorCursorSync {
+    remaining_frames: u8,
+    poll_elapsed: f32,
+    last: Option<crabgal_loader::ProjectDebugCursor>,
+    force: bool,
+}
+
+const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
 
 #[derive(SystemParam)]
 pub struct TickContext<'w, 's> {
@@ -57,21 +67,16 @@ pub struct TickContext<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     input_scope: Res<'w, UiInputScope>,
     loading: Res<'w, AssetLoadingGate>,
+    editor_sync: Option<Res<'w, EditorSyncSession>>,
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
+    editor_cursor_sync: Local<'s, EditorCursorSync>,
 }
 
 /// Advances input, text timing, script hot reload, and transition state.
 pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
-    let mut state_changed = reload_scripts_if_changed(
-        &context.watcher,
-        &context.content,
-        &context.languages,
-        context.state.bypass_change_detection(),
-        &mut context.asset_manifest,
-        &mut context.config,
-    );
+    let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
     if context.loading.blocked {
         context.toggles.skip = false;
         if state_changed {
@@ -86,18 +91,20 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    if update_toggle_shortcuts(
-        &context.actions,
-        &mut context.toggles,
-        &mut context.settings,
-        &mut context.auto_timer,
-    ) && let Err(error) =
-        crate::storage::settings::persist(&context.settings, &context.project_root)
+    if context.editor_sync.is_none()
+        && update_toggle_shortcuts(
+            &context.actions,
+            &mut context.toggles,
+            &mut context.settings,
+            &mut context.auto_timer,
+        )
+        && let Err(error) =
+            crate::storage::settings::persist(&context.settings, &context.project_root)
     {
         log::error!("failed to persist skip mode: {error:#}");
     }
     let presentation_was_blocked = context.state.presentation_blocked();
-    if context.actions.skip_video {
+    if context.editor_sync.is_none() && context.actions.skip_video {
         let before = context.state.videos.len();
         context
             .state
@@ -105,12 +112,13 @@ pub fn tick(mut context: TickContext) {
             .retain(|_, video| !video.spec.skippable || video.spec.looped);
         state_changed |= before != context.state.videos.len();
     }
-    let presentation_advance = advance_requested(
-        &context.actions,
-        &context.buttons,
-        &context.windows,
-        context.toggles.hide,
-    );
+    let presentation_advance = context.editor_sync.is_none()
+        && advance_requested(
+            &context.actions,
+            &context.buttons,
+            &context.windows,
+            context.toggles.hide,
+        );
     state_changed |= update_transitions(
         context.state.bypass_change_detection(),
         delta_seconds as f32,
@@ -118,7 +126,7 @@ pub fn tick(mut context: TickContext) {
     );
     if presentation_was_blocked {
         context.toggles.skip = false;
-        if !context.state.presentation_blocked() {
+        if context.editor_sync.is_none() && !context.state.presentation_blocked() {
             step::step(context.state.bypass_change_detection());
             state_changed = true;
         }
@@ -144,6 +152,14 @@ pub fn tick(mut context: TickContext) {
         context.settings.typewriter_speed,
         &mut context.typewriter_clock,
     );
+    if context.editor_sync.is_some() {
+        context.toggles.auto = false;
+        context.toggles.skip = false;
+        if state_changed {
+            context.state.set_changed();
+        }
+        return;
+    }
     state_changed |= update_notend(context.state.bypass_change_detection());
     state_changed |= update_auto_mode(
         context.state.bypass_change_detection(),
@@ -213,43 +229,76 @@ fn update_toggle_shortcuts(
     settings_changed
 }
 
-fn reload_scripts_if_changed(
-    watcher: &Option<Res<ScriptWatcherResource>>,
-    content: &crabgal_loader::ContentProject,
-    languages: &crabgal_loader::ScriptLanguageRegistry,
-    state: &mut State,
-    asset_manifest: &mut LocalAssetManifest,
-    config: &mut crate::runtime::resources::GameConfigResource,
-) -> bool {
-    let Some(watcher) = watcher else {
-        return false;
-    };
-    let Ok(watcher) = watcher.0.lock() else {
-        log::error!("script watcher lock is poisoned");
-        return false;
-    };
-    let changes = watcher.drain();
-    if changes.is_empty() {
-        return false;
-    }
+fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f32) -> bool {
+    let changes = context
+        .watcher
+        .as_ref()
+        .and_then(|watcher| watcher.0.lock().ok().map(|watcher| watcher.drain()))
+        .unwrap_or_default();
 
     let cursor_changed = changes
         .iter()
-        .any(|path| content.is_debug_cursor_change(path));
+        .any(|path| context.content.is_debug_cursor_change(path));
     let source_change_count = changes
         .iter()
-        .filter(|path| !content.is_debug_cursor_change(path))
+        .filter(|path| !context.content.is_debug_cursor_change(path))
         .count();
+    let editor_sync = context.editor_sync.is_some();
 
     let mut changed = false;
     if source_change_count > 0 {
-        changed |= reload_project_sources(content, languages, state, asset_manifest, config);
-        if changed {
+        let reloaded = reload_project_sources(
+            &context.content,
+            &context.languages,
+            context.state.bypass_change_detection(),
+            &mut context.asset_manifest,
+            &mut context.config,
+        );
+        changed |= reloaded;
+        if reloaded {
             log::info!("reloaded {source_change_count} changed project source(s)");
+            if editor_sync {
+                context.editor_cursor_sync.force = true;
+                context.editor_cursor_sync.remaining_frames = 8;
+            }
         }
     }
-    if cursor_changed {
-        changed |= sync_editor_cursor(content, state, asset_manifest);
+    if cursor_changed && editor_sync {
+        context.editor_cursor_sync.remaining_frames = 8;
+    }
+    if editor_sync {
+        context.editor_cursor_sync.poll_elapsed += delta_seconds.max(0.0);
+        if context.editor_cursor_sync.poll_elapsed >= EDITOR_CURSOR_POLL_SECONDS {
+            context.editor_cursor_sync.poll_elapsed %= EDITOR_CURSOR_POLL_SECONDS;
+            context.editor_cursor_sync.remaining_frames =
+                context.editor_cursor_sync.remaining_frames.max(1);
+        }
+    }
+    if context.editor_cursor_sync.remaining_frames > 0 {
+        let force = context.editor_cursor_sync.force;
+        match try_sync_editor_cursor(
+            &context.content,
+            context.state.bypass_change_detection(),
+            &context.asset_manifest,
+            &mut context.editor_cursor_sync.last,
+            force,
+        ) {
+            Ok(Some(cursor_changed)) => {
+                changed |= cursor_changed;
+                context.editor_cursor_sync.remaining_frames = 0;
+                context.editor_cursor_sync.force = false;
+            }
+            Ok(None) => {
+                context.editor_cursor_sync.remaining_frames = 0;
+                context.editor_cursor_sync.force = false;
+            }
+            Err(error) => {
+                context.editor_cursor_sync.remaining_frames -= 1;
+                if context.editor_cursor_sync.remaining_frames == 0 {
+                    log::warn!("failed to synchronize Studio debug position: {error:#}");
+                }
+            }
+        }
     }
     changed
 }
@@ -310,86 +359,93 @@ pub(crate) fn sync_editor_cursor(
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
 ) -> bool {
-    sync_editor_cursor_inner(content, state, asset_manifest, false)
-}
-
-/// Rebuild an editor preview even when its source cursor did not move.
-///
-/// A host run button uses this path so it can restart crabgal without entering
-/// the editor's own debug runtime.
-pub(crate) fn restart_editor_cursor(
-    content: &crabgal_loader::ContentProject,
-    state: &mut State,
-    asset_manifest: &LocalAssetManifest,
-) -> bool {
-    sync_editor_cursor_inner(content, state, asset_manifest, true)
-}
-
-fn sync_editor_cursor_inner(
-    content: &crabgal_loader::ContentProject,
-    state: &mut State,
-    asset_manifest: &LocalAssetManifest,
-    force: bool,
-) -> bool {
-    let cursor = match content.debug_cursor() {
-        Ok(Some(cursor)) => cursor,
-        Ok(None) => return false,
+    match read_and_sync_editor_cursor(content, state, asset_manifest) {
+        Ok(Some(changed)) => changed,
+        Ok(None) => false,
         Err(error) => {
-            log::warn!("failed to read editor cursor: {error:#}");
-            return false;
+            log::warn!("failed to synchronize Studio debug position: {error:#}");
+            false
         }
+    }
+}
+
+fn try_sync_editor_cursor(
+    content: &crabgal_loader::ContentProject,
+    state: &mut State,
+    asset_manifest: &LocalAssetManifest,
+    last: &mut Option<crabgal_loader::ProjectDebugCursor>,
+    force: bool,
+) -> anyhow::Result<Option<bool>> {
+    let Some(cursor) = content.debug_cursor()? else {
+        *last = None;
+        return Ok(None);
     };
-    sync_editor_position_inner(
+    if !force && last.as_ref() == Some(&cursor) {
+        return Ok(Some(false));
+    }
+    let changed = sync_editor_cursor_at(content, state, asset_manifest, &cursor)?;
+    *last = Some(cursor);
+    Ok(Some(changed))
+}
+
+fn read_and_sync_editor_cursor(
+    content: &crabgal_loader::ContentProject,
+    state: &mut State,
+    asset_manifest: &LocalAssetManifest,
+) -> anyhow::Result<Option<bool>> {
+    let Some(cursor) = content.debug_cursor()? else {
+        return Ok(None);
+    };
+    Ok(Some(sync_editor_cursor_at(
+        content,
+        state,
+        asset_manifest,
+        &cursor,
+    )?))
+}
+
+fn sync_editor_cursor_at(
+    content: &crabgal_loader::ContentProject,
+    state: &mut State,
+    asset_manifest: &LocalAssetManifest,
+    cursor: &crabgal_loader::ProjectDebugCursor,
+) -> anyhow::Result<bool> {
+    let initial = content.initial_state()?;
+    Ok(sync_editor_position(
         state,
         asset_manifest,
         &cursor.scene,
         cursor.source_step,
-        force,
-    )
+        initial,
+    ))
 }
 
-/// Rebuild an editor preview at a cursor captured from the host's live UI.
-///
-/// LetsGal persists its cursor asynchronously, so a run-button click can be
-/// newer than `.studio/state.json`. The bridge supplies that live cursor while
-/// keeping the VM and replay logic adapter-neutral.
-pub(crate) fn restart_editor_position(
+fn sync_editor_position(
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
     scene_name: &str,
     source_step: usize,
-) -> bool {
-    sync_editor_position_inner(state, asset_manifest, scene_name, source_step, true)
-}
-
-fn sync_editor_position_inner(
-    state: &mut State,
-    asset_manifest: &LocalAssetManifest,
-    scene_name: &str,
-    source_step: usize,
-    force: bool,
+    initial: crabgal_loader::ProjectInitialState,
 ) -> bool {
     let Some(scene) = asset_manifest.get(scene_name) else {
         log::warn!("editor selected unknown fragment {scene_name:?}");
         return false;
     };
+    let selected_start = scene
+        .action_spans
+        .iter()
+        .position(|span| span.line >= source_step)
+        .unwrap_or(scene.action_spans.len());
     let target = scene
         .action_spans
         .iter()
         .position(|span| span.line > source_step)
         .unwrap_or(scene.action_spans.len());
-    if !force && !state.ended && state.current_scene == scene_name && state.cursor == target {
-        return false;
-    }
-
     let new_preview = || State {
         program: state.program.clone(),
         program_fingerprint: state.program_fingerprint,
-        vars: state.vars.clone(),
-        global_vars: state.global_vars.clone(),
-        read_dialogues: state.read_dialogues.clone(),
-        unlocked_cg: state.unlocked_cg.clone(),
-        unlocked_bgm: state.unlocked_bgm.clone(),
+        vars: initial.variables.clone(),
+        global_vars: initial.shared_variables.clone(),
         ..State::new()
     };
     let mut preview = new_preview();
@@ -400,13 +456,13 @@ fn sync_editor_position_inner(
     // selected block. Replaying only the selected fragment loses the scene,
     // characters and audio inherited from earlier chapters and is the reason
     // later chapters intermittently appeared to have missing resources.
-    if !seek_editor_state(&mut preview, scene_name, target) {
+    if !seek_editor_state(&mut preview, scene_name, selected_start, target) {
         // Some editor-only/title fragments are deliberately unreachable from
         // crabgal's normal entry. They still need direct block inspection.
         preview = new_preview();
         preview.current_scene = scene_name.to_owned();
         preview.ended = false;
-        let _ = seek_editor_state(&mut preview, scene_name, target);
+        let _ = seek_editor_state(&mut preview, scene_name, selected_start, target);
     }
     log::info!(
         "editor seek · fragment {} · block {}",
@@ -419,12 +475,35 @@ fn sync_editor_position_inner(
 
 const MAX_EDITOR_REPLAY_STEPS: usize = 65_536;
 
-fn seek_editor_state(preview: &mut State, target_scene: &str, target: usize) -> bool {
+fn seek_editor_state(
+    preview: &mut State,
+    target_scene: &str,
+    selected_start: usize,
+    target: usize,
+) -> bool {
     for _ in 0..MAX_EDITOR_REPLAY_STEPS {
         if preview.current_scene == target_scene && preview.cursor >= target {
             return true;
         }
-        match step::step_until_cursor(preview, target_scene, target) {
+        let result = step::step_until_cursor(preview, target_scene, target);
+        // A dialogue block may contain post-confirmation cleanup after `Say`
+        // (for example LetsGal's `keepDialogue: false` textbox hide). Studio
+        // selecting that block previews the line before confirmation, so do
+        // not synthesize the click merely to reach the block's final action.
+        if matches!(result, crabgal_core::StepResult::AwaitClick)
+            && preview.current_scene == target_scene
+            && preview.cursor > selected_start
+            && preview.cursor <= target
+        {
+            return true;
+        }
+        // Replay prior blocks to completion, but preserve the selected block's
+        // own yield. This lets its dialogue/typewriter, transition, timeline,
+        // particle or video presentation run exactly once in the preview.
+        if preview.current_scene == target_scene && preview.cursor >= target {
+            return true;
+        }
+        match result {
             crabgal_core::StepResult::AwaitClick => step::advance(preview),
             crabgal_core::StepResult::AwaitPresentation => {
                 while preview.presentation_blocked() {
@@ -981,6 +1060,11 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
     }
 
+    if state.stage_animation.is_some() {
+        changed = true;
+        advance_stage_animation(state, delta_seconds);
+    }
+
     let avatar_delta = delta_seconds * 3.0;
     if state.mini_avatar.is_some() {
         if state.mini_avatar_progress < 1.0 {
@@ -994,6 +1078,483 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
     }
     changed
+}
+
+fn advance_stage_animation(state: &mut State, delta_seconds: f32) {
+    let Some(mut runtime) = state.stage_animation.take() else {
+        return;
+    };
+    let duration = runtime.animation.duration.max(f32::EPSILON);
+    let total = if runtime.animation.infinite {
+        f32::INFINITY
+    } else {
+        duration * (runtime.animation.repeat.saturating_add(1) as f32)
+    };
+    runtime.previous_elapsed = runtime.elapsed;
+    runtime.elapsed = (runtime.elapsed
+        + delta_seconds.max(0.0) * runtime.animation.playback_rate.max(f32::EPSILON))
+    .min(total);
+    let finished = runtime.elapsed >= total;
+    let local_time = if finished {
+        duration
+    } else {
+        runtime.elapsed % duration
+    };
+
+    reset_stage_camera_patches(state, &runtime);
+    apply_stage_tracks(state, &mut runtime, local_time);
+    apply_stage_camera_patches(state, &runtime, local_time);
+    trigger_stage_events(state, &runtime);
+
+    if !finished {
+        state.stage_animation = Some(runtime);
+    }
+}
+
+fn apply_stage_tracks(
+    state: &mut State,
+    runtime: &mut crabgal_core::StageAnimationState,
+    local_time: f32,
+) {
+    for index in 0..runtime.animation.tracks.len() {
+        let track = &runtime.animation.tracks[index];
+        if track.muted || track.keyframes.is_empty() {
+            continue;
+        }
+        if runtime.initial_values[index].is_none() {
+            let Some(value) = read_stage_value(state, &track.target, track.property) else {
+                // Scene layers can be introduced by a later scene cue.
+                continue;
+            };
+            runtime.initial_values[index] = Some(value);
+            runtime.track_start_times[index] = local_time;
+        }
+        let value = sample_stage_track(
+            track,
+            local_time,
+            runtime.initial_values[index].unwrap_or_default(),
+            runtime.track_start_times[index],
+        );
+        write_stage_value(state, &track.target, track.property, value);
+    }
+}
+
+fn sample_stage_track(
+    track: &crabgal_core::StageTrack,
+    time: f32,
+    initial: f32,
+    start_time: f32,
+) -> f32 {
+    let frames = &track.keyframes;
+    let first = frames[0];
+    let time = time.max(0.0);
+    if time <= first.time {
+        let start = start_time.clamp(0.0, first.time);
+        if first.time <= start {
+            return first.value;
+        }
+        let progress = ((time.max(start) - start) / (first.time - start)).clamp(0.0, 1.0);
+        return initial + (first.value - initial) * first.easing.sample(progress);
+    }
+    for pair in frames.windows(2) {
+        let from = pair[0];
+        let to = pair[1];
+        if time > to.time {
+            continue;
+        }
+        let span = to.time - from.time;
+        if span <= f32::EPSILON {
+            return to.value;
+        }
+        let progress = ((time - from.time) / span).clamp(0.0, 1.0);
+        return from.value + (to.value - from.value) * to.easing.sample(progress);
+    }
+    frames.last().map_or(initial, |frame| frame.value)
+}
+
+fn read_stage_value(
+    state: &State,
+    target: &crabgal_core::StageTarget,
+    property: crabgal_core::StageProperty,
+) -> Option<f32> {
+    use crabgal_core::{StageProperty as P, StageTarget};
+    if matches!(target, StageTarget::Camera) {
+        return Some(match property {
+            P::X => state.camera_transform.offset_x,
+            P::Y => state.camera_transform.offset_y,
+            P::Zoom | P::ScaleX => state.camera_transform.scale_x,
+            P::ScaleY => state.camera_transform.scale_y,
+            property => read_stage_effect(&state.camera_effect, property)?,
+        });
+    }
+    let id = match target {
+        StageTarget::Character { id, .. } => id,
+        StageTarget::SceneLayer { id } => id,
+        StageTarget::Camera => unreachable!(),
+    };
+    let sprite = state.sprites.get(id)?;
+    Some(match property {
+        P::X => sprite.transform.offset_x,
+        P::Y => sprite.transform.offset_y,
+        P::ScaleX | P::Zoom => sprite.transform.scale_x,
+        P::ScaleY => sprite.transform.scale_y,
+        P::Alpha => sprite.transform.alpha,
+        P::Rotation => sprite.transform.rotation,
+        P::Width => sprite.transform.width,
+        P::Height => sprite.transform.height,
+        _ => return None,
+    })
+}
+
+fn write_stage_value(
+    state: &mut State,
+    target: &crabgal_core::StageTarget,
+    property: crabgal_core::StageProperty,
+    value: f32,
+) {
+    use crabgal_core::{StageProperty as P, StageTarget};
+    if matches!(target, StageTarget::Camera) {
+        match property {
+            P::X => state.camera_transform.offset_x = value,
+            P::Y => state.camera_transform.offset_y = value,
+            P::Zoom => {
+                state.camera_transform.scale_x = value;
+                state.camera_transform.scale_y = value;
+            }
+            P::ScaleX => state.camera_transform.scale_x = value,
+            P::ScaleY => state.camera_transform.scale_y = value,
+            property => write_stage_effect(&mut state.camera_effect, property, value),
+        }
+        return;
+    }
+    let id = match target {
+        StageTarget::Character { id, .. } => id,
+        StageTarget::SceneLayer { id } => id,
+        StageTarget::Camera => unreachable!(),
+    };
+    let Some(sprite) = state.sprites.get_mut(id) else {
+        return;
+    };
+    match property {
+        P::X => sprite.transform.offset_x = value,
+        P::Y => sprite.transform.offset_y = value,
+        P::ScaleX | P::Zoom => sprite.transform.scale_x = value,
+        P::ScaleY => sprite.transform.scale_y = value,
+        P::Alpha => sprite.transform.alpha = value.clamp(0.0, 1.0),
+        P::Rotation => sprite.transform.rotation = value,
+        P::Width => sprite.transform.width = value.max(0.0),
+        P::Height => sprite.transform.height = value.max(0.0),
+        _ => {}
+    }
+}
+
+fn read_stage_effect(
+    effect: &crabgal_core::PostProcessEffect,
+    property: crabgal_core::StageProperty,
+) -> Option<f32> {
+    use crabgal_core::StageProperty as P;
+    Some(match property {
+        P::FocalDistance => effect.focal_distance.unwrap_or(0.0),
+        P::BlurStrength => effect.blur_strength,
+        P::DistortionStrength => effect.distortion_strength,
+        P::VignetteIntensity => effect.vignette_intensity,
+        P::VignetteSize => effect.vignette_size,
+        P::BlurAmount => effect.blur_amount,
+        P::ColorToneIntensity => effect.color_tone_intensity,
+        P::ColorExposure => effect.color_exposure,
+        P::ColorBrightness => effect.color_brightness,
+        P::ColorContrast => effect.color_contrast,
+        P::ColorSaturation => effect.color_saturation,
+        P::ColorTemperature => effect.color_temperature,
+        P::OldFilmIntensity => effect.old_film_intensity,
+        P::ShockIntensity => effect.shock_intensity,
+        P::GodrayIntensity => effect.godray_intensity,
+        P::GodrayAngle => effect.godray_angle,
+        P::GodrayGain => effect.godray_gain,
+        P::GodrayLacunarity => effect.godray_lacunarity,
+        P::GodraySpeed => effect.godray_speed,
+        P::GodrayCenterX => effect.godray_center_x,
+        P::GodrayCenterY => effect.godray_center_y,
+        P::LutIntensity => effect.lut_intensity,
+        P::BloomIntensity => effect.bloom_intensity,
+        P::ChromaticAberration => effect.chromatic_aberration,
+        P::PixelateSize => effect.pixelate_size,
+        P::GlitchIntensity => effect.glitch_intensity,
+        P::CrtIntensity => effect.crt_intensity,
+        P::SharpenStrength => effect.sharpen_strength,
+        P::RadialBlurStrength => effect.radial_blur_strength,
+        P::RadialBlurCenterX => effect.radial_blur_center_x,
+        P::RadialBlurCenterY => effect.radial_blur_center_y,
+        P::MotionBlurStrength => effect.motion_blur_strength,
+        P::MotionBlurAngle => effect.motion_blur_angle,
+        P::ZoomBlurStrength => effect.zoom_blur_strength,
+        P::ZoomBlurCenterX => effect.zoom_blur_center_x,
+        P::ZoomBlurCenterY => effect.zoom_blur_center_y,
+        P::LightLeakIntensity => effect.light_leak_intensity,
+        P::LightLeakAngle => effect.light_leak_angle,
+        P::LensFlareIntensity => effect.lens_flare_intensity,
+        P::LensFlareCenterX => effect.lens_flare_center_x,
+        P::LensFlareCenterY => effect.lens_flare_center_y,
+        P::FilmGrainIntensity => effect.film_grain_intensity,
+        P::FilmGrainSize => effect.film_grain_size,
+        P::HeatHazeIntensity => effect.heat_haze_intensity,
+        P::HeatHazeSpeed => effect.heat_haze_speed,
+        P::HeatHazeScale => effect.heat_haze_scale,
+        P::WaterRippleIntensity => effect.water_ripple_intensity,
+        P::WaterRippleFrequency => effect.water_ripple_frequency,
+        P::WaterRippleSpeed => effect.water_ripple_speed,
+        P::WaterRippleCenterX => effect.water_ripple_center_x,
+        P::WaterRippleCenterY => effect.water_ripple_center_y,
+        P::FogIntensity => effect.fog_intensity,
+        P::FogSpeed => effect.fog_speed,
+        P::FogScale => effect.fog_scale,
+        P::VhsIntensity => effect.vhs_intensity,
+        P::VhsJitter => effect.vhs_jitter,
+        P::VhsNoise => effect.vhs_noise,
+        P::HalftoneIntensity => effect.halftone_intensity,
+        P::HalftoneScale => effect.halftone_scale,
+        P::HalftoneAngle => effect.halftone_angle,
+        P::DitherIntensity => effect.dither_intensity,
+        P::DitherLevels => effect.dither_levels,
+        P::OutlineIntensity => effect.outline_intensity,
+        P::OutlineThickness => effect.outline_thickness,
+        P::EyelidOpenness => effect.eyelid_openness,
+        P::EyelidWidth => effect.eyelid_width,
+        P::EyelidCurvature => effect.eyelid_curvature,
+        P::EyelidSoftness => effect.eyelid_softness,
+        P::EyelidCenterX => effect.eyelid_center_x,
+        P::EyelidCenterY => effect.eyelid_center_y,
+        _ => return None,
+    })
+}
+
+fn write_stage_effect(
+    effect: &mut crabgal_core::PostProcessEffect,
+    property: crabgal_core::StageProperty,
+    value: f32,
+) {
+    use crabgal_core::StageProperty as P;
+    match property {
+        P::FocalDistance => effect.focal_distance = Some(value),
+        P::BlurStrength => effect.blur_strength = value,
+        P::DistortionStrength => effect.distortion_strength = value,
+        P::VignetteIntensity => effect.vignette_intensity = value,
+        P::VignetteSize => effect.vignette_size = value,
+        P::BlurAmount => effect.blur_amount = value,
+        P::ColorToneIntensity => effect.color_tone_intensity = value,
+        P::ColorExposure => effect.color_exposure = value,
+        P::ColorBrightness => effect.color_brightness = value,
+        P::ColorContrast => effect.color_contrast = value,
+        P::ColorSaturation => effect.color_saturation = value,
+        P::ColorTemperature => effect.color_temperature = value,
+        P::OldFilmIntensity => effect.old_film_intensity = value,
+        P::ShockIntensity => effect.shock_intensity = value,
+        P::GodrayIntensity => effect.godray_intensity = value,
+        P::GodrayAngle => effect.godray_angle = value,
+        P::GodrayGain => effect.godray_gain = value,
+        P::GodrayLacunarity => effect.godray_lacunarity = value,
+        P::GodraySpeed => effect.godray_speed = value,
+        P::GodrayCenterX => effect.godray_center_x = value,
+        P::GodrayCenterY => effect.godray_center_y = value,
+        P::LutIntensity => effect.lut_intensity = value,
+        P::BloomIntensity => effect.bloom_intensity = value,
+        P::ChromaticAberration => effect.chromatic_aberration = value,
+        P::PixelateSize => effect.pixelate_size = value,
+        P::GlitchIntensity => effect.glitch_intensity = value,
+        P::CrtIntensity => effect.crt_intensity = value,
+        P::SharpenStrength => effect.sharpen_strength = value,
+        P::RadialBlurStrength => effect.radial_blur_strength = value,
+        P::RadialBlurCenterX => effect.radial_blur_center_x = value,
+        P::RadialBlurCenterY => effect.radial_blur_center_y = value,
+        P::MotionBlurStrength => effect.motion_blur_strength = value,
+        P::MotionBlurAngle => effect.motion_blur_angle = value,
+        P::ZoomBlurStrength => effect.zoom_blur_strength = value,
+        P::ZoomBlurCenterX => effect.zoom_blur_center_x = value,
+        P::ZoomBlurCenterY => effect.zoom_blur_center_y = value,
+        P::LightLeakIntensity => effect.light_leak_intensity = value,
+        P::LightLeakAngle => effect.light_leak_angle = value,
+        P::LensFlareIntensity => effect.lens_flare_intensity = value,
+        P::LensFlareCenterX => effect.lens_flare_center_x = value,
+        P::LensFlareCenterY => effect.lens_flare_center_y = value,
+        P::FilmGrainIntensity => effect.film_grain_intensity = value,
+        P::FilmGrainSize => effect.film_grain_size = value,
+        P::HeatHazeIntensity => effect.heat_haze_intensity = value,
+        P::HeatHazeSpeed => effect.heat_haze_speed = value,
+        P::HeatHazeScale => effect.heat_haze_scale = value,
+        P::WaterRippleIntensity => effect.water_ripple_intensity = value,
+        P::WaterRippleFrequency => effect.water_ripple_frequency = value,
+        P::WaterRippleSpeed => effect.water_ripple_speed = value,
+        P::WaterRippleCenterX => effect.water_ripple_center_x = value,
+        P::WaterRippleCenterY => effect.water_ripple_center_y = value,
+        P::FogIntensity => effect.fog_intensity = value,
+        P::FogSpeed => effect.fog_speed = value,
+        P::FogScale => effect.fog_scale = value,
+        P::VhsIntensity => effect.vhs_intensity = value,
+        P::VhsJitter => effect.vhs_jitter = value,
+        P::VhsNoise => effect.vhs_noise = value,
+        P::HalftoneIntensity => effect.halftone_intensity = value,
+        P::HalftoneScale => effect.halftone_scale = value,
+        P::HalftoneAngle => effect.halftone_angle = value,
+        P::DitherIntensity => effect.dither_intensity = value,
+        P::DitherLevels => effect.dither_levels = value,
+        P::OutlineIntensity => effect.outline_intensity = value,
+        P::OutlineThickness => effect.outline_thickness = value,
+        P::EyelidOpenness => effect.eyelid_openness = value,
+        P::EyelidWidth => effect.eyelid_width = value,
+        P::EyelidCurvature => effect.eyelid_curvature = value,
+        P::EyelidSoftness => effect.eyelid_softness = value,
+        P::EyelidCenterX => effect.eyelid_center_x = value,
+        P::EyelidCenterY => effect.eyelid_center_y = value,
+        _ => {}
+    }
+}
+
+fn apply_stage_camera_patches(
+    state: &mut State,
+    runtime: &crabgal_core::StageAnimationState,
+    local_time: f32,
+) {
+    use crabgal_core::StageEventKind;
+    let patches = runtime.animation.events.iter().filter_map(|event| {
+        if let StageEventKind::CameraPatch { targets, effect } = &event.kind {
+            Some((event.time, targets, effect))
+        } else {
+            None
+        }
+    });
+    for (time, targets, patch) in patches {
+        if time > local_time {
+            continue;
+        }
+        if let Some(targets) = targets {
+            state.camera_targets = *targets;
+            state.camera_effect_targets = *targets;
+        }
+        state.camera_effect = patch.apply_to(state.camera_effect.clone());
+    }
+}
+
+fn reset_stage_camera_patches(state: &mut State, runtime: &crabgal_core::StageAnimationState) {
+    use crabgal_core::StageEventKind;
+    for event in &runtime.animation.events {
+        let StageEventKind::CameraPatch { targets, effect } = &event.kind else {
+            continue;
+        };
+        if targets.is_some() {
+            state.camera_targets = runtime.initial_camera_targets;
+            state.camera_effect_targets = runtime.initial_camera_effect_targets;
+        }
+        effect.restore_affected_from(&mut state.camera_effect, &runtime.initial_camera_effect);
+    }
+}
+
+fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimationState) {
+    let duration = runtime.animation.duration.max(f32::EPSILON);
+    let from = runtime.previous_elapsed;
+    let to = runtime.elapsed;
+    let first_cycle = (from.max(0.0) / duration).floor() as u32;
+    let last_cycle = (to / duration).ceil().max(1.0) as u32;
+    for cycle in first_cycle..last_cycle {
+        let base = cycle as f32 * duration;
+        for event in &runtime.animation.events {
+            let at = base + event.time.clamp(0.0, duration);
+            match &event.kind {
+                crabgal_core::StageEventKind::Particle {
+                    id,
+                    effect,
+                    duration,
+                    fade_out,
+                } => {
+                    let runtime_id = format!("{}:particle:{id}", runtime.animation.id);
+                    if crossed(from, to, at) {
+                        state.particle_effects.insert(
+                            runtime_id.clone(),
+                            crabgal_core::ActiveParticleEffect::new(effect.clone()),
+                        );
+                    }
+                    if crossed(from, to, at + duration.max(0.0)) {
+                        if *fade_out <= f32::EPSILON {
+                            state.particle_effects.remove(&runtime_id);
+                        } else if let Some(effect) = state.particle_effects.get_mut(&runtime_id) {
+                            effect.begin_fade_out(*fade_out);
+                        }
+                    }
+                }
+                crabgal_core::StageEventKind::CameraShake(shake) if crossed(from, to, at) => {
+                    state.camera_shake = Some(crabgal_core::CameraShakeState {
+                        spec: *shake,
+                        elapsed: 0.0,
+                        offset_x: 0.0,
+                        offset_y: 0.0,
+                        blocking: false,
+                    });
+                }
+                crabgal_core::StageEventKind::Scene(cue) if crossed(from, to, at) => {
+                    apply_stage_scene_cue(state, cue);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn crossed(from: f32, to: f32, event: f32) -> bool {
+    event > from && event <= to
+}
+
+fn apply_stage_scene_cue(state: &mut State, cue: &crabgal_core::StageSceneCue) {
+    use crabgal_core::state::Sprite;
+    use crabgal_core::{BlendMode, Position, SpriteLayout, SpriteTransform, Transition};
+
+    state.bg = None;
+    state.bg_transition = None;
+    state
+        .sprites
+        .retain(|id, _| !id.starts_with("scene-layer:"));
+    for (index, layer) in cue
+        .layers
+        .iter()
+        .filter(|layer| !layer.image.is_empty())
+        .enumerate()
+    {
+        let id = format!("scene-layer:{}", layer.id);
+        let transform = SpriteTransform {
+            offset_x: layer.offset[0],
+            offset_y: -layer.offset[1],
+            ..SpriteTransform::default()
+        };
+        state.sprites.insert(
+            id,
+            Sprite {
+                image: layer.image.clone(),
+                position: Position::left(0.0),
+                layout: SpriteLayout::Scene(cue.layout),
+                transition_progress: if cue.transition == Transition::Instant {
+                    1.0
+                } else {
+                    0.0
+                },
+                transition: cue.transition,
+                entering: true,
+                transition_offset_x: 0.0,
+                transition_blocking: false,
+                transform,
+                transform_animation: None,
+                keyframe_animation: None,
+                filter: Default::default(),
+                films: Default::default(),
+                animation: None,
+                z_index: index as i32,
+                blend: BlendMode::Alpha,
+                camera_distance: Some(layer.distance.max(f32::EPSILON)),
+            },
+        );
+    }
+    if cue.reset_camera {
+        state.camera_transform = SpriteTransform::default();
+        state.camera_effect = Default::default();
+        state.camera_shake = None;
+    }
 }
 
 fn advance_keyframes(
@@ -1112,8 +1673,9 @@ fn preset_final_transform(
 mod tests {
     use crabgal_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
     use crabgal_core::{
-        Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, SpriteTransform,
-        Transition, Value,
+        Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
+        SpriteTransform, StageAnimation, StageEvent, StageEventKind, StageKeyframe, StageProperty,
+        StageTarget, StageTrack, Transition, Value,
     };
 
     use super::*;
@@ -1188,7 +1750,7 @@ mod tests {
         state.current_scene = "start".into();
         state.ended = false;
 
-        assert!(seek_editor_state(&mut state, "chapter-two", 0));
+        assert!(seek_editor_state(&mut state, "chapter-two", 0, 0));
         assert_eq!(state.current_scene, "chapter-two");
         assert_eq!(state.bg.as_deref(), Some("backgrounds/inherited.webp"));
     }
@@ -1207,14 +1769,120 @@ mod tests {
         state.current_scene = "main".into();
         state.ended = false;
 
-        assert!(seek_editor_state(&mut state, "main", 1));
-        assert!(state.dialogue.is_none());
+        assert!(seek_editor_state(&mut state, "main", 0, 1));
         let retained = state
-            .previous_dialogue
+            .dialogue
             .as_ref()
-            .expect("selected dialogue must survive deterministic editor replay");
+            .expect("selected dialogue must remain at its native yield");
         assert_eq!(retained.speaker, "小夜");
         assert_eq!(retained.text, "被选中的对白");
+        assert!(!state.textbox_hidden);
+    }
+
+    #[test]
+    fn editor_seek_preserves_the_selected_block_animation() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::ShowBg {
+                image: "backgrounds/selected.webp".into(),
+                transition: Transition::Fade(1.0),
+                transform: SpriteTransform::default(),
+            }],
+        )]));
+        state.current_scene = "main".into();
+        state.ended = false;
+
+        assert!(seek_editor_state(&mut state, "main", 0, 1));
+        let transition = state
+            .bg_transition
+            .as_ref()
+            .expect("selected transition must not be fast-forwarded");
+        assert_eq!(transition.progress, 0.0);
+        assert!(transition.blocking);
+    }
+
+    #[test]
+    fn editor_seek_rebuilds_variables_from_adapter_defaults() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "start".into(),
+            vec![Action::Say {
+                speaker: String::new(),
+                text: "{route}/{ending}".into(),
+                options: Default::default(),
+            }],
+        )]));
+        state
+            .vars
+            .insert("route".into(), Value::Str("stale".into()));
+        state.global_vars.insert("ending".into(), Value::Int(99));
+
+        let manifest = LocalAssetManifest(std::collections::HashMap::from([(
+            "start".into(),
+            LocalSceneAssets {
+                action_spans: vec![crabgal_loader::SourceSpan { line: 1, column: 1 }],
+                ..default()
+            },
+        )]));
+        let initial = crabgal_loader::ProjectInitialState {
+            variables: std::collections::HashMap::from([(
+                "route".into(),
+                Value::Str("fresh".into()),
+            )]),
+            shared_variables: std::collections::HashMap::from([("ending".into(), Value::Int(2))]),
+        };
+
+        assert!(sync_editor_position(
+            &mut state, &manifest, "start", 1, initial,
+        ));
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "fresh/2");
+        assert_eq!(state.vars["route"], Value::Str("fresh".into()));
+        assert_eq!(state.global_vars["ending"], Value::Int(2));
+    }
+
+    #[test]
+    fn editor_seek_does_not_confirm_the_selected_dialogue_cleanup() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::Say {
+                    speaker: String::new(),
+                    text: "应当显示的旁白".into(),
+                    options: Default::default(),
+                },
+                Action::SetTextbox {
+                    visible: false,
+                    auto: true,
+                },
+            ],
+        )]));
+        let manifest = LocalAssetManifest(std::collections::HashMap::from([(
+            "main".into(),
+            LocalSceneAssets {
+                action_spans: vec![
+                    crabgal_loader::SourceSpan { line: 1, column: 1 },
+                    crabgal_loader::SourceSpan { line: 1, column: 1 },
+                ],
+                ..default()
+            },
+        )]));
+
+        assert!(sync_editor_position(
+            &mut state,
+            &manifest,
+            "main",
+            1,
+            crabgal_loader::ProjectInitialState::default(),
+        ));
+        assert_eq!(
+            state
+                .dialogue
+                .as_ref()
+                .map(|dialogue| dialogue.text.as_str()),
+            Some("应当显示的旁白")
+        );
         assert!(!state.textbox_hidden);
     }
 
@@ -1314,6 +1982,65 @@ mod tests {
         assert_eq!(transform.offset_x, 75.0);
         assert!(advance_keyframes(&mut transform, &mut timeline, 0.75));
         assert_eq!(transform.offset_x, 160.0);
+    }
+
+    #[test]
+    fn stage_timeline_samples_shared_clock_and_resets_event_patches_each_loop() {
+        let mut state = State::new();
+        let animation = StageAnimation {
+            id: "fixture".into(),
+            duration: 1.0,
+            tracks: vec![StageTrack {
+                target: StageTarget::Camera,
+                property: StageProperty::Zoom,
+                keyframes: vec![
+                    StageKeyframe {
+                        time: 0.0,
+                        value: 1.0,
+                        easing: Easing::Linear,
+                    },
+                    StageKeyframe {
+                        time: 1.0,
+                        value: 2.0,
+                        easing: Easing::Linear,
+                    },
+                ],
+                muted: false,
+            }],
+            events: vec![StageEvent {
+                time: 0.5,
+                kind: StageEventKind::CameraPatch {
+                    targets: None,
+                    effect: Box::new(PostProcessPatch {
+                        color_brightness: Some(0.4),
+                        ..default()
+                    }),
+                },
+            }],
+            repeat: 1,
+            infinite: false,
+            playback_rate: 1.0,
+            blocking: true,
+        };
+        state.stage_animation = Some(crabgal_core::StageAnimationState::new(animation, &state));
+
+        advance_stage_animation(&mut state, 0.25);
+        assert!((state.camera_transform.scale_x - 1.25).abs() < 0.001);
+        assert_eq!(state.camera_effect.color_brightness, 0.0);
+
+        advance_stage_animation(&mut state, 0.5);
+        assert!((state.camera_transform.scale_x - 1.75).abs() < 0.001);
+        assert_eq!(state.camera_effect.color_brightness, 0.4);
+
+        // The second play starts from its authored time zero and must not keep
+        // a camera patch that occurred in the previous play.
+        advance_stage_animation(&mut state, 0.3);
+        assert!((state.camera_transform.scale_x - 1.05).abs() < 0.001);
+        assert_eq!(state.camera_effect.color_brightness, 0.0);
+
+        advance_stage_animation(&mut state, 0.95);
+        assert_eq!(state.camera_transform.scale_x, 2.0);
+        assert!(state.stage_animation.is_none());
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::ui::control_bar::{
     QuickPreviewSurface, QuickPreviewVisual, TOP_ITEMS, UiBlurSource,
 };
 use crate::ui::foundation::{UiFonts, exp_lerp};
+use crate::ui::support::i18n::{LocalizedText, UiText};
 
 #[derive(Component)]
 pub(crate) struct SpeakerText;
@@ -517,7 +518,7 @@ fn spawn_bottom_controls(
                             },
                             TextColor(Color::srgba(0.96, 0.96, 0.98, 0.94)),
                         ));
-                        button.spawn((
+                        let mut label = button.spawn((
                             Text::new(item.label),
                             AutoHideText::new(0.88),
                             TextFont {
@@ -527,6 +528,9 @@ fn spawn_bottom_controls(
                             },
                             TextColor(Color::srgba(0.92, 0.92, 0.95, 0.88)),
                         ));
+                        if item.action == ButtonAction::Title {
+                            label.insert(LocalizedText(UiText::Title));
+                        }
                     });
             }
         });

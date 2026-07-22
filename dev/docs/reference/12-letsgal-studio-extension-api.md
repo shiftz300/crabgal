@@ -1,20 +1,27 @@
-# LetsGal Studio 1.7.0 扩展 API 兼容性参考
+# LetsGal Studio 1.8.0 扩展 API 历史参考
 
-> 状态：2026-07-18 本机 1.7.0 实测基线。工程 adapter 已按本文基线接入；本文仍作为外部格式与
-> 扩展 ABI 的证据记录，具体实现边界见
+> 状态：2026-07-21 本机 1.8.0 复核；公开 `SDK_VERSION` 仍为 1.0.0。crabgal 明确不加载或执行
+> Studio 扩展，本文只作为外部格式与历史 ABI 的证据记录，具体实现边界见
 > [`08-letsgal-studio.md`](../architecture/08-letsgal-studio.md)。
 
-这份文档面向下一位接手 crabgal 兼容工作的 Codex。目标不是复刻 LetsGal Studio 编辑器，而是让另一套运行时能够加载 Studio 扩展，并为扩展提供足够一致的 `@avg-studio/sdk` / `ExtensionContext` 行为。
+> **同名概念：** 本文的 `editor cursor` 是编辑器当前选中的剧情 block，不是鼠标光标；配置
+> `cursor: { mode: ... }` 才表示鼠标指针外观。crabgal 只同步前者，后者明确不兼容并使用系统
+> 默认指针。
+
+这份文档保留早期扩展 ABI 调研证据，供核对 Studio 工程格式演进。crabgal 当前只兼容
+Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk` / `ExtensionContext`，也
+不把下文的假设宿主清单当作路线图。
 
 ## 0. 结论先行
 
-当前应以 **LetsGal Studio 1.7.0 + SDK 1.0.0** 为兼容基线，而不是旧 `avg.renderer`。
+工程 adapter 当前以 **LetsGal Studio 1.8.0 原生工程格式**为兼容基线；本章的扩展 ABI
+仅用于历史研究，不是 crabgal 的实现目标。
 
-1.7.0 仍未提供 editor cursor、run interception 或 preview backend API。当前公开
+1.8.0 仍未提供 crabgal 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
 `ExtensionContext` 保持运行时取向；`FlowAPI` 提供 `signal` 与 `callFragment()`，但它们不能
 替代编辑器调试合同。crabgal 不再把 `getHost()`、DOM 或 Electron 能力当作 SDK。
 
-一个最小可用兼容层至少要实现：
+如果未来另立一个独立扩展宿主，最小兼容层至少要实现（当前 crabgal 不实现）：
 
 1. 读取 `extension.json`，按 `entry` 加载 ESM bundle；
 2. 给 bundle 提供单实例 `react`、`react-dom`、JSX runtime 和 `@avg-studio/sdk`；
@@ -44,7 +51,7 @@ flowchart LR
 
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
-| 本机当前安装 | Studio 1.7.0 | 主基线 |
+| 本机当前安装 | Studio 1.8.0 | 原生工程格式主基线；扩展不兼容 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
@@ -60,7 +67,7 @@ flowchart LR
 1f8ca44870142f222e25034297f436477d12cc202e229840251ab7402ca3c661
 ```
 
-本机 1.7.0 的 `dist/sdk/constants.ts` 仍声明 `SDK_VERSION = "1.0.0"`。当前
+本机 1.8.0 的 `dist/sdk/constants.ts` 仍声明 `SDK_VERSION = "1.0.0"`。当前
 `FlowAPI` 含 `signal`、`callFragment()`、`goToFragment()` 和 `restart()`；
 `ExtensionContext` 仍没有编辑器/preview backend 命名空间。因此不应制造
 `SDK 1.7.0` 这个不存在的版本号，也不能把宿主私有对象当作新增 SDK。
@@ -71,8 +78,8 @@ flowchart LR
 
 | 标记 | 来源 | 可信度 |
 |---|---|---|
-| **T** | 1.7.0 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
-| **R** | 1.7.0 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
+| **T** | 1.8.0 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
+| **R** | 1.8.0 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
 | **B** | 用 Studio 自己的发行链生成并运行探针扩展 | 端到端行为 |
 | **D** | [官方扩展文档](https://docs.avg-engine.com/extensions/api-context) | 设计意图；有少量滞后/矛盾 |
 | **H** | 旧 `avg.renderer` 与相关仓库 | 历史背景，不是当前合同 |

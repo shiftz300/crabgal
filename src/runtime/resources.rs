@@ -30,6 +30,11 @@ pub struct StoreCodec(pub Arc<dyn StoreAdapter>);
 #[derive(Resource)]
 pub struct ScriptWatcherResource(pub Mutex<ScriptWatcher>);
 
+/// Marks a read-only native-editor preview that follows the adapter's
+/// persisted selected-block position instead of entering crabgal's title screen.
+#[derive(Resource, Default)]
+pub struct EditorSyncSession;
+
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct LocalAssetManifest(pub HashMap<String, LocalSceneAssets>);
 

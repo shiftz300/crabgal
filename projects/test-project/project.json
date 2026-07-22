@@ -1,0 +1,12 @@
+{
+  "id": "crabgal-letsgal-1.8-showcase",
+  "name": "crabgal LetsGal 1.8 Timeline Lab",
+  "description": "A runnable visual acceptance project for every native LetsGal Studio 1.8 timeline property and event supported by crabgal.",
+  "engineVersion": "1.8.0",
+  "chapterOrder": ["Stage 1.8"],
+  "resolution": { "width": 1920, "height": 1080 },
+  "extensions": {},
+  "extensionSettings": {},
+  "systemBindings": {},
+  "actionBindings": {}
+}

@@ -1,0 +1,328 @@
+{
+  "id": "chapter-stage-18",
+  "name": "Stage 1.8",
+  "disabled": false,
+  "fragments": [
+    {
+      "id": "fragment-stage-18",
+      "name": "Every LetsGal 1.8 timeline feature",
+      "blocks": [
+        {
+          "id": "10-00-scene",
+          "type": "scene",
+          "content": null,
+          "props": { "sceneId": "scene-day", "transitionType": "fade", "transitionDuration": "300", "waitForComplete": "true", "resetCamera": "true" }
+        },
+        {
+          "id": "10-00-character",
+          "type": "showCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "animated": "true" }
+        },
+        {
+          "id": "10-00-intro",
+          "type": "dialogue",
+          "content": [{ "type": "text", "text": "10-00 LetsGal 1.8 时间轴验收开始。每段动画结束后应自然回到基态。" }],
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
+        },
+        {
+          "id": "10-01-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-01 共用时钟：镜头、人物和场景层应同时运动；人物会缩放、旋转和改变尺寸/透明度。" }],
+          "props": {}
+        },
+        {
+          "id": "10-01-transform-timeline",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-01 shared transform clock",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "x", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 80, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "camera" }, "property": "y", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": -36, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "camera" }, "property": "zoom", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 1.08, "easing": "easeInOut" }, { "time": 2600, "value": 1, "easing": "easeInOut" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "scaleX", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 1.12, "easing": "easeOut" }, { "time": 2600, "value": 1, "easing": "easeIn" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "scaleY", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 0.92, "easing": "easeOut" }, { "time": 2600, "value": 1, "easing": "easeIn" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "alpha", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 0.55, "easing": "linear" }, { "time": 2600, "value": 1, "easing": "linear" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "rotation", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 8, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "width", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 440, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "height", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 900, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "sceneLayer", "layerId": "main" }, "property": "x", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": -45, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] },
+                { "target": { "kind": "sceneLayer", "layerId": "main" }, "property": "y", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 24, "easing": "easeInOut" }, { "time": 2600, "value": 0, "easing": "easeInOut" }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-02-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-02 传统镜头参数：景深、畸变、暗角、调色、旧胶片、冲击、体积光和 LUT 强度应连续变化且不阻塞渲染。" }],
+          "props": {}
+        },
+        {
+          "id": "10-02-classic-camera",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-02 classic camera properties",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "focalDistance", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.55 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "blurStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 5 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "distortionStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.16 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "vignetteIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.65 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "vignetteSize", "keyframes": [{ "time": 0, "value": 0.7 }, { "time": 1300, "value": 0.42 }, { "time": 2600, "value": 0.7 }] },
+                { "target": { "kind": "camera" }, "property": "blurAmount", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 4 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "colorToneIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.5 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "colorExposure", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.2 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "colorBrightness", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.12 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "colorContrast", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.18 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "colorSaturation", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 0.35 }, { "time": 2600, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "colorTemperature", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.35 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "oldFilmIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.5 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "shockIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.32 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "godrayIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.55 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "godrayAngle", "keyframes": [{ "time": 0, "value": 30 }, { "time": 1300, "value": 65 }, { "time": 2600, "value": 30 }] },
+                { "target": { "kind": "camera" }, "property": "godrayGain", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1300, "value": 0.8 }, { "time": 2600, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "godrayLacunarity", "keyframes": [{ "time": 0, "value": 2.5 }, { "time": 1300, "value": 3.2 }, { "time": 2600, "value": 2.5 }] },
+                { "target": { "kind": "camera" }, "property": "godraySpeed", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1300, "value": 1.8 }, { "time": 2600, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "godrayCenterX", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1300, "value": 0.72 }, { "time": 2600, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "godrayCenterY", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.2 }, { "time": 2600, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "lutIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1300, "value": 0.65 }, { "time": 2600, "value": 0 }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-03-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-03 光学效果：Bloom、色差、像素化、Glitch、CRT、锐化应各自可辨认，动画时钟持续流畅。" }],
+          "props": {}
+        },
+        {
+          "id": "10-03-optical",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-03 optical effects",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 3000,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "bloomIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.7 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "chromaticAberration", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.65 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "pixelateSize", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1500, "value": 7 }, { "time": 3000, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "glitchIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.55 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "crtIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.7 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "sharpenStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.8 }, { "time": 3000, "value": 0 }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-04-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-04 三类模糊：径向、运动、缩放模糊的中心和角度应随时间改变，不能出现固定条纹。" }],
+          "props": {}
+        },
+        {
+          "id": "10-04-blur-family",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-04 blur family",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 3000,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "radialBlurStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.38 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "radialBlurCenterX", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1500, "value": 0.3 }, { "time": 3000, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "radialBlurCenterY", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1500, "value": 0.7 }, { "time": 3000, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "motionBlurStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.34 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "motionBlurAngle", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 35 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "zoomBlurStrength", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1500, "value": 0.4 }, { "time": 3000, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "zoomBlurCenterX", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1500, "value": 0.68 }, { "time": 3000, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "zoomBlurCenterY", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1500, "value": 0.32 }, { "time": 3000, "value": 0.5 }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-05-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-05 环境效果：漏光、镜头光斑、胶片颗粒、热浪、水波和雾应具有不同的方向、中心、速度与尺度。" }],
+          "props": {}
+        },
+        {
+          "id": "10-05-atmosphere",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-05 atmosphere effects",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 3200,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "lightLeakIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.72 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "lightLeakAngle", "keyframes": [{ "time": 0, "value": -35 }, { "time": 1600, "value": 35 }, { "time": 3200, "value": -35 }] },
+                { "target": { "kind": "camera" }, "property": "lensFlareIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.7 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "lensFlareCenterX", "keyframes": [{ "time": 0, "value": 0.75 }, { "time": 1600, "value": 0.3 }, { "time": 3200, "value": 0.75 }] },
+                { "target": { "kind": "camera" }, "property": "lensFlareCenterY", "keyframes": [{ "time": 0, "value": 0.25 }, { "time": 1600, "value": 0.6 }, { "time": 3200, "value": 0.25 }] },
+                { "target": { "kind": "camera" }, "property": "filmGrainIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.52 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "filmGrainSize", "keyframes": [{ "time": 0, "value": 1.5 }, { "time": 1600, "value": 3.5 }, { "time": 3200, "value": 1.5 }] },
+                { "target": { "kind": "camera" }, "property": "heatHazeIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.55 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "heatHazeSpeed", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1600, "value": 2 }, { "time": 3200, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "heatHazeScale", "keyframes": [{ "time": 0, "value": 4 }, { "time": 1600, "value": 7 }, { "time": 3200, "value": 4 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.45 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleFrequency", "keyframes": [{ "time": 0, "value": 12 }, { "time": 1600, "value": 20 }, { "time": 3200, "value": 12 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleSpeed", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1600, "value": 2.2 }, { "time": 3200, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleCenterX", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1600, "value": 0.32 }, { "time": 3200, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleCenterY", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1600, "value": 0.68 }, { "time": 3200, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "fogIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.6 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "fogSpeed", "keyframes": [{ "time": 0, "value": 0.2 }, { "time": 1600, "value": 0.65 }, { "time": 3200, "value": 0.2 }] },
+                { "target": { "kind": "camera" }, "property": "fogScale", "keyframes": [{ "time": 0, "value": 3 }, { "time": 1600, "value": 5 }, { "time": 3200, "value": 3 }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-06-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-06 复古与遮罩：VHS、半色调、抖色、轮廓和眼睑遮罩应逐渐增强再完全消失。" }],
+          "props": {}
+        },
+        {
+          "id": "10-06-retro-mask",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-06 retro and eyelid mask",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 3200,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "vhsIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.72 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "vhsJitter", "keyframes": [{ "time": 0, "value": 0.45 }, { "time": 1600, "value": 0.8 }, { "time": 3200, "value": 0.45 }] },
+                { "target": { "kind": "camera" }, "property": "vhsNoise", "keyframes": [{ "time": 0, "value": 0.35 }, { "time": 1600, "value": 0.8 }, { "time": 3200, "value": 0.35 }] },
+                { "target": { "kind": "camera" }, "property": "halftoneIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.7 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "halftoneScale", "keyframes": [{ "time": 0, "value": 6 }, { "time": 1600, "value": 11 }, { "time": 3200, "value": 6 }] },
+                { "target": { "kind": "camera" }, "property": "halftoneAngle", "keyframes": [{ "time": 0, "value": 45 }, { "time": 1600, "value": 15 }, { "time": 3200, "value": 45 }] },
+                { "target": { "kind": "camera" }, "property": "ditherIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.65 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "ditherLevels", "keyframes": [{ "time": 0, "value": 6 }, { "time": 1600, "value": 3 }, { "time": 3200, "value": 6 }] },
+                { "target": { "kind": "camera" }, "property": "outlineIntensity", "keyframes": [{ "time": 0, "value": 0 }, { "time": 1600, "value": 0.75 }, { "time": 3200, "value": 0 }] },
+                { "target": { "kind": "camera" }, "property": "outlineThickness", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1600, "value": 3 }, { "time": 3200, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidOpenness", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1600, "value": 0.12 }, { "time": 3200, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidWidth", "keyframes": [{ "time": 0, "value": 1 }, { "time": 1600, "value": 0.84 }, { "time": 3200, "value": 1 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidCurvature", "keyframes": [{ "time": 0, "value": 0.55 }, { "time": 1600, "value": 0.75 }, { "time": 3200, "value": 0.55 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidSoftness", "keyframes": [{ "time": 0, "value": 0.015 }, { "time": 1600, "value": 0.045 }, { "time": 3200, "value": 0.015 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidCenterX", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1600, "value": 0.55 }, { "time": 3200, "value": 0.5 }] },
+                { "target": { "kind": "camera" }, "property": "eyelidCenterY", "keyframes": [{ "time": 0, "value": 0.5 }, { "time": 1600, "value": 0.46 }, { "time": 3200, "value": 0.5 }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-07-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-07 事件轨：依次触发镜头震动、镜头补丁、粒子提示和场景切换；事件应只触发一次。" }],
+          "props": {}
+        },
+        {
+          "id": "10-07-event-track",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-07 all event types",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 4800,
+              "tracks": [],
+              "events": [
+                { "type": "cameraShake", "time": 400, "data": { "amplitude": 16, "frequency": 22, "duration": 650, "axis": "both", "falloff": "expo" } },
+                { "type": "cameraPatch", "time": 1400, "data": { "targets": ["scene", "characters"], "patch": { "bloomIntensity": 0.45, "vignetteIntensity": 0.32, "colorSaturation": 0.75 } } },
+                { "type": "particleCue", "time": 2400, "data": { "id": "timeline-firefly", "preset": "FIREFLY", "duration": 1500, "fadeInDuration": 180, "fadeOutDuration": 400, "options": { "count": 48, "wind": 0.18, "gravity": -0.04 } } },
+                { "type": "sceneCue", "time": 3400, "data": { "sceneId": "scene-sunset", "resetCamera": true, "transition": "crossfade", "transitionDuration": 550 } }
+              ]
+            }
+          }
+        },
+        {
+          "id": "10-07-reset",
+          "type": "resetCamera",
+          "content": null,
+          "props": { "resetMode": "animated", "duration": "240", "easing": "easeOut", "waitForComplete": "true" }
+        },
+        {
+          "id": "10-08-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-08 播放语义：动画以 1.5 倍速重复一次；极端横移轨被 muted，人物不得跳出画面。" }],
+          "props": {}
+        },
+        {
+          "id": "10-08-playback-options",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "10-08 playback options",
+            "loop": "1",
+            "playbackRate": "1.5",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 1100,
+              "tracks": [
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "thinking" }, "property": "x", "keyframes": [{ "time": 0, "value": 0 }, { "time": 550, "value": 1000 }, { "time": 1100, "value": 0 }], "muted": true },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "thinking" }, "property": "zoom", "keyframes": [{ "time": 0, "value": 1, "easing": "easeIn" }, { "time": 550, "value": 1.12, "easing": "easeOut" }, { "time": 1100, "value": 1, "easing": "easeInOut" }], "muted": false }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "10-09-end-note",
+          "type": "dialogue",
+          "content": [{ "type": "text", "text": "10-09 新增能力全部播放完毕。继续后应平滑返回标题页。" }],
+          "props": { "characterId": "aya", "expression": "thinking", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
+        },
+        {
+          "id": "10-09-end",
+          "type": "endChapter",
+          "content": null,
+          "props": {}
+        }
+      ]
+    }
+  ]
+}

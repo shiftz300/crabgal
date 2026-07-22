@@ -1,0 +1,30 @@
+{
+  "scenes": [
+    {
+      "id": "scene-day",
+      "name": "Day calibration",
+      "layers": [
+        {
+          "id": "main",
+          "name": "Main",
+          "assetPath": "backgrounds/calibration_day.webp",
+          "distance": 1,
+          "offset": "(0, 0)"
+        }
+      ]
+    },
+    {
+      "id": "scene-sunset",
+      "name": "Sunset calibration",
+      "layers": [
+        {
+          "id": "main",
+          "name": "Main",
+          "assetPath": "backgrounds/calibration_sunset.webp",
+          "distance": 1,
+          "offset": "(0, 0)"
+        }
+      ]
+    }
+  ]
+}

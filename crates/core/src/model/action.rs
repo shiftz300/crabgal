@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{
     AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing,
-    PortraitStyle, Position, PostProcessPatch, SpriteLayout, SpriteTransform, TransformPatch,
-    Transition, VideoSpec, VisualFilter,
+    ParticleEffect, PortraitStyle, Position, PostProcessPatch, SceneLayerLayout, SpriteLayout,
+    SpriteTransform, TransformPatch, Transition, VideoSpec, VisualFilter,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +42,178 @@ pub struct TransformKeyframe {
     pub transform: TransformPatch,
     pub duration: f32,
     pub easing: Easing,
+}
+
+/// One normalized keyframe in an adapter-neutral shared stage timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StageKeyframe {
+    pub time: f32,
+    pub value: f32,
+    pub easing: Easing,
+}
+
+/// Render object addressed by a shared stage timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StageTarget {
+    Camera,
+    Character {
+        id: String,
+        /// Lets an editor timeline prepare an expression that is not already
+        /// present on stage without leaking the editor's character model.
+        image: Option<String>,
+    },
+    SceneLayer {
+        id: String,
+    },
+}
+
+/// Numeric properties supported by the engine's shared stage clock.
+///
+/// The camera list mirrors the native camera state rather than retaining an
+/// editor-owned string. That keeps sampling allocation-free and ensures an
+/// adapter cannot claim a property which the runtime silently discards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StageProperty {
+    X,
+    Y,
+    Zoom,
+    ScaleX,
+    ScaleY,
+    Alpha,
+    Rotation,
+    Width,
+    Height,
+    FocalDistance,
+    BlurStrength,
+    DistortionStrength,
+    VignetteIntensity,
+    VignetteSize,
+    BlurAmount,
+    ColorToneIntensity,
+    ColorExposure,
+    ColorBrightness,
+    ColorContrast,
+    ColorSaturation,
+    ColorTemperature,
+    OldFilmIntensity,
+    ShockIntensity,
+    GodrayIntensity,
+    GodrayAngle,
+    GodrayGain,
+    GodrayLacunarity,
+    GodraySpeed,
+    GodrayCenterX,
+    GodrayCenterY,
+    LutIntensity,
+    BloomIntensity,
+    ChromaticAberration,
+    PixelateSize,
+    GlitchIntensity,
+    CrtIntensity,
+    SharpenStrength,
+    RadialBlurStrength,
+    RadialBlurCenterX,
+    RadialBlurCenterY,
+    MotionBlurStrength,
+    MotionBlurAngle,
+    ZoomBlurStrength,
+    ZoomBlurCenterX,
+    ZoomBlurCenterY,
+    LightLeakIntensity,
+    LightLeakAngle,
+    LensFlareIntensity,
+    LensFlareCenterX,
+    LensFlareCenterY,
+    FilmGrainIntensity,
+    FilmGrainSize,
+    HeatHazeIntensity,
+    HeatHazeSpeed,
+    HeatHazeScale,
+    WaterRippleIntensity,
+    WaterRippleFrequency,
+    WaterRippleSpeed,
+    WaterRippleCenterX,
+    WaterRippleCenterY,
+    FogIntensity,
+    FogSpeed,
+    FogScale,
+    VhsIntensity,
+    VhsJitter,
+    VhsNoise,
+    HalftoneIntensity,
+    HalftoneScale,
+    HalftoneAngle,
+    DitherIntensity,
+    DitherLevels,
+    OutlineIntensity,
+    OutlineThickness,
+    EyelidOpenness,
+    EyelidWidth,
+    EyelidCurvature,
+    EyelidSoftness,
+    EyelidCenterX,
+    EyelidCenterY,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageTrack {
+    pub target: StageTarget,
+    pub property: StageProperty,
+    pub keyframes: Vec<StageKeyframe>,
+    pub muted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageSceneLayer {
+    pub id: String,
+    pub image: String,
+    pub distance: f32,
+    pub offset: [f32; 2],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageSceneCue {
+    pub scene_id: String,
+    pub transition: Transition,
+    pub reset_camera: bool,
+    pub layout: SceneLayerLayout,
+    pub layers: Vec<StageSceneLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StageEventKind {
+    CameraShake(CameraShakeSpec),
+    CameraPatch {
+        targets: Option<CameraTargets>,
+        effect: Box<PostProcessPatch>,
+    },
+    Particle {
+        id: String,
+        effect: ParticleEffect,
+        duration: f32,
+        fade_out: f32,
+    },
+    Scene(StageSceneCue),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageEvent {
+    pub time: f32,
+    pub kind: StageEventKind,
+}
+
+/// A shared-clock stage animation. `repeat` counts additional plays, matching
+/// the common editor convention where zero means play once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageAnimation {
+    pub id: String,
+    pub duration: f32,
+    pub tracks: Vec<StageTrack>,
+    pub events: Vec<StageEvent>,
+    pub repeat: u32,
+    pub infinite: bool,
+    pub playback_rate: f32,
+    pub blocking: bool,
 }
 
 /// A single script action — the entire script language compiles to this.
@@ -277,7 +449,7 @@ pub enum Action {
     },
     SetPostProcess {
         targets: CameraTargets,
-        effect: PostProcessPatch,
+        effect: Box<PostProcessPatch>,
         duration: f32,
         easing: Easing,
         blocking: bool,
@@ -319,6 +491,11 @@ pub enum Action {
     /// Rich input request emitted by structured editor adapters.
     RequestInput {
         spec: crate::types::UserInputSpec,
+    },
+    /// Drive camera, characters, scene layers and timed effects from one
+    /// frame-rate-independent clock.
+    StageAnimation {
+        animation: StageAnimation,
     },
 }
 

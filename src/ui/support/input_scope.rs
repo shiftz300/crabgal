@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::runtime::resources::{AssetLoadingGate, GameState};
+use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
 use crate::ui::backlog::BacklogUiState;
 use crate::ui::dialog::DialogRequest;
 use crate::ui::extra::ExtraUi;
@@ -89,6 +89,12 @@ pub(crate) fn title_allowed(scope: Res<UiInputScope>) -> bool {
 
 pub(crate) fn dialog_allowed(scope: Res<UiInputScope>) -> bool {
     *scope == UiInputScope::Dialog
+}
+
+/// Studio owns the preview cursor and its source project. Native preview UI
+/// may still be inspected, but actions that mutate saves/settings stay inert.
+pub(crate) fn writable_session(editor_sync: Option<Res<EditorSyncSession>>) -> bool {
+    editor_sync.is_none()
 }
 
 #[cfg(test)]

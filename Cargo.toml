@@ -31,6 +31,13 @@ edition = "2024"
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
 # every frame when debug_assertions is enabled (dev profile default),
 # even with the "logging" feature disabled.
+[profile.dev]
+# Interactive previews process full-HD pixels every frame. A small amount of
+# optimization keeps `cargo dev` representative without turning it into a slow
+# release build or removing useful debug information.
+opt-level = 1
+debug = 1
+
 [profile.dev.package.icu_provider]
 debug-assertions = false
 
@@ -66,7 +73,6 @@ log = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 libwebp-sys = { workspace = true }
 futures-lite = { workspace = true }
 notify = { workspace = true }

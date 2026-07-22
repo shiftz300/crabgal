@@ -80,7 +80,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhCn, Save) => "存档",
         (ZhCn, Load) => "读档",
         (ZhCn, Config) => "设置",
-        (ZhCn, Title) => "标题画面",
+        (ZhCn, Title) => "标题",
         (ZhCn, Back) => "返回",
         (ZhCn, Confirm) => "确定",
         (ZhCn, Cancel) => "取消",
@@ -136,7 +136,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhTw, Save) => "存檔",
         (ZhTw, Load) => "讀檔",
         (ZhTw, Config) => "設定",
-        (ZhTw, Title) => "標題畫面",
+        (ZhTw, Title) => "標題",
         (ZhTw, Back) => "返回",
         (ZhTw, Confirm) => "確定",
         (ZhTw, Cancel) => "取消",
@@ -192,7 +192,7 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (Ja, Save) => "セーブ",
         (Ja, Load) => "ロード",
         (Ja, Config) => "設定",
-        (Ja, Title) => "タイトル画面",
+        (Ja, Title) => "タイトル",
         (Ja, Back) => "戻る",
         (Ja, Confirm) => "確認",
         (Ja, Cancel) => "キャンセル",
@@ -346,7 +346,10 @@ mod tests {
     #[test]
     fn translates_menu_routes_without_touching_project_title_copy() {
         assert_eq!(tr(UiLocale::ZhCn, UiText::System), "系统");
-        assert_eq!(tr(UiLocale::ZhCn, UiText::Title), "标题画面");
+        assert_eq!(tr(UiLocale::ZhCn, UiText::Title), "标题");
+        assert_eq!(tr(UiLocale::ZhTw, UiText::Title), "標題");
+        assert_eq!(tr(UiLocale::Ja, UiText::Title), "タイトル");
+        assert_eq!(tr(UiLocale::En, UiText::Title), "TITLE");
         assert_eq!(tr(UiLocale::Ja, UiText::System), "システム");
         assert_eq!(tr(UiLocale::En, UiText::System), "SYSTEM");
         // START / CONTINUE / EXTRA / OPTIONS / EXIT remain project-facing

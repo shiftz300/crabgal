@@ -242,8 +242,16 @@ pub(crate) fn sync_sprites(
         let progress = data.transition_progress.clamp(0.0, 1.0);
         let transition_x = (1.0 - progress) * data.transition_offset_x;
         let alpha = (progress * transform.alpha).clamp(0.0, 1.0);
-        let width = base_size.x * transform.scale_x;
-        let height = base_size.y * transform.scale_y;
+        let width = if transform.width > f32::EPSILON {
+            transform.width
+        } else {
+            base_size.x * transform.scale_x
+        };
+        let height = if transform.height > f32::EPSILON {
+            transform.height
+        } else {
+            base_size.y * transform.scale_y
+        };
         let scene_center_adjustment = if matches!(data.layout, SpriteLayout::Scene(_)) {
             Vec2::new(
                 (base_center.x - crabgal_core::DESIGN_WIDTH * 0.5) * (camera_zoom.x - 1.0),

@@ -16,7 +16,9 @@ pub use model::types::*;
 pub use model::{
     Action, ActiveParticleEffect, BgmState, CameraShakeState, ChoiceTarget, DialoguePause,
     EffectCue, EffectEvent, EffectState, HostCommandEvent, MenuChoice, MenuState,
-    PostProcessAnimation, Program, RestoreError, SayOptions, SceneFrame, State, SystemUiSlot,
-    TransformKeyframe, VideoState, VocalCue,
+    PostProcessAnimation, Program, RestoreError, SayOptions, SceneFrame, StageAnimation,
+    StageAnimationState, StageEvent, StageEventKind, StageKeyframe, StageProperty, StageSceneCue,
+    StageSceneLayer, StageTarget, StageTrack, State, SystemUiSlot, TransformKeyframe, VideoState,
+    VocalCue,
 };
 pub use runtime::StepResult;

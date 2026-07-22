@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::action::{ChoiceTarget, Program, SystemUiSlot};
+use crate::action::{ChoiceTarget, Program, StageAnimation, SystemUiSlot};
 use crate::types::{
     AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing, FilmEffects,
     InputValueType, ParticleEffect, PortraitStyle, Position, PostProcessEffect, SpriteLayout,
@@ -67,6 +67,10 @@ pub struct State {
     pub camera_effect_targets: CameraTargets,
     #[serde(skip, default)]
     pub camera_effect_animation: Option<PostProcessAnimation>,
+    /// One adapter-neutral shared-clock stage timeline. It is transient
+    /// presentation state and is reconstructed by editor preview replay.
+    #[serde(skip, default)]
+    pub stage_animation: Option<StageAnimationState>,
     #[serde(skip, default)]
     pub videos: HashMap<String, VideoState>,
     #[serde(skip, default)]
@@ -171,6 +175,41 @@ pub struct CameraShakeState {
     pub offset_x: f32,
     pub offset_y: f32,
     pub blocking: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageAnimationState {
+    pub animation: StageAnimation,
+    /// Absolute authored time across all loops, in seconds.
+    pub elapsed: f32,
+    pub previous_elapsed: f32,
+    /// A scene layer may be created by a cue after the timeline starts, so
+    /// track initial values are captured lazily.
+    pub initial_values: Vec<Option<f32>>,
+    pub track_start_times: Vec<f32>,
+    pub initial_camera_transform: SpriteTransform,
+    pub initial_camera_effect: PostProcessEffect,
+    pub initial_camera_targets: CameraTargets,
+    pub initial_camera_effect_targets: CameraTargets,
+}
+
+impl StageAnimationState {
+    pub fn new(animation: StageAnimation, state: &State) -> Self {
+        let track_count = animation.tracks.len();
+        Self {
+            animation,
+            // Start just before authored time zero so zero-time events fire on
+            // the first presentation tick instead of being skipped.
+            elapsed: -f32::EPSILON,
+            previous_elapsed: -f32::EPSILON,
+            initial_values: vec![None; track_count],
+            track_start_times: vec![0.0; track_count],
+            initial_camera_transform: state.camera_transform,
+            initial_camera_effect: state.camera_effect.clone(),
+            initial_camera_targets: state.camera_targets,
+            initial_camera_effect_targets: state.camera_effect_targets,
+        }
+    }
 }
 
 pub const DEFAULT_BACKLOG_CAPACITY: usize = 200;
@@ -748,6 +787,7 @@ impl State {
         self.camera_shake = None;
         self.camera_effect_targets = snapshot.camera_effect_targets;
         self.camera_effect_animation = None;
+        self.stage_animation = None;
         self.videos.clear();
         self.bg_transform_animation = None;
         self.bg_keyframe_animation = None;
@@ -801,6 +841,10 @@ impl State {
                 .camera_shake
                 .as_ref()
                 .is_some_and(|animation| animation.blocking)
+            || self
+                .stage_animation
+                .as_ref()
+                .is_some_and(|animation| animation.animation.blocking)
             || self
                 .bg_animation
                 .as_ref()

@@ -1,0 +1,15 @@
+{
+  "id": "crabgal-letsgal-compatibility",
+  "name": "LetsGal 1.8.0 Compatibility Fixture",
+  "description": "Compiler fixture containing every runtime block registered by LetsGal Studio 1.8.0.",
+  "engineVersion": "1.0.0",
+  "chapterOrder": ["Title", "Compatibility"],
+  "resolution": { "width": 1920, "height": 1080 },
+  "extensions": {},
+  "extensionSettings": {},
+  "systemBindings": {
+    "internal.system.settings": "ui:@avg.internal.default-shell/settings-screen",
+    "internal.system.input": "ui:@avg.internal.default-shell/input-screen"
+  },
+  "actionBindings": {}
+}

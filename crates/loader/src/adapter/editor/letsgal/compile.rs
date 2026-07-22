@@ -9,20 +9,88 @@ use crabgal_core::{
     Action, Anchor, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
     ChoiceTarget, ColorToneMode, Easing, InputValueType, PortraitStyle, Position,
     PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
-    SpriteTransform, SystemUiSlot, TransformKeyframe, TransformPatch, Transition, UserInputSpec,
-    VideoMode, VideoSpec,
+    SpriteTransform, StageAnimation, StageEvent, StageEventKind, StageKeyframe, StageProperty,
+    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, SystemUiSlot, TransformKeyframe,
+    TransformPatch, Transition, UserInputSpec, VideoMode, VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::model::{
     AssetManifest, ChapterDocument, CharacterDefinition, CharactersDocument, ProjectDocument,
-    SceneDefinition, ScenesDocument, StoryBlock, StoryFragment,
+    SceneDefinition, ScenesDocument, StoryBlock, StoryFragment, VariableDeclaration,
+    VariablesDocument,
 };
 use super::read_json;
 use crate::{Diagnostic, DiagnosticLevel, LoadedScene, ParseReport, SourceSpan};
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.7.0's bundled
+pub(super) fn initial_state(
+    variables: &VariablesDocument,
+    characters: &CharactersDocument,
+) -> crate::ProjectInitialState {
+    let mut state = crate::ProjectInitialState::default();
+    for declaration in variables
+        .variables
+        .iter()
+        .filter(|declaration| declaration.kind != "system")
+    {
+        let Some(value) = declared_value(declaration) else {
+            continue;
+        };
+        if declaration.persistence == "shared" {
+            state
+                .shared_variables
+                .insert(declaration.name.clone(), value);
+        } else {
+            state.variables.insert(declaration.name.clone(), value);
+        }
+    }
+    for character in &characters.characters {
+        for attribute in &characters.attribute_template {
+            let value = character
+                .attribute_values
+                .get(&attribute.name)
+                .unwrap_or(&attribute.default_value);
+            if let Some(value) = core_value(value) {
+                state
+                    .variables
+                    .insert(format!("{}.{}", character.id, attribute.name), value);
+            }
+        }
+    }
+    state
+}
+
+fn declared_value(declaration: &VariableDeclaration) -> Option<crabgal_core::Value> {
+    if !declaration.default_value.is_null() {
+        return core_value(&declaration.default_value);
+    }
+    Some(match declaration.value_type.as_str() {
+        "number" => crabgal_core::Value::Int(0),
+        "bool" | "boolean" => crabgal_core::Value::Bool(false),
+        "string" => crabgal_core::Value::Str(String::new()),
+        _ => return None,
+    })
+}
+
+fn core_value(value: &Value) -> Option<crabgal_core::Value> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .map(crabgal_core::Value::Int)
+            .or_else(|| number.as_f64().map(crabgal_core::Value::Float)),
+        Value::String(value) => Some(crabgal_core::Value::Str(value.clone())),
+        Value::Bool(value) => Some(crabgal_core::Value::Bool(*value)),
+        Value::Array(values) => values
+            .iter()
+            .map(core_value)
+            .collect::<Option<Vec<_>>>()
+            .map(crabgal_core::Value::Array),
+        Value::Null | Value::Object(_) => None,
+    }
+}
+
+/// Runtime-facing block registry observed in LetsGal Studio 1.8.0's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -53,6 +121,7 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "showCharacter",
     "showExtensionUI",
     "sound",
+    "stageAnimation",
     "stopSound",
     "stopVideo",
     "storyParagraph",
@@ -218,7 +287,7 @@ pub(super) fn compile_project(
         .collect::<Vec<_>>();
     // LetsGal's default shell stores its title screen as the first chapter and
     // opens `slot:internal.system.title` from there. crabgal already owns the
-    // native title screen, so keep that chapter available for Studio cursor
+    // native title screen, so keep that chapter available for Studio block-selection
     // debugging while starting normal gameplay from the following chapter.
     let entry_index = usize::from(
         enabled.len() > 1
@@ -432,6 +501,7 @@ fn compile_block(
         "camera" => compile_camera(block, span, report),
         "resetCamera" => compile_reset_camera(block, span, report),
         "animateSprite" => compile_animate_sprite(block, context, span, report),
+        "stageAnimation" => compile_stage_animation(block, context, span, report),
         "particle" => compile_particle(block, span, report),
         "endChapter" => match context.chapter_next.get(&chapter.id).cloned().flatten() {
             Some(next) => report.push(Action::ChangeScene(next), span),
@@ -463,7 +533,7 @@ fn compile_block(
         "floatingText" => compile_floating_text(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.7.0 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.8.0 block registry is exhaustively matched"),
     }
 }
 
@@ -1038,7 +1108,7 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
     if !post_process.is_empty() {
         timed.push(Action::SetPostProcess {
             targets,
-            effect: post_process,
+            effect: Box::new(post_process),
             duration,
             easing: easing(&prop_string(&block.props, "easing")),
             blocking: wait,
@@ -1094,34 +1164,91 @@ fn camera_targets(block: &StoryBlock) -> CameraTargets {
 }
 
 fn post_process_patch(block: &StoryBlock) -> PostProcessPatch {
-    let color_tone = match prop_string(&block.props, "colorToneMode").as_str() {
+    post_process_patch_from_props(&block.props)
+}
+
+fn post_process_patch_from_props(props: &Map<String, Value>) -> PostProcessPatch {
+    let color_tone = match prop_string(props, "colorToneMode").as_str() {
         "grayscale" => Some(ColorToneMode::Grayscale),
         "sepia" => Some(ColorToneMode::Sepia),
         "none" => Some(ColorToneMode::None),
         _ => None,
     };
-    let lut = prop_string(&block.props, "lutPreset");
+    let lut = prop_string(props, "lutPreset");
     PostProcessPatch {
-        focal_distance: optional_f32(&block.props, "focalDistance").map(Some),
-        blur_strength: optional_f32(&block.props, "blurStrength"),
-        distortion_strength: optional_f32(&block.props, "distortionStrength"),
-        vignette_intensity: optional_f32(&block.props, "vignetteIntensity"),
-        vignette_size: optional_f32(&block.props, "vignetteSize"),
-        blur_amount: optional_f32(&block.props, "blurAmount"),
+        focal_distance: optional_f32(props, "focalDistance").map(Some),
+        blur_strength: optional_f32(props, "blurStrength"),
+        distortion_strength: optional_f32(props, "distortionStrength"),
+        vignette_intensity: optional_f32(props, "vignetteIntensity"),
+        vignette_size: optional_f32(props, "vignetteSize"),
+        blur_amount: optional_f32(props, "blurAmount"),
         color_tone,
-        color_tone_intensity: optional_f32(&block.props, "colorToneIntensity"),
-        old_film_intensity: optional_f32(&block.props, "oldFilmIntensity"),
-        shock_intensity: optional_f32(&block.props, "shockIntensity"),
-        godray_intensity: optional_f32(&block.props, "godrayIntensity"),
-        godray_angle: optional_f32(&block.props, "godrayAngle"),
-        godray_gain: optional_f32(&block.props, "godrayGain"),
-        godray_lacunarity: optional_f32(&block.props, "godrayLacunarity"),
-        godray_speed: optional_f32(&block.props, "godraySpeed"),
-        godray_parallel: optional_bool(&block.props, "godrayParallel"),
-        godray_center_x: optional_f32(&block.props, "godrayCenterX"),
-        godray_center_y: optional_f32(&block.props, "godrayCenterY"),
+        color_tone_intensity: optional_f32(props, "colorToneIntensity"),
+        color_exposure: optional_f32(props, "colorExposure"),
+        color_brightness: optional_f32(props, "colorBrightness"),
+        color_contrast: optional_f32(props, "colorContrast"),
+        color_saturation: optional_f32(props, "colorSaturation"),
+        color_temperature: optional_f32(props, "colorTemperature"),
+        old_film_intensity: optional_f32(props, "oldFilmIntensity"),
+        shock_intensity: optional_f32(props, "shockIntensity"),
+        godray_intensity: optional_f32(props, "godrayIntensity"),
+        godray_angle: optional_f32(props, "godrayAngle"),
+        godray_gain: optional_f32(props, "godrayGain"),
+        godray_lacunarity: optional_f32(props, "godrayLacunarity"),
+        godray_speed: optional_f32(props, "godraySpeed"),
+        godray_parallel: optional_bool(props, "godrayParallel"),
+        godray_center_x: optional_f32(props, "godrayCenterX"),
+        godray_center_y: optional_f32(props, "godrayCenterY"),
         lut_preset: (!lut.is_empty()).then_some(Some(lut)),
-        lut_intensity: optional_f32(&block.props, "lutIntensity"),
+        lut_intensity: optional_f32(props, "lutIntensity"),
+        bloom_intensity: optional_f32(props, "bloomIntensity"),
+        chromatic_aberration: optional_f32(props, "chromaticAberration"),
+        pixelate_size: optional_f32(props, "pixelateSize"),
+        glitch_intensity: optional_f32(props, "glitchIntensity"),
+        crt_intensity: optional_f32(props, "crtIntensity"),
+        sharpen_strength: optional_f32(props, "sharpenStrength"),
+        radial_blur_strength: optional_f32(props, "radialBlurStrength"),
+        radial_blur_center_x: optional_f32(props, "radialBlurCenterX"),
+        radial_blur_center_y: optional_f32(props, "radialBlurCenterY"),
+        motion_blur_strength: optional_f32(props, "motionBlurStrength"),
+        motion_blur_angle: optional_f32(props, "motionBlurAngle"),
+        zoom_blur_strength: optional_f32(props, "zoomBlurStrength"),
+        zoom_blur_center_x: optional_f32(props, "zoomBlurCenterX"),
+        zoom_blur_center_y: optional_f32(props, "zoomBlurCenterY"),
+        light_leak_intensity: optional_f32(props, "lightLeakIntensity"),
+        light_leak_angle: optional_f32(props, "lightLeakAngle"),
+        lens_flare_intensity: optional_f32(props, "lensFlareIntensity"),
+        lens_flare_center_x: optional_f32(props, "lensFlareCenterX"),
+        lens_flare_center_y: optional_f32(props, "lensFlareCenterY"),
+        film_grain_intensity: optional_f32(props, "filmGrainIntensity"),
+        film_grain_size: optional_f32(props, "filmGrainSize"),
+        heat_haze_intensity: optional_f32(props, "heatHazeIntensity"),
+        heat_haze_speed: optional_f32(props, "heatHazeSpeed"),
+        heat_haze_scale: optional_f32(props, "heatHazeScale"),
+        water_ripple_intensity: optional_f32(props, "waterRippleIntensity"),
+        water_ripple_frequency: optional_f32(props, "waterRippleFrequency"),
+        water_ripple_speed: optional_f32(props, "waterRippleSpeed"),
+        water_ripple_center_x: optional_f32(props, "waterRippleCenterX"),
+        water_ripple_center_y: optional_f32(props, "waterRippleCenterY"),
+        fog_intensity: optional_f32(props, "fogIntensity"),
+        fog_speed: optional_f32(props, "fogSpeed"),
+        fog_scale: optional_f32(props, "fogScale"),
+        vhs_intensity: optional_f32(props, "vhsIntensity"),
+        vhs_jitter: optional_f32(props, "vhsJitter"),
+        vhs_noise: optional_f32(props, "vhsNoise"),
+        halftone_intensity: optional_f32(props, "halftoneIntensity"),
+        halftone_scale: optional_f32(props, "halftoneScale"),
+        halftone_angle: optional_f32(props, "halftoneAngle"),
+        dither_intensity: optional_f32(props, "ditherIntensity"),
+        dither_levels: optional_f32(props, "ditherLevels"),
+        outline_intensity: optional_f32(props, "outlineIntensity"),
+        outline_thickness: optional_f32(props, "outlineThickness"),
+        eyelid_openness: optional_f32(props, "eyelidOpenness"),
+        eyelid_width: optional_f32(props, "eyelidWidth"),
+        eyelid_curvature: optional_f32(props, "eyelidCurvature"),
+        eyelid_softness: optional_f32(props, "eyelidSoftness"),
+        eyelid_center_x: optional_f32(props, "eyelidCenterX"),
+        eyelid_center_y: optional_f32(props, "eyelidCenterY"),
     }
 }
 
@@ -1171,7 +1298,7 @@ fn push_camera_reset(
     let defaults = PostProcessEffect::default();
     timed.push(Action::SetPostProcess {
         targets,
-        effect: PostProcessPatch {
+        effect: Box::new(PostProcessPatch {
             focal_distance: Some(None),
             blur_strength: Some(defaults.blur_strength),
             distortion_strength: Some(defaults.distortion_strength),
@@ -1180,6 +1307,11 @@ fn push_camera_reset(
             blur_amount: Some(defaults.blur_amount),
             color_tone: Some(defaults.color_tone),
             color_tone_intensity: Some(defaults.color_tone_intensity),
+            color_exposure: Some(defaults.color_exposure),
+            color_brightness: Some(defaults.color_brightness),
+            color_contrast: Some(defaults.color_contrast),
+            color_saturation: Some(defaults.color_saturation),
+            color_temperature: Some(defaults.color_temperature),
             old_film_intensity: Some(defaults.old_film_intensity),
             shock_intensity: Some(defaults.shock_intensity),
             godray_intensity: Some(defaults.godray_intensity),
@@ -1192,7 +1324,55 @@ fn push_camera_reset(
             godray_center_y: Some(defaults.godray_center_y),
             lut_preset: Some(None),
             lut_intensity: Some(defaults.lut_intensity),
-        },
+            bloom_intensity: Some(defaults.bloom_intensity),
+            chromatic_aberration: Some(defaults.chromatic_aberration),
+            pixelate_size: Some(defaults.pixelate_size),
+            glitch_intensity: Some(defaults.glitch_intensity),
+            crt_intensity: Some(defaults.crt_intensity),
+            sharpen_strength: Some(defaults.sharpen_strength),
+            radial_blur_strength: Some(defaults.radial_blur_strength),
+            radial_blur_center_x: Some(defaults.radial_blur_center_x),
+            radial_blur_center_y: Some(defaults.radial_blur_center_y),
+            motion_blur_strength: Some(defaults.motion_blur_strength),
+            motion_blur_angle: Some(defaults.motion_blur_angle),
+            zoom_blur_strength: Some(defaults.zoom_blur_strength),
+            zoom_blur_center_x: Some(defaults.zoom_blur_center_x),
+            zoom_blur_center_y: Some(defaults.zoom_blur_center_y),
+            light_leak_intensity: Some(defaults.light_leak_intensity),
+            light_leak_angle: Some(defaults.light_leak_angle),
+            lens_flare_intensity: Some(defaults.lens_flare_intensity),
+            lens_flare_center_x: Some(defaults.lens_flare_center_x),
+            lens_flare_center_y: Some(defaults.lens_flare_center_y),
+            film_grain_intensity: Some(defaults.film_grain_intensity),
+            film_grain_size: Some(defaults.film_grain_size),
+            heat_haze_intensity: Some(defaults.heat_haze_intensity),
+            heat_haze_speed: Some(defaults.heat_haze_speed),
+            heat_haze_scale: Some(defaults.heat_haze_scale),
+            water_ripple_intensity: Some(defaults.water_ripple_intensity),
+            water_ripple_frequency: Some(defaults.water_ripple_frequency),
+            water_ripple_speed: Some(defaults.water_ripple_speed),
+            water_ripple_center_x: Some(defaults.water_ripple_center_x),
+            water_ripple_center_y: Some(defaults.water_ripple_center_y),
+            fog_intensity: Some(defaults.fog_intensity),
+            fog_speed: Some(defaults.fog_speed),
+            fog_scale: Some(defaults.fog_scale),
+            vhs_intensity: Some(defaults.vhs_intensity),
+            vhs_jitter: Some(defaults.vhs_jitter),
+            vhs_noise: Some(defaults.vhs_noise),
+            halftone_intensity: Some(defaults.halftone_intensity),
+            halftone_scale: Some(defaults.halftone_scale),
+            halftone_angle: Some(defaults.halftone_angle),
+            dither_intensity: Some(defaults.dither_intensity),
+            dither_levels: Some(defaults.dither_levels),
+            outline_intensity: Some(defaults.outline_intensity),
+            outline_thickness: Some(defaults.outline_thickness),
+            eyelid_openness: Some(defaults.eyelid_openness),
+            eyelid_width: Some(defaults.eyelid_width),
+            eyelid_curvature: Some(defaults.eyelid_curvature),
+            eyelid_softness: Some(defaults.eyelid_softness),
+            eyelid_center_x: Some(defaults.eyelid_center_x),
+            eyelid_center_y: Some(defaults.eyelid_center_y),
+        }),
         duration,
         easing,
         blocking: wait,
@@ -1306,7 +1486,11 @@ fn parse_position(value: &str) -> [f32; 2] {
 }
 
 fn scene_layer_layout(block: &StoryBlock) -> SceneLayerLayout {
-    let fit = match prop_string_or(&block.props, "displayType", "cover").as_str() {
+    scene_layer_layout_from_props(&block.props)
+}
+
+fn scene_layer_layout_from_props(props: &Map<String, Value>) -> SceneLayerLayout {
+    let fit = match prop_string_or(props, "displayType", "cover").as_str() {
         "contain" => SceneFit::Contain,
         "by_width" => SceneFit::ByWidth,
         "by_height" => SceneFit::ByHeight,
@@ -1315,13 +1499,13 @@ fn scene_layer_layout(block: &StoryBlock) -> SceneLayerLayout {
         _ => SceneFit::Cover,
     };
     let position = parse_studio_pair(
-        &prop_string_or(&block.props, "position", "(center,center)"),
+        &prop_string_or(props, "position", "(center,center)"),
         [
             crabgal_core::DESIGN_WIDTH * 0.5,
             crabgal_core::DESIGN_HEIGHT * 0.5,
         ],
     );
-    let anchor = match prop_string_or(&block.props, "anchor", "center").as_str() {
+    let anchor = match prop_string_or(props, "anchor", "center").as_str() {
         "top-left" => [0.0, 0.0],
         "top" | "top-center" => [0.5, 0.0],
         "top-right" => [1.0, 0.0],
@@ -1332,7 +1516,7 @@ fn scene_layer_layout(block: &StoryBlock) -> SceneLayerLayout {
         "bottom-right" => [1.0, 1.0],
         _ => [0.5, 0.5],
     };
-    let raw_size = prop_string(&block.props, "size");
+    let raw_size = prop_string(props, "size");
     let size = (!raw_size.trim().is_empty())
         .then(|| parse_studio_pair(&raw_size, [0.0, 0.0]))
         .filter(|size| size[0] > 0.0 && size[1] > 0.0);
@@ -1474,6 +1658,442 @@ fn compile_animate_sprite(
         },
         span,
     );
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StudioStageClip {
+    duration: f32,
+    tracks: Vec<StudioStageTrack>,
+    events: Vec<Value>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StudioStageTrack {
+    target: StudioStageTarget,
+    property: String,
+    keyframes: Vec<StudioStageKeyframe>,
+    muted: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StudioStageTarget {
+    kind: String,
+    id: String,
+    character_id: String,
+    expression_name: String,
+    asset_path: String,
+    layer_id: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct StudioStageKeyframe {
+    time: f32,
+    value: f32,
+    easing: String,
+}
+
+fn compile_stage_animation(
+    block: &StoryBlock,
+    context: &CompileContext<'_>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) {
+    let Some(raw_clip) = json_value(&block.props, "clipJson") else {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "LetsGal stageAnimation has no valid clipJson".into(),
+        });
+        return;
+    };
+    let Ok(clip) = serde_json::from_value::<StudioStageClip>(raw_clip) else {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "LetsGal stageAnimation clipJson has an invalid 1.8.0 timeline schema".into(),
+        });
+        return;
+    };
+
+    let mut tracks = clip
+        .tracks
+        .into_iter()
+        .filter_map(|track| compile_stage_track(track, context))
+        .collect::<Vec<_>>();
+    for track in &mut tracks {
+        track
+            .keyframes
+            .sort_by(|left, right| left.time.total_cmp(&right.time));
+    }
+    let mut events = clip
+        .events
+        .iter()
+        .filter_map(|event| compile_stage_event(event, context))
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| left.time.total_cmp(&right.time));
+
+    let loop_value = prop_string_or(&block.props, "loop", "0");
+    let infinite = matches!(
+        loop_value.trim().to_ascii_lowercase().as_str(),
+        "infinity" | "infinite" | "forever"
+    );
+    report.push(
+        Action::StageAnimation {
+            animation: StageAnimation {
+                id: prop_string_or(
+                    &block.props,
+                    "name",
+                    block.id.as_deref().unwrap_or("stage-animation"),
+                ),
+                duration: clip.duration.max(0.0) / 1000.0,
+                tracks,
+                events,
+                repeat: if infinite {
+                    0
+                } else {
+                    loop_value.parse::<f32>().unwrap_or_default().max(0.0) as u32
+                },
+                infinite,
+                playback_rate: prop_f32(&block.props, "playbackRate", 1.0).max(f32::EPSILON),
+                blocking: prop_bool(&block.props, "waitForComplete", true),
+            },
+        },
+        span,
+    );
+}
+
+fn compile_stage_track(
+    track: StudioStageTrack,
+    context: &CompileContext<'_>,
+) -> Option<StageTrack> {
+    let target = compile_stage_target(&track.target, context)?;
+    let property = stage_property(&track.property)?;
+    let invert = matches!(property, StageProperty::Y | StageProperty::Rotation)
+        && !matches!(target, StageTarget::Camera);
+    Some(StageTrack {
+        target,
+        property,
+        keyframes: track
+            .keyframes
+            .into_iter()
+            .map(|frame| StageKeyframe {
+                time: frame.time.max(0.0) / 1000.0,
+                value: if invert { -frame.value } else { frame.value },
+                easing: easing(&frame.easing),
+            })
+            .collect(),
+        muted: track.muted,
+    })
+}
+
+fn compile_stage_target(
+    target: &StudioStageTarget,
+    context: &CompileContext<'_>,
+) -> Option<StageTarget> {
+    match target.kind.as_str() {
+        "camera" => Some(StageTarget::Camera),
+        "character" => {
+            let id = first_non_empty([&target.character_id, &target.id]);
+            if id.is_empty() {
+                return None;
+            }
+            let image = if target.asset_path.is_empty() {
+                context.characters.get(id).and_then(|character| {
+                    character
+                        .expressions
+                        .iter()
+                        .find(|expression| expression.name == target.expression_name)
+                        .or_else(|| character.expressions.first())
+                        .map(|expression| expression.asset_path.clone())
+                })
+            } else {
+                Some(target.asset_path.clone())
+            };
+            Some(StageTarget::Character {
+                id: id.to_owned(),
+                image,
+            })
+        }
+        "sceneLayer" | "scene-layer" => {
+            let id = first_non_empty([&target.layer_id, &target.id]);
+            (!id.is_empty()).then(|| StageTarget::SceneLayer {
+                id: format!("scene-layer:{id}"),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn first_non_empty<const N: usize>(values: [&String; N]) -> &str {
+    values
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .map_or("", String::as_str)
+}
+
+fn stage_property(value: &str) -> Option<StageProperty> {
+    use StageProperty as P;
+    Some(match value {
+        "x" | "offsetX" => P::X,
+        "y" | "offsetY" => P::Y,
+        "zoom" => P::Zoom,
+        "scaleX" => P::ScaleX,
+        "scaleY" => P::ScaleY,
+        "alpha" => P::Alpha,
+        "rotation" => P::Rotation,
+        "width" => P::Width,
+        "height" => P::Height,
+        "focalDistance" => P::FocalDistance,
+        "blurStrength" => P::BlurStrength,
+        "distortionStrength" => P::DistortionStrength,
+        "vignetteIntensity" => P::VignetteIntensity,
+        "vignetteSize" => P::VignetteSize,
+        "blurAmount" => P::BlurAmount,
+        "colorToneIntensity" => P::ColorToneIntensity,
+        "colorExposure" => P::ColorExposure,
+        "colorBrightness" => P::ColorBrightness,
+        "colorContrast" => P::ColorContrast,
+        "colorSaturation" => P::ColorSaturation,
+        "colorTemperature" => P::ColorTemperature,
+        "oldFilmIntensity" => P::OldFilmIntensity,
+        "shockIntensity" => P::ShockIntensity,
+        "godrayIntensity" => P::GodrayIntensity,
+        "godrayAngle" => P::GodrayAngle,
+        "godrayGain" => P::GodrayGain,
+        "godrayLacunarity" => P::GodrayLacunarity,
+        "godraySpeed" => P::GodraySpeed,
+        "godrayCenterX" => P::GodrayCenterX,
+        "godrayCenterY" => P::GodrayCenterY,
+        "lutIntensity" => P::LutIntensity,
+        "bloomIntensity" => P::BloomIntensity,
+        "chromaticAberration" => P::ChromaticAberration,
+        "pixelateSize" => P::PixelateSize,
+        "glitchIntensity" => P::GlitchIntensity,
+        "crtIntensity" => P::CrtIntensity,
+        "sharpenStrength" => P::SharpenStrength,
+        "radialBlurStrength" => P::RadialBlurStrength,
+        "radialBlurCenterX" => P::RadialBlurCenterX,
+        "radialBlurCenterY" => P::RadialBlurCenterY,
+        "motionBlurStrength" => P::MotionBlurStrength,
+        "motionBlurAngle" => P::MotionBlurAngle,
+        "zoomBlurStrength" => P::ZoomBlurStrength,
+        "zoomBlurCenterX" => P::ZoomBlurCenterX,
+        "zoomBlurCenterY" => P::ZoomBlurCenterY,
+        "lightLeakIntensity" => P::LightLeakIntensity,
+        "lightLeakAngle" => P::LightLeakAngle,
+        "lensFlareIntensity" => P::LensFlareIntensity,
+        "lensFlareCenterX" => P::LensFlareCenterX,
+        "lensFlareCenterY" => P::LensFlareCenterY,
+        "filmGrainIntensity" => P::FilmGrainIntensity,
+        "filmGrainSize" => P::FilmGrainSize,
+        "heatHazeIntensity" => P::HeatHazeIntensity,
+        "heatHazeSpeed" => P::HeatHazeSpeed,
+        "heatHazeScale" => P::HeatHazeScale,
+        "waterRippleIntensity" => P::WaterRippleIntensity,
+        "waterRippleFrequency" => P::WaterRippleFrequency,
+        "waterRippleSpeed" => P::WaterRippleSpeed,
+        "waterRippleCenterX" => P::WaterRippleCenterX,
+        "waterRippleCenterY" => P::WaterRippleCenterY,
+        "fogIntensity" => P::FogIntensity,
+        "fogSpeed" => P::FogSpeed,
+        "fogScale" => P::FogScale,
+        "vhsIntensity" => P::VhsIntensity,
+        "vhsJitter" => P::VhsJitter,
+        "vhsNoise" => P::VhsNoise,
+        "halftoneIntensity" => P::HalftoneIntensity,
+        "halftoneScale" => P::HalftoneScale,
+        "halftoneAngle" => P::HalftoneAngle,
+        "ditherIntensity" => P::DitherIntensity,
+        "ditherLevels" => P::DitherLevels,
+        "outlineIntensity" => P::OutlineIntensity,
+        "outlineThickness" => P::OutlineThickness,
+        "eyelidOpenness" => P::EyelidOpenness,
+        "eyelidWidth" => P::EyelidWidth,
+        "eyelidCurvature" => P::EyelidCurvature,
+        "eyelidSoftness" => P::EyelidSoftness,
+        "eyelidCenterX" => P::EyelidCenterX,
+        "eyelidCenterY" => P::EyelidCenterY,
+        _ => return None,
+    })
+}
+
+fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<StageEvent> {
+    let object = event.as_object()?;
+    let payload = object
+        .get("data")
+        .and_then(Value::as_object)
+        .or_else(|| object.get("payload").and_then(Value::as_object))
+        .unwrap_or(object);
+    let event_type = object
+        .get("type")
+        .or_else(|| object.get("kind"))
+        .and_then(Value::as_str)?;
+    let time = value_f32(object.get("time").or_else(|| payload.get("time")), 0.0).max(0.0) / 1000.0;
+    let kind = match event_type {
+        "cameraShake" => StageEventKind::CameraShake(CameraShakeSpec {
+            amplitude: value_f32(payload.get("amplitude"), 8.0),
+            frequency: value_f32(payload.get("frequency"), 18.0),
+            duration: value_f32(payload.get("duration"), 300.0).max(0.0) / 1000.0,
+            axis: match value_str(payload.get("axis")) {
+                "x" => CameraShakeAxis::X,
+                "y" => CameraShakeAxis::Y,
+                _ => CameraShakeAxis::Both,
+            },
+            falloff: if value_str(payload.get("falloff")) == "expo" {
+                CameraShakeFalloff::Exponential
+            } else {
+                CameraShakeFalloff::Linear
+            },
+        }),
+        "cameraPatch" => {
+            let patch = payload
+                .get("patch")
+                .and_then(Value::as_object)
+                .unwrap_or(payload);
+            let mut effect = post_process_patch_from_props(patch);
+            if patch.contains_key("lutPreset") && prop_string(patch, "lutPreset").is_empty() {
+                effect.lut_preset = Some(None);
+            }
+            StageEventKind::CameraPatch {
+                targets: payload.get("targets").and_then(stage_camera_targets),
+                effect: Box::new(effect),
+            }
+        }
+        "particleCue" => {
+            let options: StudioParticleOverrides = payload
+                .get("options")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .or_else(|| {
+                    payload
+                        .get("optionsJson")
+                        .and_then(Value::as_str)
+                        .and_then(|value| serde_json::from_str(value).ok())
+                })
+                .unwrap_or_default();
+            StageEventKind::Particle {
+                id: non_empty_value(payload, &["id", "effectId"])
+                    .unwrap_or("particle")
+                    .into(),
+                effect: crabgal_core::ParticleEffect {
+                    texture: non_empty_value(payload, &["texture", "textureUri"])
+                        .map(str::to_owned),
+                    preset: non_empty_value(payload, &["preset"])
+                        .unwrap_or("LIGHT_SNOW")
+                        .into(),
+                    count: options.count.unwrap_or(0).min(u16::MAX as u32) as u16,
+                    wind: options.wind,
+                    gravity: options.gravity,
+                    fade_in: value_f32(payload.get("fadeInDuration"), 0.0).max(0.0) / 1000.0,
+                },
+                duration: value_f32(payload.get("duration"), 0.0).max(0.0) / 1000.0,
+                fade_out: value_f32(payload.get("fadeOutDuration"), 0.0).max(0.0) / 1000.0,
+            }
+        }
+        "sceneCue" => StageEventKind::Scene(compile_stage_scene_cue(payload, context)?),
+        _ => return None,
+    };
+    Some(StageEvent { time, kind })
+}
+
+fn compile_stage_scene_cue(
+    payload: &Map<String, Value>,
+    context: &CompileContext<'_>,
+) -> Option<StageSceneCue> {
+    let scene_id = non_empty_value(payload, &["sceneId", "id"])
+        .unwrap_or_default()
+        .to_owned();
+    let layers: Vec<StageSceneLayer> =
+        if let Some(layers) = payload.get("layers").and_then(Value::as_array) {
+            layers.iter().filter_map(stage_scene_layer).collect()
+        } else {
+            context
+                .scenes
+                .get(scene_id.as_str())
+                .map(|scene| {
+                    scene
+                        .layers
+                        .iter()
+                        .filter(|layer| !layer.asset_path.is_empty())
+                        .map(|layer| StageSceneLayer {
+                            id: layer.id.clone(),
+                            image: layer.asset_path.clone(),
+                            distance: layer.distance,
+                            offset: parse_position(&layer.offset),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+    if scene_id.is_empty() && layers.is_empty() {
+        return None;
+    }
+    Some(StageSceneCue {
+        scene_id,
+        transition: scene_transition_from_props(payload),
+        reset_camera: value_bool(payload.get("resetCamera"), false),
+        layout: scene_layer_layout_from_props(payload),
+        layers,
+    })
+}
+
+fn stage_scene_layer(value: &Value) -> Option<StageSceneLayer> {
+    let layer = value.as_object()?;
+    let id = non_empty_value(layer, &["id", "layerId"])?;
+    let image = non_empty_value(layer, &["assetPath", "uri", "image"])?;
+    Some(StageSceneLayer {
+        id: id.to_owned(),
+        image: image.to_owned(),
+        distance: value_f32(layer.get("distance"), 1.0),
+        offset: layer
+            .get("offset")
+            .and_then(Value::as_str)
+            .map(parse_position)
+            .unwrap_or([0.0, 0.0]),
+    })
+}
+
+fn stage_camera_targets(value: &Value) -> Option<CameraTargets> {
+    let mut scene = false;
+    let mut characters = false;
+    let mut visit = |target: &str| match target.trim() {
+        "scene" => scene = true,
+        "characters" | "character" => characters = true,
+        _ => {}
+    };
+    match value {
+        Value::String(value) => value.split(',').for_each(&mut visit),
+        Value::Array(values) => values.iter().filter_map(Value::as_str).for_each(&mut visit),
+        _ => return None,
+    }
+    Some(CameraTargets::new(scene, characters))
+}
+
+fn non_empty_value<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find(|value| !value.is_empty())
+}
+
+fn value_str(value: Option<&Value>) -> &str {
+    value.and_then(Value::as_str).unwrap_or_default()
+}
+
+fn value_bool(value: Option<&Value>, fallback: bool) -> bool {
+    value.and_then(Value::as_bool).unwrap_or(fallback)
+}
+
+fn value_f32(value: Option<&Value>, fallback: f32) -> f32 {
+    value
+        .and_then(|value| match value {
+            Value::Number(value) => value.as_f64(),
+            Value::String(value) => value.parse().ok(),
+            _ => None,
+        })
+        .map_or(fallback, |value| value as f32)
 }
 
 fn sprite_transform_patch(props: &Map<String, Value>) -> TransformPatch {
@@ -1619,15 +2239,19 @@ fn character_id(block: &StoryBlock) -> String {
 }
 
 fn scene_transition(block: &StoryBlock) -> Transition {
-    let seconds = prop_f32(&block.props, "transitionDuration", 0.0).max(0.0) / 1000.0;
+    scene_transition_from_props(&block.props)
+}
+
+fn scene_transition_from_props(props: &Map<String, Value>) -> Transition {
+    let seconds = prop_f32(props, "transitionDuration", 0.0).max(0.0) / 1000.0;
     if seconds <= f32::EPSILON {
         return Transition::Instant;
     }
-    match prop_string(&block.props, "transitionMode").as_str() {
+    match prop_string(props, "transitionMode").as_str() {
         "cut" => Transition::Instant,
         "wipe" | "blinds" | "checkerboard" | "radial-wipe" | "barn-door" | "diagonal-wipe"
         | "iris" => Transition::Wipe(seconds),
-        "slide" => match prop_string(&block.props, "transitionDirection").as_str() {
+        "slide" => match prop_string(props, "transitionDirection").as_str() {
             "right" | "right-to-left" => Transition::SlideFromRight(seconds),
             _ => Transition::SlideFromLeft(seconds),
         },
@@ -1951,12 +2575,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_170_registry_is_exhaustively_matched() {
-        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 33);
+    fn studio_180_registry_is_exhaustively_matched() {
+        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 34);
         for required in [
             "playerInput",
             "enterAutoPlay",
             "callExtensionFunction",
+            "stageAnimation",
             "video",
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
@@ -1964,7 +2589,7 @@ mod tests {
     }
 
     #[test]
-    fn every_studio_170_block_compiles_to_runtime_ir() {
+    fn every_studio_180_block_compiles_to_runtime_ir() {
         let character: CharacterDefinition = serde_json::from_value(json!({
             "id": "character",
             "name": "Character",
@@ -1997,6 +2622,12 @@ mod tests {
             props.insert("key".into(), json!("value"));
             props.insert("aLit".into(), json!("1"));
             props.insert("thenFragmentId".into(), json!("entry"));
+            if *kind == "stageAnimation" {
+                props.insert(
+                    "clipJson".into(),
+                    json!({"version":1,"duration":1000,"tracks":[],"events":[]}),
+                );
+            }
             let block = StoryBlock {
                 id: None,
                 kind: (*kind).into(),
@@ -2036,6 +2667,196 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn studio_180_stage_animation_covers_every_declared_property() {
+        let names = [
+            "x",
+            "y",
+            "zoom",
+            "scaleX",
+            "scaleY",
+            "alpha",
+            "rotation",
+            "width",
+            "height",
+            "focalDistance",
+            "blurStrength",
+            "distortionStrength",
+            "vignetteIntensity",
+            "vignetteSize",
+            "blurAmount",
+            "colorToneIntensity",
+            "colorExposure",
+            "colorBrightness",
+            "colorContrast",
+            "colorSaturation",
+            "colorTemperature",
+            "oldFilmIntensity",
+            "shockIntensity",
+            "godrayIntensity",
+            "godrayAngle",
+            "godrayGain",
+            "godrayLacunarity",
+            "godraySpeed",
+            "godrayCenterX",
+            "godrayCenterY",
+            "lutIntensity",
+            "bloomIntensity",
+            "chromaticAberration",
+            "pixelateSize",
+            "glitchIntensity",
+            "crtIntensity",
+            "sharpenStrength",
+            "radialBlurStrength",
+            "radialBlurCenterX",
+            "radialBlurCenterY",
+            "motionBlurStrength",
+            "motionBlurAngle",
+            "zoomBlurStrength",
+            "zoomBlurCenterX",
+            "zoomBlurCenterY",
+            "lightLeakIntensity",
+            "lightLeakAngle",
+            "lensFlareIntensity",
+            "lensFlareCenterX",
+            "lensFlareCenterY",
+            "filmGrainIntensity",
+            "filmGrainSize",
+            "heatHazeIntensity",
+            "heatHazeSpeed",
+            "heatHazeScale",
+            "waterRippleIntensity",
+            "waterRippleFrequency",
+            "waterRippleSpeed",
+            "waterRippleCenterX",
+            "waterRippleCenterY",
+            "fogIntensity",
+            "fogSpeed",
+            "fogScale",
+            "vhsIntensity",
+            "vhsJitter",
+            "vhsNoise",
+            "halftoneIntensity",
+            "halftoneScale",
+            "halftoneAngle",
+            "ditherIntensity",
+            "ditherLevels",
+            "outlineIntensity",
+            "outlineThickness",
+            "eyelidOpenness",
+            "eyelidWidth",
+            "eyelidCurvature",
+            "eyelidSoftness",
+            "eyelidCenterX",
+            "eyelidCenterY",
+        ];
+        let properties = names
+            .iter()
+            .map(|name| stage_property(name).unwrap_or_else(|| panic!("missing {name}")))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(names.len(), 79);
+        assert_eq!(properties.len(), names.len());
+    }
+
+    #[test]
+    fn studio_180_stage_animation_compiles_targets_events_and_playback_contract() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id": "hero",
+            "name": "Hero",
+            "expressions": [{"name":"smile","assetPath":"characters/smile.png"}]
+        }))
+        .unwrap();
+        let characters = HashMap::from([("hero", &character)]);
+        let chapter_next = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+        };
+        let block = StoryBlock {
+            id: Some("timeline-block".into()),
+            kind: "stageAnimation".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("name".into(), json!("chapter-intro")),
+                ("loop".into(), json!("2")),
+                ("playbackRate".into(), json!("1.5")),
+                ("waitForComplete".into(), json!(false)),
+                (
+                    "clipJson".into(),
+                    json!({
+                        "version": 1,
+                        "duration": 2000,
+                        "tracks": [
+                            {"target":{"kind":"camera"},"property":"bloomIntensity","keyframes":[{"time":1000,"value":0.8,"easing":"easeIn"}]},
+                            {"target":{"kind":"character","characterId":"hero","expressionName":"smile"},"property":"y","keyframes":[{"time":500,"value":120,"easing":"easeOut"}]},
+                            {"target":{"kind":"sceneLayer","layerId":"fog"},"property":"alpha","muted":true,"keyframes":[{"time":0,"value":0.5,"easing":"linear"}]}
+                        ],
+                        "events": [
+                            {"type":"cameraShake","time":100,"data":{"amplitude":7,"frequency":15,"duration":250,"axis":"x","falloff":"expo"}},
+                            {"type":"cameraPatch","time":200,"data":{"targets":["scene"],"patch":{"fogIntensity":0.4}}},
+                            {"type":"particleCue","time":300,"data":{"id":"snow","preset":"LIGHT_SNOW","duration":600,"fadeOutDuration":100,"options":{"count":24,"wind":2,"gravity":3}}},
+                            {"type":"sceneCue","time":400,"data":{"sceneId":"winter","resetCamera":true,"layers":[{"id":"fog","assetPath":"background/fog.png","distance":2,"offset":"(12,24)"}]}}
+                        ]
+                    }),
+                ),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        compile_stage_animation(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+
+        let [Action::StageAnimation { animation }] = report.actions.as_slice() else {
+            panic!("expected native stage timeline: {:?}", report.actions);
+        };
+        assert_eq!(animation.id, "chapter-intro");
+        assert_eq!(animation.duration, 2.0);
+        assert_eq!(animation.repeat, 2);
+        assert_eq!(animation.playback_rate, 1.5);
+        assert!(!animation.infinite);
+        assert!(!animation.blocking);
+        assert_eq!(animation.tracks.len(), 3);
+        assert!(matches!(animation.tracks[0].target, StageTarget::Camera));
+        assert!(matches!(
+            &animation.tracks[1].target,
+            StageTarget::Character { id, image: Some(image) }
+                if id == "hero" && image == "characters/smile.png"
+        ));
+        assert_eq!(animation.tracks[1].keyframes[0].value, -120.0);
+        assert!(matches!(
+            &animation.tracks[2].target,
+            StageTarget::SceneLayer { id } if id == "scene-layer:fog"
+        ));
+        assert!(animation.tracks[2].muted);
+        assert_eq!(animation.events.len(), 4);
+        assert!(matches!(
+            animation.events[0].kind,
+            StageEventKind::CameraShake(_)
+        ));
+        assert!(matches!(
+            animation.events[1].kind,
+            StageEventKind::CameraPatch { .. }
+        ));
+        assert!(matches!(
+            animation.events[2].kind,
+            StageEventKind::Particle { .. }
+        ));
+        assert!(matches!(animation.events[3].kind, StageEventKind::Scene(_)));
     }
 
     fn contains_host_command(action: &Action) -> bool {
@@ -2729,7 +3550,7 @@ mod tests {
                 },
                 _ => None,
             })
-            .expect("camera should retain 1.6.3 Godray properties");
+            .expect("camera should retain LetsGal Godray properties");
         assert_eq!(effect.godray_intensity, Some(0.45));
         assert_eq!(effect.godray_angle, Some(30.0));
         assert_eq!(effect.godray_gain, Some(0.5));

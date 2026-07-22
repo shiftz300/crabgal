@@ -1,102 +1,84 @@
-# LetsGal Studio 1.7.0 同步调试
+# LetsGal Studio 1.8.0 原生同步
 
-crabgal 直接读取 LetsGal Studio 工程，不修改 ASAR。语义同步依赖 Studio 1.7.0 的
-`@avg-studio/sdk` 1.0.0 和工程开放 JSON；编辑器侧只保留一个隔离的状态按钮挂载点，用来
-启动本机 crabgal、看日志和手动同步，不接管 Studio 原版运行逻辑。
+crabgal 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行宿主。Studio 与 crabgal 是两个
+独立进程；同步只通过工程目录中的开放 JSON 完成，不安装扩展、不注入 DOM、不修改 ASAR，
+也不启动本机 HTTP/TCP 服务。
+
+> **术语说明：** 下文的“调试位置”是 Studio 当前选中的 fragment 与剧情 block，不是鼠标
+> 光标。Studio 在 `.studio/state.json` 中将 block 序号命名为 `cursorBlockIndex`，因此内部接口
+> 仍保留 `cursor` 字样。工程配置中的 `cursor` 才是鼠标指针外观；crabgal 不实现个性化指针，
+> 始终使用操作系统默认鼠标指针。
 
 ```text
-Studio project JSON
-  ├─ project.json / chapters / assets     -> LetsGalProjectAdapter -> Program
-  └─ .studio/state.json                   -> scene + block cursor  -> deterministic replay
-
-Studio SDK extension
-  ├─ onRegister / settings
-  ├─ fragment:entered
-  ├─ CRABGAL status popup
-  │    ├─ Run / sync crabgal
-  │    └─ status + log tail
-  └─ HTTP heartbeat + restart             -> 127.0.0.1:39698 -> crabgal runtime
+LetsGal Studio 1.8
+  ├─ project.json
+  ├─ chapters/*.json
+  ├─ characters.json / scenes.json / project.variables.json
+  ├─ assets/.manifest.json + assets/**
+  └─ .studio/state.json
+              │ notify recursive watch + 200 ms debug-position fallback poll
+              v
+LetsGalProjectAdapter -> typed Program + config + initial variables + selected-block position
+              │
+              v
+crabgal studio session -> deterministic replay -> native 1920x1080 preview
 ```
 
-## 最短使用流程
-
-首次安装或扩展代码更新后：
+## 唯一启动方式
 
 ```bash
-LETSGAL_PROJECT='/Users/shiftz/dev/letsgal/LetsGal 恋爱游戏进行时 序章-4ba693'
-test -f "$LETSGAL_PROJECT/project.json"
-cargo studio-sync "$LETSGAL_PROJECT"
+cd /Users/shiftz/dev/crabgal
+cargo studio-sync '/absolute/path/to/LetsGal project'
 ```
 
-重启 Studio并打开同一工程，单击实时预览工具栏的 `CRABGAL`，再单击“运行 CRABGAL”。
-扩展使用安装时确认的引擎和工程路径启动独立窗口；已经运行时，同一按钮改为同步当前步进。
-若 Studio 更新导致状态入口暂时无法挂载，仍可用
-`cargo studio-dev "$LETSGAL_PROJECT"` 作为无注入回退。变量必须指向实际含有
-`project.json` 的工程目录，文档中的示例占位路径不能原样执行。
+`studio-sync` 与 `studio-dev` 都展开为 `crabgal studio <project>`。它们不会安装任何东西；换一台
+机器只需 crabgal 源码/二进制和 LetsGal 工程目录。普通 `cargo dev`、发行二进制与
+`build_app_with_loader` 不会进入 Studio 同步模式。
 
-之后在 Studio 选择 fragment 或 block 即可。Studio 将光标原子保存到
-`.studio/state.json`，loader watcher 读取 `activeFragmentId` 和零基
-`cursorBlockIndex`，runtime 从项目入口确定性重放到该 block。源文件有变化时才重编译；
-只有光标变化时不会重新扫描全部资源。
+## 同步合同
 
-扩展每秒向 `127.0.0.1:39698/v1/heartbeat` 发送一次心跳。进入 fragment 或单击状态弹窗
-的“同步当前步进”时，扩展调用 `/v1/restart`；runtime 会从最新保存光标强制重建一次。
-绿点表示本机 runtime 已连接。状态入口可在扩展设置中隐藏；端口也可修改，并用
-`--bridge-port` 覆盖 runtime 端：
+| Studio 数据 | crabgal 结果 | 更新方式 |
+|---|---|---|
+| project、chapter、character、scene | 中性 config、Program、Action | 保存后完整临时编译，成功才替换 |
+| asset manifest | hash/逻辑路径别名和资源类型 | 保存后重建 config |
+| assets 文件 | Bevy asset handle | FS watcher 原位热重载 |
+| project variables | slot/shared 默认值 | 每次确定性重放重新注入 |
+| character attributes | `<character-id>.<attribute>` 默认值 | 每次确定性重放重新注入 |
+| `.studio/state.json` | fragment UUID + 一基 source step | 选择 block 后立即重放 |
 
-```bash
-cargo run -- studio "$LETSGAL_PROJECT" --bridge-port 41000
-```
+Studio 的 block index 是零基；loader 转成一基 `SourceSpan.line`。一个 block 可编译成多个 Action，
+runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把复合 block 截断一半。
 
-扩展停用或 Studio 关闭后，心跳消失，调试窗口在 10 秒内自行退出。
+## 生命周期
 
-## 当前稳定范围
+1. `studio` 打开工程并一次编译全部有效 fragment；
+2. 从 `.studio/state.json` 读取当前 fragment/block；
+3. 从 crabgal 项目入口确定性重放到目标，恢复其此前背景、角色、变量、音频和镜头状态；
+4. watcher 常驻工程根目录；只改调试位置时不重编译，内容保存时先重编译再重新定位；
+5. 每 200 ms 校验一次小型调试位置 JSON，去重后只在 fragment/block 真正改变时重放，
+   用于兜底系统文件通知合并或丢失；
+6. Studio 原子写 JSON 期间若读到临时不完整内容，runtime 最多跨 8 帧重试，不阻塞渲染线程；
+7. 关闭 crabgal 窗口即结束同步，不依赖 Studio 心跳，也不会因 Studio 失焦而退出。
 
-- 完整读取 LetsGal 工程并编译成中性 `Program`；
-- Studio block 选择到 crabgal 画面的单向精确同步；
-- Studio 片段运行生命周期到 crabgal restart 的公开 SDK 同步；
-- CRABGAL 状态弹窗内的一键启动、手动同步和日志查看；
-- 项目文件、资源和脚本热重载；
-- 独立原生窗口，不捕获 Studio 或其他应用的鼠标焦点；
-- 扩展只向预览工具栏追加自己的 Shadow DOM 状态入口，不读取或修改原版按钮；
-- 启动本机进程只发生在用户单击“运行 CRABGAL”后；
-- 扩展不访问 `ctx.getHost()`、Electron IPC、renderer store 或私有 Player 对象；当前只用
-  renderer 已暴露的 Node `require` 完成用户触发的进程启动与日志读取，并在能力不存在时降级。
+同步会话把 Studio 作为唯一调试控制面。crabgal 仍更新动画、视频和打字机，但忽略自身的剧情
+推进/自动/快进输入，避免两个进程各走一步后状态分叉。选择另一个 Studio block 会从干净的
+项目默认变量重新重放，不继承前一次预览产生的临时变量。
+同步会话不写快速存档、profile、已读历史或图鉴；SAVE/LOAD/CONFIG 可打开检查布局，
+但会改动持久数据的按钮在该会话中不执行。
 
-## 为什么当前不需要请求新 SDK
+## 完整性与边界
 
-当前目标只要求单向同步调试和步进：
+- 1.8.0 当前 34 种内置 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
+  共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake 事件；
+- 1.8.0 新增的相机时间轴属性全部进入 core `PostProcessEffect` 并由 GPU 材质直接采样，adapter
+  不保留 Studio 私有运行对象；
+- 第三方游戏扩展 block 只能保留为通用 host capability，不能伪装为已原生实现；
+- adapter 只读源工程；不启动 watcher、窗口或进程，实际生命周期归 loader/runtime；
+- core、渲染器和 UI 不导入 LetsGal model；卸下 adapter 后引擎仍独立运行；
+- Studio 原版“运行”按钮与 Player 不受 crabgal 控制，两者不能同时作为同一调试会话的状态源；
+- 本方案明确不支持 Studio 扩展、内嵌预览或反向操控 Studio UI。
+- 个性化鼠标指针不属于剧情同步合同；项目的 `cursor` 外观配置被忽略并安全回退为系统指针。
 
-- `.studio/state.json` 已提供 scene/block 光标；
-- 状态弹窗提供独立运行入口；
-- loopback bridge 提供 heartbeat/restart；
-- loader watcher 提供工程与资源热重载。
-
-因此不再维护 editor cursor、preview backend、暂停原版 Player 或反向 block 选择的 SDK
-提案。两个运行入口明确分离：Studio 原按钮运行原版预览，CRABGAL 弹窗运行独立原生窗口。
-未来若 Studio 提供正式 toolbar/process contribution，只需替换按钮挂载和进程启动两处，
-loader、协议与 runtime 均不需要改变。
-
-## 模块边界
-
-- `crabgal-core`：中性 Action、State、确定性 replay，不认识 LetsGal；
-- `crabgal-loader/adapter/editor/letsgal`：工程 JSON、资源引用、block 编译和 debug cursor；
-- `letsgal/studio`：SDK 扩展资源与显式安装/卸载，不参与普通工程加载；
-- `runtime/editor_bridge`：只处理通用 heartbeat/restart/cursor 小协议，不解析 LetsGal JSON；
-- Bevy runtime：渲染、输入、音频、热重载，不依赖 Studio SDK。
-
-这保证删除整个 LetsGal adapter 和扩展后，crabgal 仍能独立加载其他项目格式并运行。
-
-## 本机协议
-
-协议只监听 loopback，不传图片或资源：
-
-| 请求 | 作用 |
-|---|---|
-| `GET /v1/status` | 探测 runtime 是否存在 |
-| `POST /v1/heartbeat` | 续期 Studio 调试会话 |
-| `POST /v1/restart` | 从当前磁盘光标重建 |
-| `POST /v1/restart` + `{scene, blockIndex}` | 从显式中性光标重建 |
-
-HTTP 只是 SDK bundle 可直接使用的本机传输层；内部仍映射到原有 `Restart(Option<Cursor>)`
-消息，不把 Web 或 LetsGal 类型带进 core。
+Windows、macOS 与 Linux 使用同一个 `notify::RecommendedWatcher` 合同；差异只在系统文件通知
+后端。逻辑资源路径统一为 `/`，Windows 路径分隔符不会进入 Program 或 Bevy asset key。

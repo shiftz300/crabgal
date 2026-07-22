@@ -1,0 +1,22 @@
+{
+  "globalSettings": {
+    "positions": [
+      { "id": "left", "left": 25, "top": 0 },
+      { "id": "center", "left": 50, "top": 0 },
+      { "id": "right", "left": 75, "top": 0 }
+    ],
+    "defaultPositionId": "center"
+  },
+  "characters": [
+    {
+      "id": "aya",
+      "name": "绫",
+      "defaultPosition": "center",
+      "expressions": [
+        { "name": "smile", "assetPath": "characters/aya_smile.webp" },
+        { "name": "thinking", "assetPath": "characters/aya_thinking.webp" }
+      ],
+      "attributeValues": {}
+    }
+  ]
+}
