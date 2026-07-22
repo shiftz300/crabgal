@@ -98,9 +98,6 @@ fn add_startup_systems(app: &mut App) {
             control_bar::load_quick_save_preview,
             textbox::setup_textbox,
             loading::setup_loading,
-            performance::setup_performance_overlay,
-            overlays::presentation::setup,
-            overlays::user_input::setup,
         )
             .chain(),
     );
@@ -136,9 +133,14 @@ fn add_stage_systems(app: &mut App) {
             control_bar::sync_toggle_highlights,
             control_bar::update_lock_icon,
             loading::update_loading,
-            overlays::presentation::sync,
-            overlays::presentation::animate_advance_hint,
             (
+                overlays::presentation::ensure_spawned,
+                overlays::presentation::sync,
+                overlays::presentation::animate_advance_hint,
+            )
+                .chain(),
+            (
+                overlays::user_input::ensure_spawned,
                 overlays::user_input::handle
                     .run_if(loading::assets_ready)
                     .run_if(input_scope::user_input_allowed),

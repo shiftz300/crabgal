@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crabgal_core::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot};
+use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
 
 const VERSION: u32 = 1;
 const WRITE_DELAY_SECONDS: f32 = 0.5;
@@ -56,8 +56,9 @@ pub(crate) fn persist(
     project_root: Res<ProjectRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() {
+    if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
     if writer.saved == state.global_vars {
@@ -77,8 +78,9 @@ pub(crate) fn flush_on_exit(
     project_root: Res<ProjectRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() {
+    if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
     if exits.read().next().is_some() && writer.saved != state.global_vars {

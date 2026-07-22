@@ -5,7 +5,7 @@ use std::path::Path;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot};
+use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
 
 const VERSION: u32 = 2;
 
@@ -40,8 +40,9 @@ pub(crate) fn persist(
     project_root: Res<ProjectRoot>,
     mut previous: ResMut<GallerySnapshot>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() {
+    if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
     if !state.is_changed()

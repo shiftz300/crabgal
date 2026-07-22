@@ -16,10 +16,10 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
-use crate::runtime::resources::{AssetLoadingGate, GameState};
+use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
-use crate::ui::control_bar::{AutoHideTiming, ToggleStates};
+use crate::ui::control_bar::{AutoHideTiming, QuickPreviewSurface, ToggleStates};
 use crate::ui::textbox::{ContentRoot, QuickPreviewLayer};
 use crate::ui::user_input::UserInputCaretBlink;
 
@@ -90,6 +90,46 @@ pub(crate) enum RuntimeActivity {
     Background,
 }
 
+type DialogTargetRoots<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static UiTargetCamera,
+        &'static Node,
+        &'static InheritedVisibility,
+    ),
+    (With<Node>, Without<QuickPreviewLayer>),
+>;
+
+/// Stop submitting the third UI camera while its layer is empty.
+///
+/// The normal textbox belongs to the UI camera. The dialog camera is reserved
+/// for title/menu/modal/preview overlays, so keeping it alive throughout every
+/// line of dialogue wastes a complete camera extraction and render pass.
+pub(crate) fn sync_dialog_camera_activity(
+    benchmark: Option<Res<crate::ui::performance::RuntimeCaptureConfig>>,
+    mut camera: Query<(Entity, &mut Camera), With<DialogCamera>>,
+    roots: DialogTargetRoots,
+    previews: Query<&Node, With<QuickPreviewSurface>>,
+) {
+    if benchmark.is_some() {
+        return;
+    }
+    let Ok((camera_entity, mut camera)) = camera.single_mut() else {
+        return;
+    };
+    // Use hierarchy visibility rather than ViewVisibility: the latter depends
+    // on an active view and would make a sleeping camera unable to wake itself.
+    let visible_root = roots.iter().any(|(target, node, visibility)| {
+        target.0 == camera_entity && node.display != Display::None && visibility.get()
+    });
+    let visible_preview = previews.iter().any(|node| node.display != Display::None);
+    let needed = visible_root || visible_preview;
+    if camera.is_active != needed {
+        camera.is_active = needed;
+    }
+}
+
 #[derive(SystemParam)]
 pub(crate) struct LifecycleContext<'w, 's> {
     state: Res<'w, GameState>,
@@ -101,6 +141,8 @@ pub(crate) struct LifecycleContext<'w, 's> {
     input_caret: Res<'w, UserInputCaretBlink>,
     real_time: Res<'w, Time<Real>>,
     windows: Query<'w, 's, &'static Window>,
+    benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
+    editor_sync: Option<Res<'w, EditorSyncSession>>,
 }
 
 pub(crate) fn update_lifecycle(
@@ -110,7 +152,8 @@ pub(crate) fn update_lifecycle(
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     let focused = context.windows.single().is_ok_and(|window| window.focused);
-    let pause_for_background = should_pause_for_background(focused, cfg!(debug_assertions));
+    let editor_sync = context.editor_sync.is_some();
+    let pause_for_background = should_pause_for_background(focused, editor_sync);
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
@@ -119,7 +162,11 @@ pub(crate) fn update_lifecycle(
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
-    let next = if pause_for_background {
+    let next = if context.benchmark.is_some() {
+        // A benchmark must keep measuring the render loop even when the
+        // current visual-novel frame itself is static.
+        RuntimeActivity::Active
+    } else if pause_for_background {
         RuntimeActivity::Background
     } else if context.loading.blocked {
         RuntimeActivity::Loading
@@ -135,19 +182,30 @@ pub(crate) fn update_lifecycle(
         RuntimeActivity::Idle
     };
 
-    let focused_mode = match next {
-        RuntimeActivity::Active | RuntimeActivity::Loading => UpdateMode::Continuous,
-        RuntimeActivity::Idle | RuntimeActivity::Background => {
+    let benchmark_mode = context
+        .benchmark
+        .is_some()
+        .then(|| UpdateMode::reactive_low_power(std::time::Duration::from_secs_f64(1.0 / 60.0)));
+    let focused_mode = match (benchmark_mode, next) {
+        (Some(mode), _) => mode,
+        (None, RuntimeActivity::Active | RuntimeActivity::Loading) => UpdateMode::Continuous,
+        (None, RuntimeActivity::Idle | RuntimeActivity::Background) => {
             UpdateMode::reactive_low_power(reactive_wait)
         }
     };
     if winit.focused_mode != focused_mode {
         winit.focused_mode = focused_mode;
     }
-    let unfocused_mode = if cfg!(debug_assertions) {
-        // Watchers do not wake winit. Editor previews deliberately keep polling.
+    let unfocused_mode = if let Some(mode) = benchmark_mode {
+        mode
+    } else if editor_sync {
+        // Studio sync must observe editor writes and selected-block changes
+        // immediately even when its independent native preview is unfocused.
         UpdateMode::Continuous
     } else {
+        // Ordinary development follows shipping lifecycle behavior. File
+        // watching remains enabled, but an unfocused static preview does not
+        // burn a core merely because this is a debug build.
         UpdateMode::reactive_low_power(std::time::Duration::MAX)
     };
     if winit.unfocused_mode != unfocused_mode {
@@ -163,8 +221,8 @@ pub(crate) fn update_lifecycle(
     }
 }
 
-const fn should_pause_for_background(focused: bool, development: bool) -> bool {
-    !focused && !development
+const fn should_pause_for_background(focused: bool, editor_sync: bool) -> bool {
+    !focused && !editor_sync
 }
 
 fn core_is_animating(state: &GameState) -> bool {
@@ -383,10 +441,48 @@ mod tests {
     use bevy::window::WindowResolution;
 
     #[test]
-    fn development_preview_keeps_running_without_focus() {
+    fn only_studio_sync_keeps_running_without_focus() {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));
+    }
+
+    #[test]
+    fn dialog_camera_sleeps_until_its_layer_has_visible_content() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_dialog_camera_activity);
+        let camera = app
+            .world_mut()
+            .spawn((Camera::default(), DialogCamera))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                UiTargetCamera(camera),
+                InheritedVisibility::HIDDEN,
+            ))
+            .id();
+
+        app.update();
+        assert!(!app.world().get::<Camera>(camera).unwrap().is_active);
+
+        app.world_mut()
+            .entity_mut(root)
+            .insert(InheritedVisibility::VISIBLE);
+        app.update();
+        assert!(app.world().get::<Camera>(camera).unwrap().is_active);
+
+        app.world_mut()
+            .entity_mut(root)
+            .insert(InheritedVisibility::HIDDEN);
+        app.world_mut().spawn((
+            Node::default(),
+            QuickPreviewSurface,
+            InheritedVisibility::VISIBLE,
+        ));
+        app.update();
+        assert!(app.world().get::<Camera>(camera).unwrap().is_active);
     }
 
     #[test]

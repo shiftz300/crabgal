@@ -475,7 +475,7 @@ fn sync_editor_position(
 
 const MAX_EDITOR_REPLAY_STEPS: usize = 65_536;
 
-fn seek_editor_state(
+pub(crate) fn seek_editor_state(
     preview: &mut State,
     target_scene: &str,
     selected_start: usize,

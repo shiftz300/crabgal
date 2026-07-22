@@ -8,7 +8,9 @@ use bevy::prelude::*;
 use crabgal_core::State;
 use crabgal_loader::{SavedState, StoreAdapter, StoreStatus};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot, StoreCodec};
+use crate::runtime::resources::{
+    EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot, StoreCodec,
+};
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 pub use crabgal_loader::StoreMetadata as SaveMetadata;
@@ -76,8 +78,9 @@ pub(crate) fn quick_save_on_exit(
     project_root: Res<ProjectRoot>,
     store: Res<StoreCodec>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() {
+    if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
     if exits.read().next().is_none() || state.ended {

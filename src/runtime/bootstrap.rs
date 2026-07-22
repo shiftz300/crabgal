@@ -8,6 +8,7 @@ use bevy::asset::{AssetApp, AssetPlugin, RenderAssetUsages};
 use bevy::camera::visibility::RenderLayers;
 use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::ecs::system::NonSendMarker;
+use bevy::ecs::system::SystemParam;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
@@ -22,10 +23,31 @@ use crabgal_loader::{
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
 use crate::runtime::resources::{
-    ContentProjectResource, EditorSyncSession, GameConfigResource, GameState, LocalAssetCache,
-    LocalAssetManifest, LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource,
-    StoreCodec,
+    ContentProjectResource, EditorSyncSession, GameConfigResource, GameState, HotReloadSession,
+    LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled, ProjectRoot,
+    ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
+
+#[derive(Clone, Copy)]
+struct BenchmarkOptions {
+    seconds: f32,
+    cursor: Option<usize>,
+    cameras: crate::ui::performance::BenchmarkCameras,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LaunchOptions {
+    editor_sync: bool,
+    hot_reload: bool,
+    benchmark: Option<BenchmarkOptions>,
+}
+
+#[derive(SystemParam)]
+struct BootstrapMode<'w> {
+    editor_sync: Option<Res<'w, EditorSyncSession>>,
+    benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
+    hot_reload: Option<Res<'w, HotReloadSession>>,
+}
 
 pub fn run() {
     run_with_loader(LoaderRegistry::default());
@@ -51,6 +73,8 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let check_only = args.first().is_some_and(|command| command == "check");
     let editor_sync = args.first().is_some_and(|command| command == "studio");
+    let hot_reload = hot_reload_requested(&args);
+    let benchmark = benchmark_options_from_args(&args)?;
     let project_path = project_root_from_args(args.iter().cloned());
     let (project_root, config, content) = open_project(&project_path, &loader)?;
     let languages = loader
@@ -62,9 +86,25 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
-    let mut app = build_opened_app(project_root, config, content, languages, store, editor_sync);
+    let mut app = build_opened_app(
+        project_root,
+        config,
+        content,
+        languages,
+        store,
+        LaunchOptions {
+            editor_sync,
+            hot_reload,
+            benchmark,
+        },
+    );
     app.run();
     Ok(())
+}
+
+fn hot_reload_requested(args: &[std::ffi::OsString]) -> bool {
+    args.first()
+        .is_some_and(|command| command == "dev" || command == "studio")
 }
 
 /// Builds a customizable Bevy application for one project without running it.
@@ -87,7 +127,7 @@ pub fn build_app_with_loader(
         content,
         languages,
         store,
-        false,
+        LaunchOptions::default(),
     ))
 }
 
@@ -97,13 +137,14 @@ fn build_opened_app(
     content: ContentProject,
     languages: crabgal_loader::ScriptLanguageRegistry,
     store: std::sync::Arc<dyn crabgal_loader::StoreAdapter>,
-    editor_sync: bool,
+    options: LaunchOptions,
 ) -> App {
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
     let asset_mounts = content.asset_mounts();
-    let watch_assets = asset_mounts
-        .iter()
-        .any(|mount| mount.filesystem_root().is_some());
+    let watch_assets = options.hot_reload
+        && asset_mounts
+            .iter()
+            .any(|mount| mount.filesystem_root().is_some());
 
     let mut app = App::new();
     app.register_asset_source(
@@ -148,8 +189,20 @@ fn build_opened_app(
     .insert_resource(GameConfigResource(config))
     .add_systems(PreStartup, bootstrap_project)
     .add_systems(PostStartup, set_primary_window_icon);
-    if editor_sync {
+    if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
+    }
+    if options.hot_reload {
+        app.init_resource::<HotReloadSession>();
+    }
+    if let Some(benchmark) = options.benchmark {
+        app.init_resource::<PersistenceDisabled>();
+        crate::ui::performance::install_runtime_capture(
+            &mut app,
+            benchmark.seconds,
+            benchmark.cursor,
+            benchmark.cameras,
+        );
     }
     super::platform::install_runtime_diagnostics(&mut app);
     app
@@ -322,7 +375,12 @@ fn ensure_project_directory(project_path: &Path) -> Result<()> {
 fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
     let args = args.collect::<Vec<_>>();
     let relative = match args.as_slice() {
-        [command, path, ..] if command == "dev" || command == "check" || command == "studio" => {
+        [command, path, ..]
+            if command == "dev"
+                || command == "check"
+                || command == "studio"
+                || command == "benchmark" =>
+        {
             PathBuf::from(path)
         }
         [path, ..] => PathBuf::from(path),
@@ -337,15 +395,64 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
         .join(relative)
 }
 
+fn benchmark_options_from_args(args: &[std::ffi::OsString]) -> Result<Option<BenchmarkOptions>> {
+    if args.first().is_none_or(|command| command != "benchmark") {
+        return Ok(None);
+    }
+    let seconds = match args.get(2) {
+        Some(value) => value
+            .to_string_lossy()
+            .parse::<f32>()
+            .context("benchmark duration must be a number of seconds")?,
+        None => 15.0,
+    };
+    if !seconds.is_finite() || seconds < 1.0 {
+        anyhow::bail!("benchmark duration must be at least one second");
+    }
+    let cursor = args
+        .get(3)
+        .map(|value| {
+            value
+                .to_string_lossy()
+                .parse::<usize>()
+                .context("benchmark cursor must be a non-negative action index")
+        })
+        .transpose()?;
+    let cameras = match args.get(4).map(|value| value.to_string_lossy()) {
+        None => crate::ui::performance::BenchmarkCameras::Full,
+        Some(value) if value == "full" => crate::ui::performance::BenchmarkCameras::Full,
+        Some(value) if value == "scene-ui" => crate::ui::performance::BenchmarkCameras::SceneUi,
+        Some(value) if value == "scene-dialog" => {
+            crate::ui::performance::BenchmarkCameras::SceneDialog
+        }
+        Some(value) if value == "scene" => crate::ui::performance::BenchmarkCameras::SceneOnly,
+        Some(value) => anyhow::bail!(
+            "unknown benchmark camera profile {value:?}; expected full, scene-ui, scene-dialog, or scene"
+        ),
+    };
+    Ok(Some(BenchmarkOptions {
+        seconds,
+        cursor,
+        cameras,
+    }))
+}
+
 fn bootstrap_project(
     mut commands: Commands,
     project_root: Res<ProjectRoot>,
     content: Res<ContentProjectResource>,
     languages: Res<ScriptLanguages>,
     config: Res<GameConfigResource>,
-    editor_sync: Option<Res<EditorSyncSession>>,
+    mode: BootstrapMode,
 ) {
-    spawn_cameras(&mut commands);
+    spawn_cameras(
+        &mut commands,
+        mode.benchmark
+            .as_ref()
+            .map_or(crate::ui::performance::BenchmarkCameras::Full, |capture| {
+                capture.cameras
+            }),
+    );
 
     let mut state = State::new();
     match content.initial_state() {
@@ -355,7 +462,7 @@ fn bootstrap_project(
         }
         Err(error) => log::error!("failed to load project variable defaults: {error:#}"),
     }
-    if editor_sync.is_none() {
+    if mode.editor_sync.is_none() {
         state
             .global_vars
             .extend(crate::storage::profile::load(&project_root));
@@ -400,13 +507,73 @@ fn bootstrap_project(
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }
     ensure_playable_scene(&mut state);
-    if editor_sync.is_some() {
+    if mode.editor_sync.is_some() {
         // An editor is already the outer shell. Enter its current selected block directly
         // so the native overlay never flashes crabgal's title screen first.
         state.ended = false;
         if !crate::runtime::tick::sync_editor_cursor(&content, &mut state, &manifest) {
             crabgal_core::step::step(&mut state);
         }
+    } else if mode.benchmark.is_some() {
+        // Runtime captures start on the actual stage, not the comparatively
+        // cheap title screen, and never require synthetic keyboard input.
+        state.ended = false;
+        crabgal_core::step::step(&mut state);
+        let timelines = state
+            .program
+            .scene(&state.current_scene)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, action)| match action {
+                Action::StageAnimation { animation } => Some(format!("{index}:{}", animation.id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        log::info!(target: "crabgal::performance", "TIMELINE | {timelines}");
+        if let Some(cursor) = mode.benchmark.as_ref().and_then(|capture| capture.cursor) {
+            let target_scene = state.current_scene.clone();
+            let mut preview = State {
+                program: state.program.clone(),
+                program_fingerprint: state.program_fingerprint,
+                vars: state.vars.clone(),
+                global_vars: state.global_vars.clone(),
+                ..State::new()
+            };
+            preview.current_scene = crate::scene::entry_scene(&preview);
+            preview.ended = false;
+            if crate::runtime::tick::seek_editor_state(
+                &mut preview,
+                &target_scene,
+                cursor,
+                cursor.saturating_add(1),
+            ) {
+                state = preview;
+            } else {
+                log::warn!(
+                    target: "crabgal::performance",
+                    "benchmark cursor {cursor} could not be replayed in {target_scene:?}",
+                );
+            }
+            if let Some(animation) = state.stage_animation.as_mut() {
+                // A selected timeline is looped only inside the benchmark so
+                // the sample measures its sustained cost instead of mostly
+                // measuring the static frame after a short authored clip.
+                animation.animation.infinite = true;
+                animation.animation.repeat = 0;
+            }
+        }
+        log::info!(
+            target: "crabgal::performance",
+            "START    | requested cursor {:?} · running cursor {} · timeline {}",
+            mode.benchmark.as_ref().and_then(|capture| capture.cursor),
+            state.cursor,
+            state
+                .stage_animation
+                .as_ref()
+                .map_or("none", |animation| animation.animation.id.as_str()),
+        );
     } else {
         // Normal binaries prepare the entry scene, but execution belongs to
         // the title screen's START action.
@@ -426,20 +593,23 @@ fn bootstrap_project(
     commands.insert_resource(manifest);
     commands.insert_resource(LocalAssetCache::default());
 
-    match ScriptWatcher::start_for_project(&content, languages.0.clone()) {
-        Ok(watcher) => {
-            commands.insert_resource(ScriptWatcherResource(Mutex::new(watcher)));
+    if mode.hot_reload.is_some() {
+        match ScriptWatcher::start_for_project(&content, languages.0.clone()) {
+            Ok(watcher) => {
+                commands.insert_resource(ScriptWatcherResource(Mutex::new(watcher)));
+            }
+            Err(error) => log::warn!("script hot reload disabled: {error:#}"),
         }
-        Err(error) => log::warn!("script hot reload disabled: {error:#}"),
     }
 }
 
-fn spawn_cameras(commands: &mut Commands) {
+fn spawn_cameras(commands: &mut Commands, cameras: crate::ui::performance::BenchmarkCameras) {
     commands.spawn((
         Name::new("scene_camera"),
         Camera2d,
         Camera {
             order: 0,
+            is_active: cameras.scene(),
             ..default()
         },
         RenderLayers::layer(0),
@@ -451,6 +621,7 @@ fn spawn_cameras(commands: &mut Commands) {
         Camera2d,
         Camera {
             order: 1,
+            is_active: cameras.ui(),
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -463,6 +634,7 @@ fn spawn_cameras(commands: &mut Commands) {
         Camera2d,
         Camera {
             order: 2,
+            is_active: cameras.dialog(),
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -553,6 +725,67 @@ mod tests {
             project_root_from_args(args.iter().cloned()),
             Path::new("/tmp/editor-project")
         );
+    }
+
+    #[test]
+    fn only_development_commands_enable_hot_reload() {
+        let args = |command: &str| vec![std::ffi::OsString::from(command)];
+        assert!(hot_reload_requested(&args("dev")));
+        assert!(hot_reload_requested(&args("studio")));
+        assert!(!hot_reload_requested(&args("benchmark")));
+        assert!(!hot_reload_requested(&args("/tmp/release-project")));
+    }
+
+    #[test]
+    fn benchmark_command_has_repeatable_defaults() {
+        let args = ["benchmark", "/tmp/project"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        assert_eq!(options.seconds, 15.0);
+        assert_eq!(options.cursor, None);
+        assert_eq!(
+            options.cameras,
+            crate::ui::performance::BenchmarkCameras::Full
+        );
+    }
+
+    #[test]
+    fn benchmark_command_accepts_duration_and_cursor() {
+        let args = ["benchmark", "/tmp/project", "7.5", "25"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        assert_eq!(options.seconds, 7.5);
+        assert_eq!(options.cursor, Some(25));
+        assert_eq!(
+            options.cameras,
+            crate::ui::performance::BenchmarkCameras::Full
+        );
+    }
+
+    #[test]
+    fn benchmark_command_accepts_camera_profile() {
+        let args = ["benchmark", "/tmp/project", "7.5", "25", "scene-ui"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        assert_eq!(
+            options.cameras,
+            crate::ui::performance::BenchmarkCameras::SceneUi
+        );
+    }
+
+    #[test]
+    fn benchmark_command_rejects_zero_duration() {
+        let args = ["benchmark", "/tmp/project", "0"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        assert!(benchmark_options_from_args(&args).is_err());
     }
 
     #[test]

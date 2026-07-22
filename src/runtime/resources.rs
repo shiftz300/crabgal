@@ -35,6 +35,16 @@ pub struct ScriptWatcherResource(pub Mutex<ScriptWatcher>);
 #[derive(Resource, Default)]
 pub struct EditorSyncSession;
 
+/// Enables source and asset watching for interactive development sessions.
+/// Shipping runtimes and deterministic benchmarks deliberately omit it.
+#[derive(Resource, Default)]
+pub struct HotReloadSession;
+
+/// Disables all project-owned persistence while keeping normal runtime input
+/// and scene semantics. Used by deterministic performance captures.
+#[derive(Resource, Default)]
+pub struct PersistenceDisabled;
+
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct LocalAssetManifest(pub HashMap<String, LocalSceneAssets>);
 

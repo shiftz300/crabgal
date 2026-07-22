@@ -7,6 +7,12 @@ dev-lite = "run -- dev"
 # Optimized interactive preview. Keeping `--release` inside the alias avoids
 # leaking Cargo's option ordering into the project-facing command line.
 preview = "run --release --features video-ffmpeg -- dev"
+# Repeatable release-mode runtime capture. The optional final argument is the
+# sampling duration in seconds (default: 15, after a 3-second warm-up); a
+# second optional argument selects the compiled action cursor. A final profile
+# (`full`, `scene-ui`, `scene-dialog`, or `scene`) is reserved for measuring
+# per-camera render overhead without changing normal runtime composition.
+perf = "run --release --features video-ffmpeg -- benchmark"
 # Studio owns authoring and persists its current fragment/block in the project.
 # crabgal remains a separate native process and follows those files directly;
 # no Studio extension, injected UI, localhost server or installation step.

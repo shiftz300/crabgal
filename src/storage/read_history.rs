@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use crabgal_core::state::DialogueKey;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, ProjectRoot};
+use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
 
 const VERSION: u32 = 1;
 
@@ -54,8 +54,9 @@ pub(crate) fn persist_read_history(
     project_root: Res<ProjectRoot>,
     mut writer: ResMut<ReadHistoryWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() {
+    if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
     if writer.saved_len == state.read_dialogues.len() {

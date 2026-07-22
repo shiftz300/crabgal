@@ -45,7 +45,14 @@ impl Plugin for RuntimePlugin {
             Update,
             platform::resize_viewport.in_set(GameSystemSet::Layout),
         );
-        app.add_systems(Last, platform::update_lifecycle);
+        app.add_systems(
+            Last,
+            (
+                platform::sync_dialog_camera_activity,
+                platform::update_lifecycle,
+            )
+                .chain(),
+        );
     }
 }
 

@@ -80,12 +80,17 @@ impl UserInputCaretBlink {
     }
 }
 
-pub(crate) fn setup(
+pub(crate) fn ensure_spawned(
     mut commands: Commands,
+    state: Res<GameState>,
     fonts: Res<UiFonts>,
     cameras: Query<Entity, With<DialogCamera>>,
     blur_cameras: Query<Entity, With<UiBlurCamera>>,
+    existing: Query<(), With<UserInputRoot>>,
 ) {
+    if state.user_input.is_none() || !existing.is_empty() {
+        return;
+    }
     let (Ok(camera), Ok(blur_camera)) = (cameras.single(), blur_cameras.single()) else {
         return;
     };

@@ -62,11 +62,27 @@ type FloatingValueQuery<'w, 's> = Query<
     (With<FloatingTextValue>, Without<IntroText>),
 >;
 
-pub(crate) fn setup(
+pub(crate) fn ensure_spawned(
     mut commands: Commands,
+    state: Res<GameState>,
     fonts: Res<UiFonts>,
     cameras: Query<Entity, With<DialogCamera>>,
+    existing: Query<(), With<IntroRoot>>,
 ) {
+    let has_waiting_video = state.videos.values().any(|video| {
+        video.spec.skippable
+            && video.spec.wait_for_finished
+            && !video.spec.looped
+            && !video.stopping
+    });
+    let needed = state.intro.is_some()
+        || state.film_mode
+        || state.curtain.current > 0.001
+        || state.floating_text.is_some()
+        || has_waiting_video;
+    if !needed || !existing.is_empty() {
+        return;
+    }
     let Ok(camera) = cameras.single() else {
         return;
     };
