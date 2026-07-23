@@ -1,3 +1,4 @@
+use bevy::asset::LoadState;
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -11,6 +12,9 @@ use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePrev
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{UiFonts, exp_lerp, text};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+
+const RETURN_COVER_SECONDS: f32 = 0.24;
+const RETURN_REVEAL_SECONDS: f32 = 0.34;
 
 #[derive(Component)]
 pub struct TitleRoot;
@@ -34,68 +38,111 @@ pub struct PendingTitleAction {
     remaining: f32,
 }
 
+#[derive(Clone, Copy, Default)]
+enum ReturnToTitlePhase {
+    #[default]
+    Cover,
+    Reveal,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct ReturnToTitleTransition {
     elapsed: f32,
-    switched: bool,
+    phase: ReturnToTitlePhase,
+    title_background: Option<Handle<Image>>,
 }
 
 #[derive(Component)]
 pub(crate) struct ReturnToTitleOverlay;
 
+#[derive(SystemParam)]
+pub(crate) struct ReturnToTitleContext<'w, 's> {
+    time: Res<'w, Time<Real>>,
+    config: Res<'w, GameConfigResource>,
+    asset_server: Res<'w, AssetServer>,
+    state: ResMut<'w, GameState>,
+    camera: Query<'w, 's, Entity, With<DialogCamera>>,
+    overlays: Query<'w, 's, (Entity, &'static mut BackgroundColor), With<ReturnToTitleOverlay>>,
+    commands: Commands<'w, 's>,
+}
+
 pub(crate) fn animate_return_to_title(
     transition: Option<ResMut<ReturnToTitleTransition>>,
-    time: Res<Time>,
-    mut state: ResMut<GameState>,
-    camera: Query<Entity, With<DialogCamera>>,
-    mut overlays: Query<(Entity, &mut BackgroundColor), With<ReturnToTitleOverlay>>,
-    mut commands: Commands,
+    mut context: ReturnToTitleContext,
 ) {
-    const COVER_SECONDS: f32 = 0.18;
-    const REVEAL_SECONDS: f32 = 0.28;
     let Some(mut transition) = transition else {
         return;
     };
-    if overlays.is_empty()
-        && let Ok(camera) = camera.single()
-    {
-        commands.spawn((
-            ReturnToTitleOverlay,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Px(DESIGN_WIDTH),
-                height: Val::Px(DESIGN_HEIGHT),
-                ..default()
-            },
-            BackgroundColor(Color::NONE),
-            FocusPolicy::Block,
-            GlobalZIndex(1000),
-            UiTargetCamera(camera),
-            RenderLayers::layer(2),
-        ));
+    if transition.title_background.is_none() {
+        transition.title_background = Some(
+            context
+                .asset_server
+                .load(context.config.bg_path(&context.config.title_background)),
+        );
     }
-    transition.elapsed += time.delta_secs();
-    if !transition.switched && transition.elapsed >= COVER_SECONDS {
-        crabgal_core::step::end_game(&mut state);
-        transition.switched = true;
+    if context.overlays.is_empty() {
+        if let Ok(camera) = context.camera.single() {
+            context.commands.spawn((
+                ReturnToTitleOverlay,
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(DESIGN_WIDTH),
+                    height: Val::Px(DESIGN_HEIGHT),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+                FocusPolicy::Block,
+                GlobalZIndex(1000),
+                UiTargetCamera(camera),
+                RenderLayers::layer(2),
+            ));
+        }
+        // Do not consume transition time before the covering surface actually
+        // participates in a rendered frame.
+        return;
     }
-    let alpha = if transition.elapsed < COVER_SECONDS {
-        crate::ui::foundation::smoothstep(transition.elapsed / COVER_SECONDS)
-    } else {
-        1.0 - crate::ui::foundation::smoothstep(
-            (transition.elapsed - COVER_SECONDS) / REVEAL_SECONDS,
-        )
-    }
-    .clamp(0.0, 1.0);
-    for (_, mut background) in &mut overlays {
+
+    transition.elapsed += context.time.delta_secs();
+    let alpha = match transition.phase {
+        ReturnToTitlePhase::Cover => {
+            let alpha = transition_alpha(transition.phase, transition.elapsed);
+            let background_ready = transition.title_background.as_ref().is_some_and(|handle| {
+                context.asset_server.is_loaded_with_dependencies(handle)
+                    || matches!(
+                        context.asset_server.get_load_state(handle),
+                        Some(LoadState::Failed(_))
+                    )
+            });
+            if transition.elapsed >= RETURN_COVER_SECONDS && background_ready {
+                crabgal_core::step::end_game(&mut context.state);
+                transition.phase = ReturnToTitlePhase::Reveal;
+                transition.elapsed = 0.0;
+            }
+            alpha
+        }
+        ReturnToTitlePhase::Reveal => transition_alpha(transition.phase, transition.elapsed),
+    };
+    for (_, mut background) in &mut context.overlays {
         background.0 = Color::srgba(0.0, 0.0, 0.0, alpha);
     }
-    if transition.elapsed >= COVER_SECONDS + REVEAL_SECONDS {
-        for (entity, _) in &mut overlays {
-            commands.entity(entity).despawn();
+    if matches!(transition.phase, ReturnToTitlePhase::Reveal)
+        && transition.elapsed >= RETURN_REVEAL_SECONDS
+    {
+        for (entity, _) in &mut context.overlays {
+            context.commands.entity(entity).despawn();
         }
-        commands.remove_resource::<ReturnToTitleTransition>();
+        context
+            .commands
+            .remove_resource::<ReturnToTitleTransition>();
     }
+}
+
+fn transition_alpha(phase: ReturnToTitlePhase, elapsed: f32) -> f32 {
+    let ratio = match phase {
+        ReturnToTitlePhase::Cover => elapsed / RETURN_COVER_SECONDS,
+        ReturnToTitlePhase::Reveal => 1.0 - elapsed / RETURN_REVEAL_SECONDS,
+    };
+    crate::ui::foundation::smoothstep(ratio.clamp(0.0, 1.0))
 }
 
 #[derive(Component)]
@@ -589,6 +636,28 @@ fn start_game_from_keyboard(
 mod tests {
     use super::*;
     use crabgal_core::{Action, Program, State};
+
+    #[test]
+    fn return_to_title_fully_covers_before_it_reveals() {
+        assert_eq!(transition_alpha(ReturnToTitlePhase::Cover, 0.0), 0.0);
+        assert_eq!(
+            transition_alpha(ReturnToTitlePhase::Cover, RETURN_COVER_SECONDS),
+            1.0
+        );
+        assert_eq!(transition_alpha(ReturnToTitlePhase::Reveal, 0.0), 1.0);
+        assert_eq!(
+            transition_alpha(ReturnToTitlePhase::Reveal, RETURN_REVEAL_SECONDS),
+            0.0
+        );
+        assert!(
+            transition_alpha(ReturnToTitlePhase::Cover, RETURN_COVER_SECONDS * 0.75)
+                > transition_alpha(ReturnToTitlePhase::Cover, RETURN_COVER_SECONDS * 0.25)
+        );
+        assert!(
+            transition_alpha(ReturnToTitlePhase::Reveal, RETURN_REVEAL_SECONDS * 0.75)
+                < transition_alpha(ReturnToTitlePhase::Reveal, RETURN_REVEAL_SECONDS * 0.25)
+        );
+    }
 
     #[test]
     fn keyboard_start_consumes_only_the_launch_edge_before_a_held_intro() {

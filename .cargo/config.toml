@@ -1,4 +1,5 @@
 [alias]
+adapters = "run -- adapters"
 dev = "run --features video-ffmpeg -- dev"
 # Minimal runtime for machines without FFmpeg development libraries. Projects
 # that contain video deliberately fail that capability at runtime instead of

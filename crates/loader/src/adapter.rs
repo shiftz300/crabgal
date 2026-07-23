@@ -23,6 +23,37 @@ pub use editor::{
 pub use script::{WebGalLanguage, parse_webgal, parse_webgal_report};
 pub use store::{CrabgalStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AdapterCategory {
+    Asset,
+    Script,
+    Project,
+    Store,
+}
+
+impl AdapterCategory {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::Script => "script",
+            Self::Project => "project",
+            Self::Store => "store",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdapterDescriptor {
+    pub category: AdapterCategory,
+    pub name: String,
+}
+
+impl AdapterDescriptor {
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.category.id(), self.name.to_ascii_lowercase())
+    }
+}
+
 /// A complete project opened by any package or editor adapter.
 #[derive(Clone)]
 pub struct AdaptedProject {
@@ -119,6 +150,48 @@ impl LoaderRegistry {
         self.stores.insert(store.name().to_owned(), Arc::new(store));
     }
 
+    /// Returns the concrete capabilities currently installed in this registry.
+    pub fn adapters(&self) -> Vec<AdapterDescriptor> {
+        let mut adapters = Vec::with_capacity(
+            self.assets.len()
+                + self.languages.names().count()
+                + self.projects.len()
+                + self.stores.len(),
+        );
+        adapters.extend(self.assets.keys().map(|name| AdapterDescriptor {
+            category: AdapterCategory::Asset,
+            name: name.clone(),
+        }));
+        adapters.extend(self.languages.names().map(|name| AdapterDescriptor {
+            category: AdapterCategory::Script,
+            name: name.to_ascii_lowercase(),
+        }));
+        adapters.extend(self.projects.iter().map(|adapter| AdapterDescriptor {
+            category: AdapterCategory::Project,
+            name: adapter.name().to_owned(),
+        }));
+        adapters.extend(self.stores.keys().map(|name| AdapterDescriptor {
+            category: AdapterCategory::Store,
+            name: name.clone(),
+        }));
+        adapters.sort_by(|left, right| {
+            (left.category, left.name.as_str()).cmp(&(right.category, right.name.as_str()))
+        });
+        adapters
+    }
+
+    /// Removes concrete adapters which are disabled by the host application.
+    pub fn retain_adapters(&mut self, mut keep: impl FnMut(AdapterCategory, &str) -> bool) {
+        self.assets
+            .retain(|name, _| keep(AdapterCategory::Asset, name));
+        self.languages
+            .retain(|name| keep(AdapterCategory::Script, name));
+        self.projects
+            .retain(|adapter| keep(AdapterCategory::Project, adapter.name()));
+        self.stores
+            .retain(|name, _| keep(AdapterCategory::Store, name));
+    }
+
     pub fn store(&self, name: &str) -> Result<Arc<dyn StoreAdapter>> {
         self.stores
             .get(name)
@@ -208,6 +281,25 @@ mod tests {
         }
         assert_eq!(registry.assets.len(), 3);
         assert_eq!(registry.projects.len(), 2);
+        assert!(registry.store("crabgal").is_ok());
+    }
+
+    #[test]
+    fn registry_can_disable_one_category_without_affecting_the_others() {
+        let mut registry = LoaderRegistry::default();
+        registry.retain_adapters(|category, name| {
+            category != AdapterCategory::Project || name != "letsgal"
+        });
+
+        assert!(
+            !registry
+                .adapters()
+                .iter()
+                .any(|adapter| adapter.id() == "project:letsgal")
+        );
+        let adapters = registry.adapters();
+        assert!(registry.languages("webgal").is_ok());
+        assert!(adapters.iter().any(|adapter| adapter.id() == "asset:fs"));
         assert!(registry.store("crabgal").is_ok());
     }
 }

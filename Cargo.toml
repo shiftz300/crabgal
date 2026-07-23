@@ -24,7 +24,7 @@ audio-flac = ["bevy/flac"]
 video-ffmpeg = ["dep:video-rs", "dep:tempfile", "dep:rodio"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
@@ -65,6 +65,7 @@ symphonia-adapter-libopus = { version = "0.3", default-features = false }
 video-rs = { version = "0.11", default-features = false }
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
+crossterm = "0.29.0"
 
 [dependencies]
 crabgal-core = { workspace = true }
@@ -84,6 +85,7 @@ symphonia-adapter-libopus = { workspace = true, optional = true }
 video-rs = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 winit = { workspace = true }
+crossterm = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
 
 [build-dependencies]

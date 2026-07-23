@@ -74,6 +74,14 @@ impl ScriptLanguageRegistry {
     pub fn supports(&self, path: &Path) -> bool {
         self.language_for(path).is_some()
     }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.languages.iter().map(|language| language.name())
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.languages.retain(|language| keep(language.name()));
+    }
 }
 
 #[cfg(test)]

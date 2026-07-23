@@ -1,0 +1,46 @@
+name: Setup native video SDK
+description: Install the FFmpeg libraries used by the optional video-ffmpeg feature
+
+inputs:
+  enabled:
+    description: Install the optional FFmpeg SDK in addition to base platform libraries
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux native libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        packages=(libasound2-dev libudev-dev)
+        if [[ '${{ inputs.enabled }}' == 'true' ]]; then
+          packages+=(
+            pkg-config libavcodec-dev libavformat-dev libavutil-dev
+            libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev
+          )
+        fi
+        sudo apt-get update
+        sudo apt-get install -y "${packages[@]}"
+
+    - name: Cache Windows FFmpeg packages
+      if: runner.os == 'Windows' && inputs.enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/vcpkg-binary-cache
+        key: vcpkg-ffmpeg-windows-x64-v1
+
+    - name: Install Windows FFmpeg SDK
+      if: runner.os == 'Windows' && inputs.enabled == 'true'
+      shell: pwsh
+      run: |
+        $root = $env:VCPKG_INSTALLATION_ROOT
+        if (-not $root) { throw 'GitHub runner did not provide VCPKG_INSTALLATION_ROOT' }
+        $cache = Join-Path $env:RUNNER_TEMP 'vcpkg-binary-cache'
+        New-Item -ItemType Directory -Force $cache | Out-Null
+        $env:VCPKG_ROOT = $root
+        $env:VCPKG_DEFAULT_BINARY_CACHE = $cache
+        "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "VCPKG_DEFAULT_BINARY_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+        & (Join-Path $root 'vcpkg.exe') install ffmpeg:x64-windows

@@ -40,6 +40,19 @@ struct EditorCursorSync {
 
 const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
 
+type StageButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        Option<&'static ButtonAction>,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static InheritedVisibility,
+    ),
+    With<Button>,
+>;
+
 #[derive(SystemParam)]
 pub struct TickContext<'w, 's> {
     time: Res<'w, Time>,
@@ -53,17 +66,7 @@ pub struct TickContext<'w, 's> {
     watcher: Option<Res<'w, ScriptWatcherResource>>,
     asset_manifest: ResMut<'w, LocalAssetManifest>,
     toggles: ResMut<'w, ToggleStates>,
-    buttons: Query<
-        'w,
-        's,
-        (
-            &'static Interaction,
-            Option<&'static ButtonAction>,
-            &'static ComputedNode,
-            &'static UiGlobalTransform,
-        ),
-        With<Button>,
-    >,
+    buttons: StageButtonQuery<'w, 's>,
     windows: Query<'w, 's, &'static Window>,
     input_scope: Res<'w, UiInputScope>,
     loading: Res<'w, AssetLoadingGate>,
@@ -753,15 +756,7 @@ fn update_auto_mode(
 
 fn advance_requested(
     actions: &InputActions,
-    buttons: &Query<
-        (
-            &Interaction,
-            Option<&ButtonAction>,
-            &ComputedNode,
-            &UiGlobalTransform,
-        ),
-        With<Button>,
-    >,
+    buttons: &StageButtonQuery<'_, '_>,
     windows: &Query<&Window>,
     content_hidden: bool,
 ) -> bool {
@@ -769,9 +764,9 @@ fn advance_requested(
         return false;
     }
     if actions.pointer_advance
-        && buttons
-            .iter()
-            .any(|(interaction, _, _, _)| !matches!(interaction, Interaction::None))
+        && buttons.iter().any(|(interaction, _, _, _, visibility)| {
+            visibility.get() && !matches!(interaction, Interaction::None)
+        })
     {
         return false;
     }
@@ -781,17 +776,21 @@ fn advance_requested(
             .ok()
             .and_then(Window::physical_cursor_position)
             .is_some_and(|cursor| {
-                buttons.iter().any(|(_, _, node, transform)| {
-                    point_inside_rect(cursor, transform.translation, node.size())
+                buttons.iter().any(|(_, _, node, transform, visibility)| {
+                    visibility.get()
+                        && point_inside_rect(cursor, transform.translation, node.size())
                 })
             })
     {
         return false;
     }
-    !buttons.iter().any(|(interaction, action, _, _)| {
-        matches!(interaction, Interaction::Pressed)
-            && (!content_hidden || matches!(action, Some(ButtonAction::Hide)))
-    })
+    !buttons
+        .iter()
+        .any(|(interaction, action, _, _, visibility)| {
+            visibility.get()
+                && matches!(interaction, Interaction::Pressed)
+                && (!content_hidden || matches!(action, Some(ButtonAction::Hide)))
+        })
 }
 
 fn point_inside_rect(point: Vec2, center: Vec2, size: Vec2) -> bool {

@@ -54,10 +54,28 @@ pub fn run() {
 }
 
 pub fn run_cli() -> std::process::ExitCode {
-    match try_run_with_loader(LoaderRegistry::default()) {
+    let configure_adapters = std::env::args_os()
+        .nth(1)
+        .is_some_and(|command| command == "adapters");
+    let mut loader = LoaderRegistry::default();
+    let result = if configure_adapters {
+        super::adapter_tui::configure(&loader)
+    } else {
+        super::adapter_tui::apply_saved_selection(&mut loader)
+            .and_then(|()| try_run_with_loader(loader))
+    };
+
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            super::platform::startup_error("failed to open project", &error);
+            super::platform::startup_error(
+                if configure_adapters {
+                    "failed to configure adapters"
+                } else {
+                    "failed to open project"
+                },
+                &error,
+            );
             std::process::ExitCode::FAILURE
         }
     }

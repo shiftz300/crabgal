@@ -53,6 +53,11 @@ VM、渲染器、UI 或原生 crabgal 工程的启动路径。
 library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`
 只是最终 crabgal 二进制采用的内置组合，并不是 runtime 的类型依赖。
 
+最终二进制可运行 `cargo adapters`，用方向键和空格启停默认 registry 中的具体实现，回车保存、
+Esc 取消。该选择保存在用户配置目录，只作用于默认 CLI 启动路径；项目内的 `config.yaml` 仍负责
+从已启用集合中选择格式，`run_with_loader` / `build_app_with_loader` 等嵌入接口也不会读取这份全局
+配置。缺少的新 adapter 默认启用，asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。
+
 ## 配置
 
 ```yaml

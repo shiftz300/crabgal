@@ -39,9 +39,15 @@ jobs:
             echo "Configure the CRABGAL_HEXZ_PASSWORD repository secret" >&2
             exit 2
           fi
-      - name: Install Linux system libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Detect project media features
+        shell: bash
+        run: |
+          source dev/scripts/audio-features.sh
+          features="$(detect_audio_features "${{ inputs.project || 'projects/test-project' }}")"
+          echo "CRABGAL_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-video
+        with:
+          enabled: ${{ contains(env.CRABGAL_RELEASE_FEATURES, 'video-ffmpeg') }}
       - name: Install pinned Hexz CLI
         shell: bash
         run: >-

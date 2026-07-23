@@ -42,10 +42,28 @@ HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" \
     hexz pack "$staging/project" "$output/game.hxz" \
     --compression zstd --encrypt --block-size 65536
 
+release_features="$(detect_audio_features "$staging/project")"
 CRABGAL_HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" \
+    CRABGAL_AUDIO_FEATURES="$release_features" \
     build_engine_for_project "$staging/project" --release --locked
 if [[ -f target/release/crabgal.exe ]]; then
     cp target/release/crabgal.exe "$output/crabgal.exe"
+    if [[ ",$release_features," == *,video-ffmpeg,* ]]; then
+        if [[ -z "${VCPKG_ROOT:-}" ]]; then
+            echo "VCPKG_ROOT is required to bundle the Windows FFmpeg runtime" >&2
+            exit 2
+        fi
+        vcpkg_root="$VCPKG_ROOT"
+        if command -v cygpath >/dev/null 2>&1; then
+            vcpkg_root="$(cygpath -u "$vcpkg_root")"
+        fi
+        ffmpeg_bin="$vcpkg_root/installed/x64-windows/bin"
+        if ! compgen -G "$ffmpeg_bin/*.dll" >/dev/null; then
+            echo "Windows FFmpeg runtime DLLs were not found in $ffmpeg_bin" >&2
+            exit 2
+        fi
+        cp "$ffmpeg_bin"/*.dll "$output/"
+    fi
     cat > "$output/run.bat" <<'BAT'
 @echo off
 "%~dp0crabgal.exe" "%~dp0game.hxz"

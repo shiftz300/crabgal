@@ -7,6 +7,7 @@ use crate::ui::dialog::DialogRequest;
 use crate::ui::extra::ExtraUi;
 use crate::ui::save_load::SaveLoadUi;
 use crate::ui::settings_panel::SettingsUi;
+use crate::ui::title::ReturnToTitleTransition;
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum UiInputScope {
@@ -39,12 +40,13 @@ pub(crate) struct InputScopeContext<'w> {
     save_load: Res<'w, SaveLoadUi>,
     backlog: Res<'w, BacklogUiState>,
     extra: Res<'w, ExtraUi>,
+    return_to_title: Option<Res<'w, ReturnToTitleTransition>>,
     state: Res<'w, GameState>,
     scope: ResMut<'w, UiInputScope>,
 }
 
 pub(crate) fn sync(mut context: InputScopeContext) {
-    *context.scope = if context.loading.blocked {
+    *context.scope = if context.loading.blocked || context.return_to_title.is_some() {
         UiInputScope::Loading
     } else if context.dialog.is_some() {
         UiInputScope::Dialog
