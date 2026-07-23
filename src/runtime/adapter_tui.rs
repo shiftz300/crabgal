@@ -231,7 +231,7 @@ fn replace_file(source: &Path, target: &Path) -> io::Result<()> {
 fn replace_file(source: &Path, target: &Path) -> io::Result<()> {
     match fs::rename(source, target) {
         Ok(()) => Ok(()),
-        Err(error) if target.exists() => {
+        Err(_) if target.exists() => {
             fs::remove_file(target)?;
             fs::rename(source, target)
         }
