@@ -725,24 +725,23 @@ mod tests {
 
     #[test]
     fn check_command_uses_the_explicit_project_path() {
+        let expected = std::env::current_dir().unwrap().join("editor-project");
         let path = project_root_from_args(
-            ["check", "/tmp/editor-project"]
+            ["check", "editor-project"]
                 .into_iter()
                 .map(std::ffi::OsString::from),
         );
-        assert_eq!(path, Path::new("/tmp/editor-project"));
+        assert_eq!(path, expected);
     }
 
     #[test]
     fn studio_command_uses_the_native_project_path() {
-        let args = ["studio", "/tmp/editor-project"]
+        let expected = std::env::current_dir().unwrap().join("editor-project");
+        let args = ["studio", "editor-project"]
             .into_iter()
             .map(std::ffi::OsString::from)
             .collect::<Vec<_>>();
-        assert_eq!(
-            project_root_from_args(args.iter().cloned()),
-            Path::new("/tmp/editor-project")
-        );
+        assert_eq!(project_root_from_args(args.iter().cloned()), expected);
     }
 
     #[test]
