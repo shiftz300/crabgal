@@ -22,7 +22,9 @@ use crate::ui::settings_panel::{
     SettingsUi, SettingsWatermark,
 };
 use crate::ui::textbox::{InitialTextboxFade, TextboxLayoutMotion, TextboxOverlayFade};
-use crate::ui::title::{PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion};
+use crate::ui::title::{
+    PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion, TitleContinuePreview,
+};
 
 const SETTLED_EPSILON: f32 = 0.001;
 
@@ -44,6 +46,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     menu_fades: Query<'w, 's, &'static MenuFade>,
     button_feedback: Query<'w, 's, (&'static Interaction, &'static ButtonPressFeedback)>,
     title_buttons: Query<'w, 's, (&'static Interaction, &'static TitleButtonMotion)>,
+    title_previews: Query<'w, 's, &'static TitleContinuePreview>,
     choice_roots: Query<'w, 's, &'static ChoiceRoot>,
     choices: Query<'w, 's, (&'static Interaction, &'static ChoiceButton)>,
     backlog_roots: Query<'w, 's, &'static BacklogRoot>,
@@ -137,6 +140,10 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .title_buttons
             .iter()
             .any(|(interaction, motion)| motion.is_animating(*interaction))
+        || context
+            .title_previews
+            .iter()
+            .any(TitleContinuePreview::is_animating)
         || choices_are_animating(&context)
         || context
             .backlog_roots

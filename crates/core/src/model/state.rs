@@ -81,6 +81,10 @@ pub struct State {
     pub dialogue: Option<Dialogue>,
     /// Last settled dialogue, used by WebGAL `-concat`.
     pub previous_dialogue: Option<Dialogue>,
+    /// Active sentence-tail deletion. This is persisted so loading a save
+    /// resumes the same visual character and click-wait phase.
+    #[serde(default)]
+    pub dialogue_retraction: Option<DialogueRetraction>,
     /// Mini avatar image path (displayed beside text box).
     pub mini_avatar: Option<String>,
     /// Mini avatar enter/exit transition progress (0→1).
@@ -623,6 +627,19 @@ pub struct Dialogue {
     pub auto_advance: bool,
 }
 
+/// Frame-rate-independent sentence-tail deletion presentation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DialogueRetraction {
+    /// Final plain-text prefix after the deletion animation.
+    pub keep: String,
+    /// UI glyph count at which deletion stops.
+    pub target_visible_chars: usize,
+    /// Fractional deletion progress carried across frames and save/load.
+    pub fractional_chars: f64,
+    /// Deletion has completed and exactly one new advance input is required.
+    pub awaiting_advance: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DialoguePause {
     /// Number of visible characters before this pause becomes active.
@@ -795,6 +812,7 @@ impl State {
         self.sprites = snapshot.sprites;
         self.dialogue = Some(snapshot.dialogue);
         self.previous_dialogue = None;
+        self.dialogue_retraction = None;
         self.mini_avatar = snapshot.mini_avatar;
         self.textbox_hidden = snapshot.textbox_hidden;
         self.textbox_auto_hidden = snapshot.textbox_auto_hidden;
@@ -818,7 +836,8 @@ impl State {
     }
 
     pub fn presentation_blocked(&self) -> bool {
-        (self.wait_blocking && self.wait_remaining > 0.0)
+        self.dialogue_retraction.is_some()
+            || (self.wait_blocking && self.wait_remaining > 0.0)
             || self.intro.as_ref().is_some_and(|intro| intro.blocking)
             || self.curtain.blocking
             || self

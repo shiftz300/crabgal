@@ -9,3 +9,4 @@ serde = { workspace = true }
 noyalib = { workspace = true }
 log = { workspace = true }
 postcard = { workspace = true }
+unicode-segmentation = { workspace = true }

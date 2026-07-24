@@ -311,13 +311,43 @@
           }
         },
         {
-          "id": "10-09-end-note",
+          "id": "10-09-backspace-source",
           "type": "dialogue",
-          "content": [{ "type": "text", "text": "10-09 新增能力全部播放完毕。继续后应平滑返回标题页。" }],
+          "content": [{ "type": "text", "text": "10-09 句尾退格：我当然来了" }],
           "props": { "characterId": "aya", "expression": "thinking", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
         },
         {
-          "id": "10-09-end",
+          "id": "10-09-backspace-first",
+          "type": "callExtensionFunction",
+          "content": null,
+          "props": {
+            "target": "shiftz.backspace/backspace-to",
+            "paramsJson": {
+              "source": { "kind": "lit", "value": "10-09 句尾退格：我当然来了" },
+              "keep": { "kind": "lit", "value": "10-09 句尾退格：我当然" }
+            }
+          }
+        },
+        {
+          "id": "10-09-backspace-second",
+          "type": "callExtensionFunction",
+          "content": null,
+          "props": {
+            "target": "shiftz.backspace/backspace-to",
+            "paramsJson": {
+              "source": { "kind": "lit", "value": "10-09 句尾退格：我当然" },
+              "keep": { "kind": "lit", "value": "10-09 句尾退格：我" }
+            }
+          }
+        },
+        {
+          "id": "10-10-end-note",
+          "type": "dialogue",
+          "content": [{ "type": "text", "text": "10-10 新增能力全部播放完毕。继续后应平滑返回标题页。" }],
+          "props": { "characterId": "aya", "expression": "thinking", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
+        },
+        {
+          "id": "10-10-end",
           "type": "endChapter",
           "content": null,
           "props": {}

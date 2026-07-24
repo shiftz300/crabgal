@@ -54,6 +54,10 @@
     `showExtensionUI`、`hideExtensionUI`、`callExtensionFunction`、`stageAnimation`。
 20. 每项至少检查一次资源、参数、等待/非等待和目标清理。内置类型不得降级为第三方
     `HostCommand`；真正的第三方 extension capability 未安装 host plugin 时只记录明确警告。
+    `shiftz.backspace/backspace-to` 和旧
+    `maincore.backspace-to/backspace-to` 必须直接编译为原生句尾退格：按打字速度反向删除到
+    `keep`，删完后只接受一次新的推进输入，连续退格不吞原文；同步定位到退格块时保留动画，
+    定位到后续块时则确定性完成之前的退格，不加载扩展 bundle。
 21. 为 `stageAnimation` 建立 camera、character、scene layer 三类 track，分别覆盖首关键帧插值、
     相邻关键帧 easing、hold-last、倍率、有限循环、无限循环和 muted track；预期三类目标共用一个
     时钟，低帧率下也不发生相互漂移。

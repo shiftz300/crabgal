@@ -203,6 +203,7 @@ fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
     let mut targets = BTreeSet::new();
     let mut events = BTreeSet::new();
     let mut animations = 0;
+    let mut retractions = 0;
     let mut has_muted_track = false;
     let mut has_repeated_fast_blocking_clip = false;
     for scene in scenes {
@@ -213,34 +214,38 @@ fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
             scene.diagnostics
         );
         for action in scene.actions {
-            let Action::StageAnimation { animation } = action else {
-                continue;
-            };
-            animations += 1;
-            has_repeated_fast_blocking_clip |= animation.repeat == 1
-                && (animation.playback_rate - 1.5).abs() <= f32::EPSILON
-                && animation.blocking;
-            for track in animation.tracks {
-                properties.insert(stage_property_name(track.property));
-                targets.insert(match track.target {
-                    StageTarget::Camera => "camera",
-                    StageTarget::Character { .. } => "character",
-                    StageTarget::SceneLayer { .. } => "scene-layer",
-                });
-                has_muted_track |= track.muted;
-            }
-            for event in animation.events {
-                events.insert(match event.kind {
-                    StageEventKind::CameraShake(_) => "camera-shake",
-                    StageEventKind::CameraPatch { .. } => "camera-patch",
-                    StageEventKind::Particle { .. } => "particle",
-                    StageEventKind::Scene(_) => "scene",
-                });
+            match action {
+                Action::RetractDialogue { .. } => retractions += 1,
+                Action::StageAnimation { animation } => {
+                    animations += 1;
+                    has_repeated_fast_blocking_clip |= animation.repeat == 1
+                        && (animation.playback_rate - 1.5).abs() <= f32::EPSILON
+                        && animation.blocking;
+                    for track in animation.tracks {
+                        properties.insert(stage_property_name(track.property));
+                        targets.insert(match track.target {
+                            StageTarget::Camera => "camera",
+                            StageTarget::Character { .. } => "character",
+                            StageTarget::SceneLayer { .. } => "scene-layer",
+                        });
+                        has_muted_track |= track.muted;
+                    }
+                    for event in animation.events {
+                        events.insert(match event.kind {
+                            StageEventKind::CameraShake(_) => "camera-shake",
+                            StageEventKind::CameraPatch { .. } => "camera-patch",
+                            StageEventKind::Particle { .. } => "particle",
+                            StageEventKind::Scene(_) => "scene",
+                        });
+                    }
+                }
+                _ => {}
             }
         }
     }
 
     assert_eq!(animations, 8);
+    assert_eq!(retractions, 2);
     assert_eq!(
         targets,
         BTreeSet::from(["camera", "character", "scene-layer"])
@@ -490,6 +495,7 @@ fn action_name(action: &Action) -> &'static str {
         // LetsGal 1.8 owns this adapter-native fixture; the WebGAL showcase
         // intentionally does not need to manufacture Studio timeline JSON.
         Action::StageAnimation { .. } => "stage-animation",
+        Action::RetractDialogue { .. } => "retract-dialogue",
     }
 }
 

@@ -10,7 +10,7 @@ use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
 use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePreview};
 use crate::ui::dialog::{DialogAction, DialogRequest};
-use crate::ui::foundation::{UiFonts, exp_lerp, text};
+use crate::ui::foundation::{UiFonts, exp_lerp, smoothstep, text};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 const RETURN_COVER_SECONDS: f32 = 0.24;
@@ -165,8 +165,24 @@ impl TitleButtonMotion {
     }
 }
 
+const CONTINUE_PREVIEW_SLIDE_PX: f32 = 36.0;
+const CONTINUE_PREVIEW_ALPHA: f32 = 0.78;
+const CONTINUE_PREVIEW_BLUR: f32 = 36.0;
+
+#[derive(Component, Default)]
+pub struct TitleContinuePreview {
+    progress: f32,
+    target: f32,
+}
+
+impl TitleContinuePreview {
+    pub(crate) fn is_animating(&self) -> bool {
+        (self.progress - self.target).abs() > 0.001
+    }
+}
+
 #[derive(Component)]
-pub struct TitleContinuePreview;
+pub(crate) struct TitleContinuePreviewAlpha(f32);
 
 type TitleButtonAnimationQuery<'w, 's> = Query<
     'w,
@@ -404,7 +420,7 @@ fn spawn_continue_preview(
 ) {
     surface
         .spawn((
-            TitleContinuePreview,
+            TitleContinuePreview::default(),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Percent(105.0),
@@ -417,14 +433,18 @@ fn spawn_continue_preview(
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.78)),
+            UiTransform::from_translation(Val2::px(CONTINUE_PREVIEW_SLIDE_PX, 0.0)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
             BlurSource,
             BlurStrength(36.0),
         ))
         .with_children(|panel| {
             if let Some(image) = &preview.image {
+                let mut image = ImageNode::new(image.clone());
+                image.color = image.color.with_alpha(0.0);
                 panel.spawn((
-                    ImageNode::new(image.clone()),
+                    image,
+                    TitleContinuePreviewAlpha(1.0),
                     Node {
                         width: Val::Px(270.0),
                         height: Val::Percent(100.0),
@@ -447,8 +467,14 @@ fn spawn_continue_preview(
                     ..default()
                 },))
                 .with_children(|copy| {
-                    copy.spawn(text(speaker, font, 22.5, 0.8));
-                    copy.spawn(text(dialogue, font, 18.75, 0.67));
+                    copy.spawn((
+                        text(speaker, font, 22.5, 0.0),
+                        TitleContinuePreviewAlpha(0.8),
+                    ));
+                    copy.spawn((
+                        text(dialogue, font, 18.75, 0.0),
+                        TitleContinuePreviewAlpha(0.67),
+                    ));
                 });
         });
 }
@@ -504,7 +530,7 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                 crate::storage::save::QUICK_SAVE_SLOT,
                 &context.project_root,
             ) {
-                if let Err(error) = loaded.restore_into(&mut context.state) {
+                if let Err(error) = restore_continuation(loaded, &mut context.state) {
                     log::error!("continue rejected: {error}");
                     context
                         .commands
@@ -515,6 +541,13 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                             ),
                             DialogAction::Noop,
                         ));
+                } else {
+                    *context.actions = InputActions::default();
+                    log::info!(
+                        "continued quick save · {}:{}",
+                        context.state.current_scene,
+                        context.state.cursor
+                    );
                 }
             } else {
                 context
@@ -560,14 +593,30 @@ pub fn handle_title_input(mut context: TitleInputContext) {
 pub fn animate_title_buttons(
     time: Res<Time>,
     mut buttons: TitleButtonAnimationQuery,
-    mut previews: Query<&mut Node, (With<TitleContinuePreview>, Without<TitleButtonMotion>)>,
+    mut previews: Query<
+        (
+            &mut TitleContinuePreview,
+            &mut Node,
+            &mut UiTransform,
+            &mut BackgroundColor,
+            &mut BlurStrength,
+        ),
+        Without<TitleButtonMotion>,
+    >,
+    mut preview_texts: Query<(&TitleContinuePreviewAlpha, &mut TextColor)>,
+    mut preview_images: Query<(&TitleContinuePreviewAlpha, &mut ImageNode), Without<TextColor>>,
 ) {
-    let amount = exp_lerp(time.delta_secs(), 12.0);
+    let delta = time.delta_secs();
+    let amount = exp_lerp(delta, 12.0);
+    let mut continue_visible = false;
     for (interaction, mut motion, mut node, mut transform, action) in &mut buttons {
+        if matches!(action, Some(TitleAction::Continue)) {
+            continue_visible = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
+        }
         if *interaction == Interaction::Pressed {
             motion.press = 1.0;
         } else {
-            motion.press *= (-time.delta_secs() * 16.0).exp();
+            motion.press *= (-delta * 16.0).exp();
             if motion.press < 0.001 {
                 motion.press = 0.0;
             }
@@ -589,17 +638,78 @@ pub fn animate_title_buttons(
         node.margin.left = Val::Auto;
         node.padding.left = Val::Px(motion.padding);
         transform.scale = Vec2::splat(1.0 - 0.045 * motion.press);
-        if matches!(action, Some(TitleAction::Continue))
-            && let Ok(mut preview) = previews.single_mut()
-        {
-            preview.display = if matches!(interaction, Interaction::Hovered | Interaction::Pressed)
-            {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
     }
+
+    let Ok((mut preview, mut node, mut transform, mut background, mut blur)) =
+        previews.single_mut()
+    else {
+        return;
+    };
+    preview.target = f32::from(continue_visible);
+    if preview.target > 0.0 {
+        node.display = Display::Flex;
+    }
+
+    let rate = if preview.target > preview.progress {
+        15.0
+    } else {
+        18.0
+    };
+    preview.progress += (preview.target - preview.progress) * exp_lerp(delta, rate);
+    if (preview.progress - preview.target).abs() <= 0.001 {
+        preview.progress = preview.target;
+    }
+
+    let opacity = smoothstep(preview.progress);
+    transform.translation = Val2::px(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - opacity), 0.0);
+    background.0 = Color::srgba(0.0, 0.0, 0.0, CONTINUE_PREVIEW_ALPHA * opacity);
+    blur.0 = CONTINUE_PREVIEW_BLUR * opacity;
+    for (base, mut color) in &mut preview_texts {
+        color.0 = color.0.with_alpha(base.0 * opacity);
+    }
+    for (base, mut image) in &mut preview_images {
+        image.color = image.color.with_alpha(base.0 * opacity);
+    }
+
+    if preview.progress == 0.0 && preview.target == 0.0 {
+        node.display = Display::None;
+    }
+}
+
+#[cfg(test)]
+mod continue_preview_tests {
+    use super::{CONTINUE_PREVIEW_SLIDE_PX, smoothstep};
+
+    #[test]
+    fn preview_moves_from_and_back_to_the_right() {
+        let hidden = smoothstep(0.0);
+        let visible = smoothstep(1.0);
+        assert_eq!(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - hidden), 36.0);
+        assert_eq!(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - visible), 0.0);
+    }
+
+    #[test]
+    fn preview_curve_is_not_linear() {
+        assert!(smoothstep(0.25) < 0.25);
+        assert!(smoothstep(0.75) > 0.75);
+    }
+}
+
+fn restore_continuation(
+    saved: crabgal_loader::SavedState,
+    current: &mut GameState,
+) -> anyhow::Result<()> {
+    // Restore into a candidate first. A script change can reconcile a formerly
+    // valid save to an ended state; the live title state must remain intact if
+    // that happens.
+    let mut candidate = current.0.clone();
+    saved.restore_into(&mut candidate)?;
+    anyhow::ensure!(
+        !candidate.ended,
+        "quick save no longer points to a playable scene"
+    );
+    current.0 = candidate;
+    Ok(())
 }
 
 fn start_game(state: &mut GameState) {
@@ -636,6 +746,7 @@ fn start_game_from_keyboard(
 mod tests {
     use super::*;
     use crabgal_core::{Action, Program, State};
+    use crabgal_loader::CrabgalStore;
 
     #[test]
     fn return_to_title_fully_covers_before_it_reveals() {
@@ -706,5 +817,63 @@ mod tests {
             "a later Enter press must advance the intro"
         );
         assert_eq!(state.intro.as_ref().unwrap().page, 0);
+    }
+
+    #[test]
+    fn continue_restores_the_saved_scene_cursor_and_dialogue() {
+        let program = Program::from_scenes([(
+            "start".into(),
+            vec![
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "第一句".into(),
+                    options: Default::default(),
+                },
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "继续的位置".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]);
+        let mut saved = State::new();
+        saved.install_program(program.clone());
+        saved.current_scene = "start".into();
+        saved.ended = false;
+        crabgal_core::step::step(&mut saved);
+        crabgal_core::step::step(&mut saved);
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("crabgal-continue-{}-{nonce}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::storage::save::save_game(
+            &CrabgalStore,
+            &saved,
+            crate::storage::save::QUICK_SAVE_SLOT,
+            &root,
+        )
+        .unwrap();
+
+        let loaded = crate::storage::save::load_game(
+            &CrabgalStore,
+            crate::storage::save::QUICK_SAVE_SLOT,
+            &root,
+        )
+        .unwrap();
+        let mut current = GameState(State::new());
+        current.install_program(program);
+        current.ended = true;
+
+        restore_continuation(loaded, &mut current).unwrap();
+
+        assert!(!current.ended);
+        assert_eq!(current.current_scene, saved.current_scene);
+        assert_eq!(current.cursor, saved.cursor);
+        assert_eq!(current.dialogue, saved.dialogue);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

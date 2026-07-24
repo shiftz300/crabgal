@@ -7,7 +7,7 @@ crabgal 将四类生命周期不同的数据分开处理：
 | 数据域 | 当前表示 | 持久化位置 | 恢复规则 |
 |---|---|---|---|
 | 编译脚本 | `Arc<Program>` | 不进入存档 | 启动或热重载时由当前项目安装 |
-| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v8 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
+| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v9 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
 | 长效玩家数据 | global variables、已读历史、CG/BGM 解锁、设置 | `profile.bin`、`read_history.bin`、`gallery.bin`、`settings.bin` | 不被单槽读档或 Backlog 回想覆盖 |
 | 一次性运行事件 | `effect_queue` 等 | 不持久化 | 由呈现层消费，恢复时清空 |
 
@@ -45,16 +45,16 @@ crabgal 将四类生命周期不同的数据分开处理：
 - `State`、槽位 metadata 和每个 `RollbackSnapshot` 都携带该值；
 - `Program::insert_scene` 与 `State::install_program` 会同步重新计算或安装该值。
 
-fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v8 存档分别以 CRC32 校验 metadata 与 state payload。
+fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v9 存档分别以 CRC32 校验 metadata 与 state payload。
 
-## v8 二进制存档格式
+## v9 二进制存档格式
 
-当前原生存档版本为严格的 **v8**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
+当前原生存档版本为严格的 **v9**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
 
 ```text
 offset  size  field
 0       8     magic = "CRABGAL\0"
-8       4     version = 8 (little-endian u32)
+8       4     version = 9 (little-endian u32)
 12      4     metadata_len (little-endian u32)
 16      4     state_len (little-endian u32)
 20      4     CRC32(metadata payload)
@@ -82,7 +82,7 @@ metadata 上限为 64 KiB，state payload 上限为 64 MiB；完整解码时 hea
 
 因此脚本 Action 总数不会直接放大存档；长期玩家数据也不会被复制进每个槽位。
 
-固定 golden 位于 [`crates/loader/tests/fixtures/store-v8.sav`](../../../crates/loader/tests/fixtures/store-v8.sav)，由 `save_v8_golden_is_stable` 防止无意改变字节格式。v8 扩展了 LetsGal 1.8.0 相机后处理状态；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v8 不兼容旧二进制存档。
+固定 golden 位于 [`crates/loader/tests/fixtures/store-v9.sav`](../../../crates/loader/tests/fixtures/store-v9.sav)，由 `save_v9_golden_is_stable` 防止无意改变字节格式。v9 在 v8 的 LetsGal 1.8.0 相机状态之上加入可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v9 不兼容旧二进制存档。
 
 ## SavedState 恢复边界
 
@@ -120,15 +120,15 @@ saves/
   slot_N.webp
 ```
 
-预览 WebP 不嵌入 `.sav`，也不参与 v8 CRC。删除槽位会同时删除 state 与 preview；只清除游戏槽会保留 settings/profile/read history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存 writer cache。
+预览 WebP 不嵌入 `.sav`，也不参与 v9 CRC。删除槽位会同时删除 state 与 preview；只清除游戏槽会保留 settings/profile/read history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存 writer cache。
 
 写入采用同目录临时文件、`write_all`、`sync_all` 和 `rename` 原子替换。进程在替换前中断时不会用半写入 payload 覆盖现有槽位。
 
 ## 版本与损坏处理
 
-- version 不是 8：`inspect` 返回 `StoreStatus::Unsupported(version)`，`decode` 返回错误；当前没有旧版本迁移器；
+- version 不是 9：`inspect` 返回 `StoreStatus::Unsupported(version)`，`decode` 返回错误；当前没有旧版本迁移器；
 - magic、长度、metadata CRC32 或 metadata schema 无法解析：`Corrupt` 或 decode error；
 - state 截断或 state CRC32 不匹配：槽位前缀仍可展示，但实际 LOAD 返回 decode error；
-- v8 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
+- v9 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
 
 旧版本不能通过“尽量反序列化”静默加载。若未来需要迁移，应增加明确的版本 adapter、输入上限、迁移测试与新的固定 golden，并保持解码结果只能通过 `SavedState::restore_into` 进入运行态。

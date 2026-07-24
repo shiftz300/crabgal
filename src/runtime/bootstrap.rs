@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -104,6 +106,11 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
+    let _instance = single_instance_required(check_only, hot_reload, benchmark).then(|| {
+        SingleInstanceGuard::acquire(&project_root)
+            .context("another instance of this project is already running")
+    });
+    let _instance = _instance.transpose()?;
     let mut app = build_opened_app(
         project_root,
         config,
@@ -118,6 +125,52 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     );
     app.run();
     Ok(())
+}
+
+const fn single_instance_required(
+    check_only: bool,
+    development: bool,
+    benchmark: Option<BenchmarkOptions>,
+) -> bool {
+    !check_only && !development && benchmark.is_none()
+}
+
+struct SingleInstanceGuard {
+    _file: File,
+}
+
+impl SingleInstanceGuard {
+    fn acquire(project_root: &Path) -> Result<Self> {
+        let path = instance_lock_path(project_root);
+        let directory = path.parent().context("instance lock path has no parent")?;
+        std::fs::create_dir_all(directory).with_context(|| {
+            format!(
+                "failed to create runtime data directory {}",
+                directory.display()
+            )
+        })?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open instance lock {}", path.display()))?;
+        fs2::FileExt::try_lock_exclusive(&file)
+            .with_context(|| format!("failed to lock {}", path.display()))?;
+        Ok(Self { _file: file })
+    }
+}
+
+fn instance_lock_path(project_root: &Path) -> PathBuf {
+    let canonical = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_owned());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    std::env::temp_dir()
+        .join("crabgal")
+        .join(format!("{:016x}.lock", hasher.finish()))
 }
 
 fn hot_reload_requested(args: &[std::ffi::OsString]) -> bool {
@@ -188,6 +241,11 @@ fn build_opened_app(
                     visible: true,
                     ..default()
                 }),
+                // Keep the native window alive until the shutdown pipeline has
+                // flushed persistence. Despawning it immediately can race the
+                // final winit `Destroyed` event and produce an unknown-window
+                // warning during an otherwise successful exit.
+                close_when_requested: false,
                 ..default()
             })
             .set(ImagePlugin::default())
@@ -751,6 +809,35 @@ mod tests {
         assert!(hot_reload_requested(&args("studio")));
         assert!(!hot_reload_requested(&args("benchmark")));
         assert!(!hot_reload_requested(&args("/tmp/release-project")));
+    }
+
+    #[test]
+    fn only_the_shipping_runtime_requires_a_process_lock() {
+        assert!(single_instance_required(false, false, None));
+        assert!(!single_instance_required(false, true, None));
+        assert!(!single_instance_required(true, false, None));
+        assert!(!single_instance_required(
+            false,
+            false,
+            Some(BenchmarkOptions {
+                seconds: 1.0,
+                cursor: None,
+                cameras: crate::ui::performance::BenchmarkCameras::Full,
+            })
+        ));
+    }
+
+    #[test]
+    fn instance_lock_is_released_with_its_guard() {
+        let root = unique_temp_path("instance-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = instance_lock_path(&root);
+        let first = SingleInstanceGuard::acquire(&root).unwrap();
+        assert!(SingleInstanceGuard::acquire(&root).is_err());
+        drop(first);
+        assert!(SingleInstanceGuard::acquire(&root).is_ok());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

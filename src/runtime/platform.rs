@@ -4,6 +4,8 @@ use std::fmt;
 use std::time::Instant;
 
 use anyhow::Error;
+use bevy::app::AppExit;
+use bevy::audio::{AudioSink, AudioSinkPlayback};
 use bevy::camera::Viewport;
 use bevy::ecs::system::SystemParam;
 use bevy::log::{BoxedFmtLayer, Level, LogPlugin, tracing_subscriber};
@@ -12,11 +14,12 @@ use bevy::render::batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreproc
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::{Render, RenderApp};
 use bevy::window::PrimaryWindow;
+use bevy::window::WindowCloseRequested;
 use bevy::winit::{UpdateMode, WinitSettings};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
-use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
+use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState, HotReloadSession};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
 use crate::ui::control_bar::{AutoHideTiming, QuickPreviewSurface, ToggleStates};
@@ -39,6 +42,29 @@ pub(crate) struct InputActions {
 #[derive(Resource, Default)]
 pub(crate) struct PointerClickHistory {
     last_click: Option<f64>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct GracefulExit {
+    requested: bool,
+}
+
+/// Convert every native close request into one orderly application exit.
+///
+/// The window entity deliberately remains alive for this final schedule. This
+/// gives save/profile systems a chance to observe `AppExit` and flush their
+/// state before winit tears down the native window.
+pub(crate) fn request_graceful_exit(
+    mut requests: MessageReader<WindowCloseRequested>,
+    mut exits: MessageWriter<AppExit>,
+    mut shutdown: ResMut<GracefulExit>,
+) {
+    let requested = requests.read().next().is_some();
+    if requested && !shutdown.requested {
+        shutdown.requested = true;
+        log::info!("shutdown requested · flushing state");
+        exits.write(AppExit::Success);
+    }
 }
 
 pub(crate) fn collect_input(
@@ -143,6 +169,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
+    hot_reload: Option<Res<'w, HotReloadSession>>,
 }
 
 pub(crate) fn update_lifecycle(
@@ -152,8 +179,8 @@ pub(crate) fn update_lifecycle(
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     let focused = context.windows.single().is_ok_and(|window| window.focused);
-    let editor_sync = context.editor_sync.is_some();
-    let pause_for_background = should_pause_for_background(focused, editor_sync);
+    let development = context.editor_sync.is_some() || context.hot_reload.is_some();
+    let pause_for_background = should_pause_for_background(focused, development);
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
@@ -162,9 +189,10 @@ pub(crate) fn update_lifecycle(
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
-    let next = if context.benchmark.is_some() {
+    let next = if context.benchmark.is_some() || (development && !focused) {
         // A benchmark must keep measuring the render loop even when the
-        // current visual-novel frame itself is static.
+        // current visual-novel frame itself is static. Development previews
+        // likewise remain fully live while the user works in another window.
         RuntimeActivity::Active
     } else if pause_for_background {
         RuntimeActivity::Background
@@ -198,14 +226,11 @@ pub(crate) fn update_lifecycle(
     }
     let unfocused_mode = if let Some(mode) = benchmark_mode {
         mode
-    } else if editor_sync {
-        // Studio sync must observe editor writes and selected-block changes
-        // immediately even when its independent native preview is unfocused.
+    } else if development {
+        // Development sessions keep rendering and observing source changes
+        // while the native preview is unfocused. Shipping runtimes sleep.
         UpdateMode::Continuous
     } else {
-        // Ordinary development follows shipping lifecycle behavior. File
-        // watching remains enabled, but an unfocused static preview does not
-        // burn a core merely because this is a debug build.
         UpdateMode::reactive_low_power(std::time::Duration::MAX)
     };
     if winit.unfocused_mode != unfocused_mode {
@@ -221,8 +246,37 @@ pub(crate) fn update_lifecycle(
     }
 }
 
-const fn should_pause_for_background(focused: bool, editor_sync: bool) -> bool {
-    !focused && !editor_sync
+const fn should_pause_for_background(focused: bool, development: bool) -> bool {
+    !focused && !development
+}
+
+#[derive(Component)]
+pub(crate) struct BackgroundPausedAudio;
+
+/// Pause every Bevy/rodio sink when a shipping window loses focus.
+///
+/// The marker distinguishes lifecycle-paused audio from tracks the player or
+/// UI had already paused, so focus recovery never starts something it does not
+/// own.
+pub(crate) fn sync_background_audio(
+    activity: Res<RuntimeActivity>,
+    sinks: Query<(Entity, &AudioSink, Option<&BackgroundPausedAudio>)>,
+    mut commands: Commands,
+) {
+    let background = *activity == RuntimeActivity::Background;
+    for (entity, sink, paused_by_lifecycle) in &sinks {
+        match (background, paused_by_lifecycle.is_some(), sink.is_paused()) {
+            (true, false, false) => {
+                sink.pause();
+                commands.entity(entity).insert(BackgroundPausedAudio);
+            }
+            (false, true, _) => {
+                sink.play();
+                commands.entity(entity).remove::<BackgroundPausedAudio>();
+            }
+            _ => {}
+        }
+    }
 }
 
 fn core_is_animating(state: &GameState) -> bool {
@@ -441,7 +495,40 @@ mod tests {
     use bevy::window::WindowResolution;
 
     #[test]
-    fn only_studio_sync_keeps_running_without_focus() {
+    fn close_requests_emit_one_exit_and_leave_window_alive_for_flushing() {
+        let mut app = App::new();
+        app.add_message::<WindowCloseRequested>()
+            .add_message::<AppExit>()
+            .init_resource::<GracefulExit>()
+            .add_systems(Update, request_graceful_exit);
+        let window = app.world_mut().spawn(Window::default()).id();
+
+        app.world_mut()
+            .write_message(WindowCloseRequested { window });
+        app.world_mut()
+            .write_message(WindowCloseRequested { window });
+        app.update();
+
+        assert!(app.world().get_entity(window).is_ok());
+        assert!(app.world().resource::<GracefulExit>().requested);
+        let exits = app
+            .world_mut()
+            .resource_mut::<Messages<AppExit>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert_eq!(exits, [AppExit::Success]);
+
+        app.world_mut()
+            .write_message(WindowCloseRequested { window });
+        app.update();
+        assert!(
+            app.world().resource::<Messages<AppExit>>().is_empty(),
+            "duplicate native close events must not start another shutdown"
+        );
+    }
+
+    #[test]
+    fn every_development_session_keeps_running_without_focus() {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));

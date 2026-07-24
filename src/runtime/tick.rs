@@ -74,6 +74,7 @@ pub struct TickContext<'w, 's> {
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
     editor_cursor_sync: Local<'s, EditorCursorSync>,
+    commands: Commands<'w, 's>,
 }
 
 /// Advances input, text timing, script hot reload, and transition state.
@@ -122,6 +123,13 @@ pub fn tick(mut context: TickContext) {
             &context.windows,
             context.toggles.hide,
         );
+    state_changed |= step::update_dialogue_retraction(
+        context.state.bypass_change_detection(),
+        delta_seconds,
+        context.settings.typewriter_speed,
+        presentation_advance,
+        context.toggles.skip,
+    );
     state_changed |= update_transitions(
         context.state.bypass_change_detection(),
         delta_seconds as f32,
@@ -130,8 +138,11 @@ pub fn tick(mut context: TickContext) {
     if presentation_was_blocked {
         context.toggles.skip = false;
         if context.editor_sync.is_none() && !context.state.presentation_blocked() {
-            step::step(context.state.bypass_change_detection());
-            state_changed = true;
+            let progress = step_once(context.state.bypass_change_detection());
+            state_changed |= progress.changed;
+            if progress.return_to_title {
+                request_return_to_title(&mut context.commands);
+            }
         }
         if state_changed {
             context.state.set_changed();
@@ -139,10 +150,14 @@ pub fn tick(mut context: TickContext) {
         return;
     }
     if context.toggles.skip {
-        state_changed |= skip_once(
+        let progress = skip_once(
             context.state.bypass_change_detection(),
             &mut context.toggles,
         );
+        state_changed |= progress.changed;
+        if progress.return_to_title {
+            request_return_to_title(&mut context.commands);
+        }
         if state_changed {
             context.state.set_changed();
         }
@@ -163,14 +178,19 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    state_changed |= update_notend(context.state.bypass_change_detection());
-    state_changed |= update_auto_mode(
+    let notend = update_notend(context.state.bypass_change_detection());
+    state_changed |= notend.changed;
+    let auto = update_auto_mode(
         context.state.bypass_change_detection(),
         context.toggles.auto,
         delta_seconds,
         context.settings.auto_delay,
         &mut context.auto_timer,
     );
+    state_changed |= auto.changed;
+    if notend.return_to_title || auto.return_to_title {
+        request_return_to_title(&mut context.commands);
+    }
 
     if advance_requested(
         &context.actions,
@@ -178,7 +198,11 @@ pub fn tick(mut context: TickContext) {
         &context.windows,
         context.toggles.hide,
     ) {
-        state_changed |= advance_once(context.state.bypass_change_detection());
+        let progress = advance_once(context.state.bypass_change_detection());
+        state_changed |= progress.changed;
+        if progress.return_to_title {
+            request_return_to_title(&mut context.commands);
+        }
         *context.auto_timer = 0.0;
     }
 
@@ -187,15 +211,24 @@ pub fn tick(mut context: TickContext) {
     }
 }
 
-fn update_notend(state: &mut State) -> bool {
+#[derive(Clone, Copy, Default)]
+struct TickProgress {
+    changed: bool,
+    return_to_title: bool,
+}
+
+fn request_return_to_title(commands: &mut Commands) {
+    commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
+}
+
+fn update_notend(state: &mut State) -> TickProgress {
     let should_advance = state.dialogue.as_ref().is_some_and(|dialogue| {
         dialogue.auto_advance && dialogue.visible_chars >= dialogue.text.chars().count()
     });
     if should_advance {
-        step::advance(state);
-        step::step(state);
+        return advance_once(state);
     }
-    should_advance
+    TickProgress::default()
 }
 
 fn update_toggle_shortcuts(
@@ -510,6 +543,11 @@ pub(crate) fn seek_editor_state(
             crabgal_core::StepResult::AwaitClick => step::advance(preview),
             crabgal_core::StepResult::AwaitPresentation => {
                 while preview.presentation_blocked() {
+                    // Prior sentence-tail deletions are deterministic editor
+                    // history, so finish them without manufacturing their
+                    // separate player click. A selected deletion returned
+                    // above and keeps its native animation/yield intact.
+                    step::update_dialogue_retraction(preview, 0.0, 0.0, false, true);
                     update_transitions(preview, 86_400.0, true);
                 }
             }
@@ -584,21 +622,12 @@ fn restart_after_program_reload(state: &mut State, program: Program) {
     *state = restarted;
 }
 
-fn skip_once(state: &mut State, toggles: &mut ToggleStates) -> bool {
+fn skip_once(state: &mut State, toggles: &mut ToggleStates) -> TickProgress {
     if toggles.skip_mode == SkipMode::Read && !state.current_dialogue_is_read() {
         toggles.skip = false;
-        return false;
+        return TickProgress::default();
     }
-    if let Some(dialogue) = &mut state.dialogue {
-        let target = dialogue.text.chars().count();
-        if dialogue.visible_chars < target {
-            dialogue.visible_chars = target;
-            return true;
-        }
-        step::advance(state);
-    }
-    step::step(state);
-    true
+    advance_once(state)
 }
 
 fn update_typewriter(
@@ -727,10 +756,10 @@ fn update_auto_mode(
     delta_seconds: f64,
     delay: f64,
     timer: &mut f64,
-) -> bool {
+) -> TickProgress {
     if !enabled {
         *timer = 0.0;
-        return false;
+        return TickProgress::default();
     }
 
     let ready = state
@@ -739,19 +768,15 @@ fn update_auto_mode(
         .is_none_or(|dialogue| dialogue.visible_chars >= dialogue.text.chars().count());
     if !ready {
         *timer = 0.0;
-        return false;
+        return TickProgress::default();
     }
 
     *timer += delta_seconds;
     if *timer >= delay {
         *timer = 0.0;
-        if state.dialogue.is_some() {
-            step::advance(state);
-        }
-        step::step(state);
-        return true;
+        return advance_once(state);
     }
-    false
+    TickProgress::default()
 }
 
 fn advance_requested(
@@ -800,17 +825,42 @@ fn point_inside_rect(point: Vec2, center: Vec2, size: Vec2) -> bool {
         && (point.y - center.y).abs() <= size.y * 0.5
 }
 
-fn advance_once(state: &mut State) -> bool {
+fn advance_once(state: &mut State) -> TickProgress {
     if let Some(dialogue) = &mut state.dialogue {
         let target = dialogue.text.chars().count();
         if dialogue.visible_chars < target {
             dialogue.visible_chars = target;
-            return true;
+            return TickProgress {
+                changed: true,
+                return_to_title: false,
+            };
         }
+    }
+    let snapshot = state.clone();
+    if state.dialogue.is_some() {
         step::advance(state);
     }
-    step::step(state);
-    true
+    finish_step(state, snapshot)
+}
+
+fn step_once(state: &mut State) -> TickProgress {
+    let snapshot = state.clone();
+    finish_step(state, snapshot)
+}
+
+fn finish_step(state: &mut State, snapshot: State) -> TickProgress {
+    let result = step::step(state);
+    let return_to_title = matches!(result, crabgal_core::StepResult::EndOfScene);
+    if return_to_title {
+        // Keep the final authored frame intact while the UI covers it. The
+        // return-to-title transition performs the destructive end_game cleanup
+        // only after the screen is fully black.
+        *state = snapshot;
+    }
+    TickProgress {
+        changed: true,
+        return_to_title,
+    }
 }
 
 fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool) -> bool {
@@ -1802,6 +1852,67 @@ mod tests {
     }
 
     #[test]
+    fn editor_seek_preserves_a_selected_dialogue_retraction() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "我当然来了".into(),
+                    options: Default::default(),
+                },
+                Action::RetractDialogue {
+                    source: "我当然来了".into(),
+                    keep: "我当然".into(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        state.ended = false;
+
+        assert!(seek_editor_state(&mut state, "main", 1, 2));
+        assert_eq!(
+            state.dialogue.as_ref().map(|line| line.text.as_str()),
+            Some("我当然来了")
+        );
+        assert!(state.dialogue_retraction.is_some());
+    }
+
+    #[test]
+    fn editor_seek_completes_prior_retractions_before_the_selected_block() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "我当然来了".into(),
+                    options: Default::default(),
+                },
+                Action::RetractDialogue {
+                    source: "我当然来了".into(),
+                    keep: "我当然".into(),
+                },
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "下一句".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        state.ended = false;
+
+        assert!(seek_editor_state(&mut state, "main", 2, 3));
+        assert_eq!(
+            state.dialogue.as_ref().map(|line| line.text.as_str()),
+            Some("下一句")
+        );
+        assert!(state.dialogue_retraction.is_none());
+    }
+
+    #[test]
     fn editor_seek_rebuilds_variables_from_adapter_defaults() {
         let mut state = State::new();
         state.install_program(Program::from_scenes([(
@@ -1893,6 +2004,42 @@ mod tests {
         update_typewriter(&mut state, 0.0, 10.0, &mut clock);
 
         assert_eq!(state.dialogue.unwrap().visible_chars, 1);
+    }
+
+    #[test]
+    fn natural_end_keeps_the_final_frame_for_the_title_transition() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::ShowBg {
+                    image: "final.webp".into(),
+                    transition: Transition::Instant,
+                    transform: SpriteTransform::default(),
+                },
+                Action::Say {
+                    speaker: "续".into(),
+                    text: "最后一句".into(),
+                    options: Default::default(),
+                },
+                Action::End,
+            ],
+        )]));
+        state.current_scene = "main".into();
+        state.ended = false;
+        assert_eq!(step::step(&mut state), crabgal_core::StepResult::AwaitClick);
+        state.dialogue.as_mut().unwrap().visible_chars = 4;
+
+        let progress = advance_once(&mut state);
+
+        assert!(progress.changed);
+        assert!(progress.return_to_title);
+        assert!(!state.ended);
+        assert_eq!(state.bg.as_deref(), Some("final.webp"));
+        assert_eq!(
+            state.dialogue.as_ref().map(|line| line.text.as_str()),
+            Some("最后一句")
+        );
     }
 
     #[test]

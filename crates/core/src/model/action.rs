@@ -497,6 +497,17 @@ pub enum Action {
     StageAnimation {
         animation: StageAnimation,
     },
+    /// Retract the currently displayed dialogue from `source` to its `keep`
+    /// prefix, then wait for one explicit advance input. An empty `source`
+    /// resolves to the current dialogue for legacy authored content.
+    ///
+    /// This is adapter-neutral runtime IR. Editor adapters may lower their
+    /// own sentence-tail deletion features to it without requiring an editor
+    /// extension at runtime.
+    RetractDialogue {
+        source: String,
+        keep: String,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

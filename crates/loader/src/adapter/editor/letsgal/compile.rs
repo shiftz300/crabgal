@@ -2124,38 +2124,62 @@ fn sprite_transform_patch(props: &Map<String, Value>) -> TransformPatch {
 }
 
 fn compile_known_extension(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) -> bool {
-    if prop_string(&block.props, "target") != "avg.internal.default-shell/add-to-gallery" {
-        return false;
-    }
+    let target = prop_string(&block.props, "target");
     let params = json_value(&block.props, "paramsJson").unwrap_or(Value::Null);
-    let title = params
-        .pointer("/title/value")
-        .and_then(Value::as_str)
-        .unwrap_or("CG")
-        .to_owned();
-    let file = params
-        .pointer("/_sceneLayers/value")
-        .and_then(Value::as_str)
-        .and_then(|layers| serde_json::from_str::<Vec<Value>>(layers).ok())
-        .and_then(|layers| {
-            layers
-                .first()
-                .and_then(|layer| layer.get("assetPath"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        });
-    if let Some(file) = file {
-        report.push(
-            Action::Unlock {
-                kind: crabgal_core::UnlockKind::Cg,
-                file,
-                name: title,
-            },
-            span,
-        );
-        return true;
+    match target.as_str() {
+        "avg.internal.default-shell/add-to-gallery" => {
+            let title = literal_extension_string(&params, "title").unwrap_or_else(|| "CG".into());
+            let file = literal_extension_string(&params, "_sceneLayers")
+                .and_then(|layers| serde_json::from_str::<Vec<Value>>(&layers).ok())
+                .and_then(|layers| {
+                    layers
+                        .first()
+                        .and_then(|layer| layer.get("assetPath"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
+            if let Some(file) = file {
+                report.push(
+                    Action::Unlock {
+                        kind: crabgal_core::UnlockKind::Cg,
+                        file,
+                        name: title,
+                    },
+                    span,
+                );
+            }
+            true
+        }
+        "shiftz.backspace/backspace-to" | "maincore.backspace-to/backspace-to" => {
+            let source = literal_extension_string(&params, "source").unwrap_or_default();
+            let keep = literal_extension_string(&params, "keep");
+            match keep {
+                Some(keep)
+                    if !keep.is_empty() && (source.is_empty() || source.starts_with(&keep)) =>
+                {
+                    report.push(Action::RetractDialogue { source, keep }, span);
+                }
+                _ => report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: "invalid sentence-tail deletion: `keep` must be non-empty and, when \
+                              `source` is present, its prefix"
+                        .into(),
+                }),
+            }
+            true
+        }
+        _ => false,
     }
-    false
+}
+
+fn literal_extension_string(params: &Value, key: &str) -> Option<String> {
+    let value = params.get(key)?;
+    value
+        .get("value")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+        .map(str::to_owned)
 }
 
 fn compile_system_ui(
@@ -2586,6 +2610,115 @@ mod tests {
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
         }
+    }
+
+    #[test]
+    fn sentence_tail_deletion_extension_lowers_to_native_ir() {
+        for target in [
+            "shiftz.backspace/backspace-to",
+            "maincore.backspace-to/backspace-to",
+        ] {
+            let block = StoryBlock {
+                id: Some("backspace".into()),
+                kind: "callExtensionFunction".into(),
+                content: Value::Null,
+                props: Map::from_iter([
+                    ("target".into(), json!(target)),
+                    (
+                        "paramsJson".into(),
+                        json!({
+                            "source": {"kind":"lit","value":"我当然来了"},
+                            "keep": {"kind":"lit","value":"我当然"}
+                        }),
+                    ),
+                ]),
+                children: Vec::new(),
+                extras: Map::new(),
+            };
+            let mut report = ParseReport::default();
+
+            assert!(compile_known_extension(
+                &block,
+                SourceSpan { line: 1, column: 1 },
+                &mut report
+            ));
+            assert_eq!(
+                report.actions,
+                vec![Action::RetractDialogue {
+                    source: "我当然来了".into(),
+                    keep: "我当然".into(),
+                }]
+            );
+            assert!(report.diagnostics.is_empty());
+        }
+    }
+
+    #[test]
+    fn invalid_sentence_tail_deletion_is_not_forwarded_to_the_host() {
+        let block = StoryBlock {
+            id: Some("backspace".into()),
+            kind: "callExtensionFunction".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("target".into(), json!("shiftz.backspace/backspace-to")),
+                (
+                    "paramsJson".into(),
+                    json!({
+                        "source": {"kind":"lit","value":"原文"},
+                        "keep": {"kind":"lit","value":"不匹配"}
+                    }),
+                ),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        assert!(compile_known_extension(
+            &block,
+            SourceSpan { line: 1, column: 1 },
+            &mut report
+        ));
+        assert!(report.actions.is_empty());
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+        );
+    }
+
+    #[test]
+    fn legacy_sentence_tail_deletion_can_resolve_source_from_current_dialogue() {
+        let block = StoryBlock {
+            id: Some("backspace".into()),
+            kind: "callExtensionFunction".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("target".into(), json!("shiftz.backspace/backspace-to")),
+                (
+                    "paramsJson".into(),
+                    json!({"keep": {"kind":"lit","value":"我当然"}}),
+                ),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        assert!(compile_known_extension(
+            &block,
+            SourceSpan { line: 1, column: 1 },
+            &mut report
+        ));
+        assert_eq!(
+            report.actions,
+            vec![Action::RetractDialogue {
+                source: String::new(),
+                keep: "我当然".into(),
+            }]
+        );
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]

@@ -7,13 +7,14 @@
 use std::sync::Arc;
 
 use log::debug;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::action::Action;
 use crate::action::ChoiceTarget;
 use crate::expression::{evaluate, interpolate};
 use crate::state::{
-    BgTransition, Dialogue, IntroState, KeyframeAnimation, MenuChoice, MenuState, PresetAnimation,
-    SceneFrame, Sprite, State, TransformAnimation, TransitionRule,
+    BgTransition, Dialogue, DialogueRetraction, IntroState, KeyframeAnimation, MenuChoice,
+    MenuState, PresetAnimation, SceneFrame, Sprite, State, TransformAnimation, TransitionRule,
 };
 use crate::types::{Anchor, Transition};
 
@@ -463,6 +464,60 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
                 state.menu = None;
                 if !next {
                     return StepResult::AwaitClick;
+                }
+            }
+            Action::RetractDialogue { source, keep } => {
+                let requested_source = interpolate(source, &state.vars, &state.global_vars);
+                let keep = interpolate(keep, &state.vars, &state.global_vars);
+                let mut dialogue = state
+                    .dialogue
+                    .take()
+                    .or_else(|| state.previous_dialogue.take())
+                    .unwrap_or_else(|| Dialogue {
+                        speaker: String::new(),
+                        text: requested_source.clone(),
+                        markup: requested_source.clone(),
+                        visible_chars: requested_source.chars().count(),
+                        pauses: Vec::new(),
+                        vocal: None,
+                        volume: 1.0,
+                        auto_advance: false,
+                    });
+                let source = if requested_source.is_empty() {
+                    dialogue.text.clone()
+                } else {
+                    requested_source
+                };
+                if keep.is_empty() || source.is_empty() || !source.starts_with(&keep) {
+                    log::error!(
+                        "dialogue retraction target is not a non-empty source prefix: \
+                         source={source:?}, keep={keep:?}"
+                    );
+                    state.dialogue = Some(dialogue);
+                    continue;
+                }
+                if dialogue.text != source {
+                    dialogue.markup.clone_from(&source);
+                }
+                dialogue.text = source;
+                dialogue.visible_chars = dialogue.text.chars().count();
+                dialogue.pauses.clear();
+                dialogue.vocal = None;
+                dialogue.auto_advance = false;
+                state.previous_dialogue = None;
+                state.dialogue = Some(dialogue);
+                let target_visible_chars = keep.chars().count();
+                state.dialogue_retraction = Some(DialogueRetraction {
+                    keep,
+                    target_visible_chars,
+                    fractional_chars: 0.0,
+                    awaiting_advance: false,
+                });
+                if next {
+                    finish_dialogue_retraction(state);
+                    state.dialogue_retraction = None;
+                } else {
+                    return StepResult::AwaitPresentation;
                 }
             }
             Action::Menu { prompt, choices } => {
@@ -1276,6 +1331,7 @@ fn enter_scene(state: &mut State, scene: &str) -> bool {
     state.current_scene = scene.to_owned();
     state.cursor = 0;
     state.dialogue = None;
+    state.dialogue_retraction = None;
     state.menu = None;
     state.stage_animation = None;
     true
@@ -1283,8 +1339,92 @@ fn enter_scene(state: &mut State, scene: &str) -> bool {
 
 /// Handle user clicking to advance past a dialogue.
 pub fn advance(state: &mut State) {
+    state.dialogue_retraction = None;
     state.mark_current_dialogue_read();
     state.previous_dialogue = state.dialogue.take();
+}
+
+/// Advance the native sentence-tail deletion presentation.
+///
+/// Returns whether visible or blocking state changed. A click is accepted only
+/// after deletion had already completed on a previous tick, matching editor
+/// runtimes that install the advance handler after the animation finishes.
+pub fn update_dialogue_retraction(
+    state: &mut State,
+    delta_seconds: f64,
+    chars_per_second: f64,
+    advance: bool,
+    immediate: bool,
+) -> bool {
+    let Some(retraction) = state.dialogue_retraction.as_mut() else {
+        return false;
+    };
+    if state.dialogue.is_none() {
+        state.dialogue_retraction = None;
+        return true;
+    }
+    if immediate {
+        finish_dialogue_retraction(state);
+        state.dialogue_retraction = None;
+        return true;
+    }
+    if retraction.awaiting_advance {
+        if advance {
+            state.dialogue_retraction = None;
+            return true;
+        }
+        return false;
+    }
+
+    let speed = chars_per_second.max(0.0);
+    retraction.fractional_chars += delta_seconds.max(0.0) * speed;
+    let remove_graphemes = retraction.fractional_chars.floor() as usize;
+    if remove_graphemes == 0 {
+        return false;
+    }
+    retraction.fractional_chars -= remove_graphemes as f64;
+
+    let target = retraction.target_visible_chars;
+    let dialogue = state.dialogue.as_mut().expect("checked above");
+    let previous = dialogue.visible_chars;
+    for _ in 0..remove_graphemes {
+        if dialogue.visible_chars <= target {
+            break;
+        }
+        let visible_end = dialogue
+            .text
+            .char_indices()
+            .nth(dialogue.visible_chars)
+            .map_or(dialogue.text.len(), |(index, _)| index);
+        let grapheme_chars = dialogue.text[..visible_end]
+            .graphemes(true)
+            .next_back()
+            .map_or(1, |grapheme| grapheme.chars().count());
+        dialogue.visible_chars = dialogue
+            .visible_chars
+            .saturating_sub(grapheme_chars)
+            .max(target);
+    }
+    if dialogue.visible_chars == target {
+        dialogue.text.clone_from(&retraction.keep);
+        dialogue.markup.clone_from(&retraction.keep);
+        dialogue.pauses.clear();
+        retraction.fractional_chars = 0.0;
+        retraction.awaiting_advance = true;
+    }
+    dialogue.visible_chars != previous || retraction.awaiting_advance
+}
+
+fn finish_dialogue_retraction(state: &mut State) {
+    let Some(retraction) = state.dialogue_retraction.as_ref() else {
+        return;
+    };
+    if let Some(dialogue) = &mut state.dialogue {
+        dialogue.text.clone_from(&retraction.keep);
+        dialogue.markup.clone_from(&retraction.keep);
+        dialogue.visible_chars = retraction.target_visible_chars;
+        dialogue.pauses.clear();
+    }
 }
 
 pub fn end_game(state: &mut State) {
@@ -1293,6 +1433,7 @@ pub fn end_game(state: &mut State) {
     state.scene_stack.clear();
     state.dialogue = None;
     state.previous_dialogue = None;
+    state.dialogue_retraction = None;
     state.menu = None;
     state.bg = None;
     state.bg_transition = None;
@@ -1579,6 +1720,135 @@ mod tests {
             state.dialogue.as_ref().map(|d| d.text.as_str()),
             Some("Hello")
         );
+    }
+
+    #[test]
+    fn retracts_dialogue_then_waits_for_a_fresh_click() {
+        let mut state = state_with(vec![
+            Action::Say {
+                speaker: "A".into(),
+                text: "我当然来了".into(),
+                options: SayOptions::default(),
+            },
+            Action::RetractDialogue {
+                source: "我当然来了".into(),
+                keep: "我当然".into(),
+            },
+            Action::Say {
+                speaker: "A".into(),
+                text: "我来学校了".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        state.dialogue.as_mut().unwrap().visible_chars = 5;
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.presentation_blocked());
+
+        assert!(update_dialogue_retraction(
+            &mut state, 0.2, 10.0, false, false
+        ));
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 3);
+        assert!(
+            state
+                .dialogue_retraction
+                .as_ref()
+                .is_some_and(|retraction| retraction.awaiting_advance)
+        );
+        // The click that coincides with the last deletion tick is not reused.
+        assert!(state.presentation_blocked());
+
+        assert!(update_dialogue_retraction(
+            &mut state, 0.0, 10.0, true, false
+        ));
+        assert!(!state.presentation_blocked());
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "我来学校了");
+    }
+
+    #[test]
+    fn consecutive_retractions_reuse_the_current_dialogue() {
+        let mut state = state_with(vec![
+            Action::Say {
+                speaker: "A".into(),
+                text: "我当然来了".into(),
+                options: SayOptions::default(),
+            },
+            Action::RetractDialogue {
+                source: "我当然来了".into(),
+                keep: "我当然".into(),
+            },
+            Action::RetractDialogue {
+                source: "我当然".into(),
+                keep: "我".into(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        state.dialogue.as_mut().unwrap().visible_chars = 5;
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        update_dialogue_retraction(&mut state, 1.0, 60.0, false, false);
+        update_dialogue_retraction(&mut state, 0.0, 60.0, true, false);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "我当然");
+        update_dialogue_retraction(&mut state, 1.0, 60.0, false, false);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "我");
+    }
+
+    #[test]
+    fn dialogue_retraction_round_trips_mid_animation() {
+        let mut state = state_with(vec![
+            Action::Say {
+                speaker: "A".into(),
+                text: "abcdef".into(),
+                options: SayOptions::default(),
+            },
+            Action::RetractDialogue {
+                source: "abcdef".into(),
+                keep: "ab".into(),
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        state.dialogue.as_mut().unwrap().visible_chars = 6;
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        update_dialogue_retraction(&mut state, 0.15, 10.0, false, false);
+
+        let bytes = postcard::to_stdvec(&state).unwrap();
+        let restored = postcard::from_bytes::<State>(&bytes).unwrap();
+        assert_eq!(restored.dialogue, state.dialogue);
+        assert_eq!(restored.dialogue_retraction, state.dialogue_retraction);
+        assert!(restored.presentation_blocked());
+    }
+
+    #[test]
+    fn dialogue_retraction_falls_back_to_the_current_line_and_keeps_graphemes_whole() {
+        let mut state = state_with(vec![
+            Action::Say {
+                speaker: "A".into(),
+                text: "A👩‍👩‍👧‍👧B".into(),
+                options: SayOptions::default(),
+            },
+            Action::RetractDialogue {
+                source: String::new(),
+                keep: "A".into(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        let source_chars = state.dialogue.as_ref().unwrap().text.chars().count();
+        state.dialogue.as_mut().unwrap().visible_chars = source_chars;
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+
+        update_dialogue_retraction(&mut state, 0.1, 10.0, false, false);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 8);
+        update_dialogue_retraction(&mut state, 0.1, 10.0, false, false);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 1);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "A");
     }
 
     #[test]

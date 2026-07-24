@@ -73,7 +73,11 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake 事件；
 - 1.8.0 新增的相机时间轴属性全部进入 core `PostProcessEffect` 并由 GPU 材质直接采样，adapter
   不保留 Studio 私有运行对象；
-- 第三方游戏扩展 block 只能保留为通用 host capability，不能伪装为已原生实现；
+- 第三方游戏扩展 block 默认只能保留为通用 host capability，不能伪装为已原生实现；
+- 已明确建模的 `shiftz.backspace/backspace-to`（兼容旧
+  `maincore.backspace-to/backspace-to`）是例外：adapter 只把 `source`/`keep` 校验并降级为
+  adapter-neutral `RetractDialogue`，实际逐字反向播放、独立点击等待、存档恢复和 Studio
+  确定性重放全部由 core/runtime 实现；crabgal 仍不加载或执行 Studio 扩展 bundle；
 - adapter 只读源工程；不启动 watcher、窗口或进程，实际生命周期归 loader/runtime；
 - core、渲染器和 UI 不导入 LetsGal model；卸下 adapter 后引擎仍独立运行；
 - Studio 原版“运行”按钮与 Player 不受 crabgal 控制，两者不能同时作为同一调试会话的状态源；

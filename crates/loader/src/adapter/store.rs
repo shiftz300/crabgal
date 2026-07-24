@@ -9,7 +9,7 @@ mod crabgal {
     use super::{SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
     const MAGIC: [u8; 8] = *b"CRABGAL\0";
-    const VERSION: u32 = 8;
+    const VERSION: u32 = 9;
     const HEADER_SIZE: usize = 28;
     const MAX_METADATA_SIZE: usize = 64 * 1024;
     const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
@@ -238,7 +238,7 @@ mod crabgal {
         use super::*;
         use std::io::Cursor;
 
-        use crabgal_core::state::{Dialogue, DialogueKey};
+        use crabgal_core::state::{Dialogue, DialogueKey, DialogueRetraction};
         use crabgal_core::{Action, EffectCue, EffectEvent, Program, SayOptions, Value};
 
         fn inspect(bytes: &[u8]) -> StoreStatus {
@@ -376,6 +376,12 @@ mod crabgal {
             state.wait_remaining = 0.25;
             state.wait_blocking = true;
             state.film_mode = true;
+            state.dialogue_retraction = Some(DialogueRetraction {
+                keep: "Tomorrow".into(),
+                target_visible_chars: 8,
+                fractional_chars: 0.375,
+                awaiting_advance: false,
+            });
             state.record_dialogue(1);
 
             state.global_vars.insert("route".into(), Value::Int(3));
@@ -414,7 +420,7 @@ mod crabgal {
         }
 
         #[test]
-        fn save_v8_golden_is_stable() {
+        fn save_v9_golden_is_stable() {
             let mut state = State::new();
             state.install_program(Program::from_scenes([(
                 "main".into(),
@@ -425,12 +431,12 @@ mod crabgal {
             let bytes = encode_at(&state, 1_700_000_000).unwrap();
             if std::env::var_os("CRABGAL_UPDATE_STORE_GOLDEN").is_some() {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/store-v8.sav");
+                    .join("tests/fixtures/store-v9.sav");
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, &bytes).unwrap();
                 return;
             }
-            let expected = include_bytes!("../../tests/fixtures/store-v8.sav");
+            let expected = include_bytes!("../../tests/fixtures/store-v9.sav");
 
             assert_eq!(bytes.as_slice(), expected);
         }

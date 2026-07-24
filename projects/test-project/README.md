@@ -8,7 +8,7 @@ cargo validate projects/test-project
 cargo dev projects/test-project
 ```
 
-进入标题页后点击 `START`，按画面中的 `10-00` 至 `10-09` 编号逐项验收。详细预期见
+进入标题页后点击 `START`，按画面中的 `10-00` 至 `10-10` 编号逐项验收。详细预期见
 [ACCEPTANCE.md](ACCEPTANCE.md)。
 
 ## 覆盖范围
@@ -17,6 +17,7 @@ cargo dev projects/test-project
 - camera、character、sceneLayer 三类目标；
 - camera shake、camera patch、particle、scene 四类时间事件；
 - muted、repeat、playbackRate、blocking；
+- 原生句尾退格、连续退格和删完后等待一次新点击；
 - linear、ease-in、ease-out、ease-in-out 四种插值；
 - 共享时间轴上的变换、传统镜头、光学、模糊、环境、复古与遮罩效果；
 - 1920×1080 设计分辨率和 16:9 视口裁切。

@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::ui::FocusPolicy;
+use bevy::window::{PrimaryWindow, WindowCloseRequested};
 
 const FADE_DURATION: f32 = 0.2;
 const OVERLAY_ALPHA: f32 = 0.16;
@@ -119,6 +120,7 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
     images: ResMut<'w, Assets<Image>>,
     windows: Query<'w, 's, &'static Window>,
+    primary_window: Query<'w, 's, Entity, With<PrimaryWindow>>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     settings_ui: ResMut<'w, crate::ui::settings_panel::SettingsUi>,
     backlog_ui: ResMut<'w, crate::ui::backlog::BacklogUiState>,
@@ -421,6 +423,19 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::BackToTitle => {
+                if let Err(error) = crate::storage::save::save_game(
+                    context.store.0.as_ref(),
+                    &context.state,
+                    QUICK_SAVE_SLOT,
+                    &context.project_root,
+                ) {
+                    log::error!("failed to save continuation before returning to title: {error:#}");
+                } else {
+                    context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
+                        &**context.state,
+                    ));
+                    context.preview.image = None;
+                }
                 commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
                 context.save_load.mode = None;
                 context.settings_ui.open = false;
@@ -516,7 +531,12 @@ pub fn handle_dialog_click(
             }
             DialogAction::Noop => {}
             DialogAction::ExitGame => {
-                commands.write_message(bevy::app::AppExit::Success);
+                if let Ok(window) = context.primary_window.single() {
+                    commands.write_message(WindowCloseRequested { window });
+                } else {
+                    log::warn!("primary window unavailable; exiting directly");
+                    commands.write_message(bevy::app::AppExit::Success);
+                }
             }
         }
     }
